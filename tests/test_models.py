@@ -235,7 +235,7 @@ def test_a_broken_archive_is_a_stated_failure(tmp_path):
 # ---- the pins and the plan -----------------------------------------------------------------------------------
 
 def test_every_pin_is_complete_and_points_where_it_says():
-    for item in list(RUNTIMES.values()) + [MODEL]:
+    for item in list(RUNTIMES.values()) + list(models.MODELS.values()):
         assert item.url.startswith("https://") and item.url.endswith(item.name)
         assert item.size > 1_000_000 and len(item.sha256) == 64 and int(item.sha256, 16) >= 0
         assert item.what and item.licence
@@ -339,7 +339,7 @@ def test_models_commands(site, tmp_path, monkeypatch):
     assert code == 1 and "Nothing was downloaded" in text and site.requests == [], "without --yes only the plan is shown"
 
     plan = small_plan(site, data / "models" / "intent")
-    monkeypatch.setattr(models, "plan_for", lambda folder, system=None, machine=None: plan)
+    monkeypatch.setattr(models, "plan_for", lambda folder, system=None, machine=None, choice="small": plan)
     code, text = run(data, "models", "install", "--yes")
     assert code == 0 and "Installed." in text and "[download] small-model.gguf" in text and "unpacking" in text
     code, text = run(data, "models", "status")
@@ -353,7 +353,7 @@ def test_a_stopped_install_says_how_to_continue(site, tmp_path, monkeypatch):
     data = tmp_path / "data"
     run(data, "init")
     plan = small_plan(site, data / "models" / "intent")
-    monkeypatch.setattr(models, "plan_for", lambda folder, system=None, machine=None: plan)
+    monkeypatch.setattr(models, "plan_for", lambda folder, system=None, machine=None, choice="small": plan)
     stop = threading.Event()
     stop.set()
     out = io.StringIO()
@@ -368,3 +368,44 @@ def test_download_progress_line():
     assert line == "[download] model.gguf: 50.0 of 200.0 MB (25%)  5.0 MB/s  about 30 s left"
     assert cli.progress_text(Progress("download", "m", 0, 0)).startswith("[download] m: 0.0 of 0.0 MB (0%)  0.0 MB/s")
     assert cli.progress_text(Progress("unpack", "rt.zip", 0, 1)) == "[download] unpacking rt.zip"
+
+
+# ---- the larger model ------------------------------------------------------------------------------------------
+
+def test_the_larger_model_is_a_choice_with_its_own_pin_and_plain_warning(tmp_path):
+    plan = plan_for(tmp_path, "Windows", "AMD64", choice="larger")
+    assert plan.model is models.LARGER and plan.choice == "larger" and plan.total == plan.runtime.size + models.LARGER.size
+    assert "/resolve/6d70da17" in models.LARGER.url, "pinned to one revision"
+    text = plan.describe()
+    assert "2,282 MB" in text and "3 GB of memory" in text and "several seconds" in text and "MIT licence" in text
+    assert plan_for(tmp_path, "Windows", "AMD64").choice == "small", "the small one stays the default"
+    wrong = plan_for(tmp_path, "Windows", "AMD64", choice="huge")
+    assert isinstance(wrong, Failure) and "small, larger" in wrong.detail
+
+
+def test_an_installed_larger_model_is_given_longer_to_answer(site, tmp_path):
+    from dugup.intent import from_settings
+    from dugup.settings import Settings
+    import dataclasses
+    folder = tmp_path / "m"
+    plan = dataclasses.replace(small_plan(site, folder), choice="larger")
+    record = install(folder, plan=plan)
+    assert record["choice"] == "larger" and record["seconds"] == models.PATIENCE["larger"] > models.PATIENCE["small"]
+    settings = Settings(intent_reader="model")
+    reader = from_settings(settings, read_record(folder))
+    assert reader.backend.seconds == models.PATIENCE["larger"]
+    assert from_settings(dataclasses.replace(settings, intent_seconds=900.0), read_record(folder)).backend.seconds == 900.0, \
+        "the setting can raise the time, never lower it below what the model needs"
+    older = {k: v for k, v in record.items() if k not in ("choice", "seconds")}
+    assert from_settings(settings, older).backend.seconds == settings.intent_seconds, "a record from before this still works"
+
+
+def test_ask_shows_the_form_and_the_time(site, tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    run(data, "init")
+    code, text = run(data, "ask", "pdfs", "about", "budgets")
+    assert code == 0 and "words: budgets" in text and "types: pdf" in text and "Read in" in text
+    code, text = run(data, "ask", "--reader", "model", "pdfs about budgets")
+    assert code == 1 and "dugup models install" in text, "asked for the model, none installed: said plainly"
+    code, text = run(data, "models", "install", "--model", "larger")
+    assert code == 1 and "install --model larger --yes" in text and site.requests == []

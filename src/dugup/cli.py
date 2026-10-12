@@ -26,7 +26,7 @@ from .filesource import SUGGESTED_EXCLUDES
 from .indexer import KEEP, REFUSE, REREAD, IndexReport, Progress
 from .protocols import WARN_MASS_LOSS, WARN_ROOT_EMPTY
 from .service import LocalService
-from .shapes import POLICIES, POLICY_OPEN, Failure, Root, SearchFilters, SearchPage, SearchRow
+from .shapes import POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow
 from .store import SORT_COLUMNS, StoreError
 from .suggest import SAFE, Suggestion
 
@@ -213,7 +213,16 @@ def build_parser() -> argparse.ArgumentParser:
     install = models_sub.add_parser("install", parents=[common],
                                     help="download the model and its runtime (Ctrl+C stops; run again to continue)")
     install.add_argument("--yes", action="store_true", help="go ahead; without this the plan is shown and nothing is downloaded")
+    install.add_argument("--model", choices=["small", "larger"], default="small",
+                         help="small: quick, 0.3 GB. larger: reads sentences much better, 2.2 GB, about 3 GB of memory, "
+                              "several seconds a sentence without a graphics card")
     models_sub.add_parser("remove", parents=[common], help="delete the downloaded model and runtime")
+
+    ask = sub.add_parser("ask", parents=[common],
+                         help="show how a sentence in plain words would fill in the search form, and how long that took")
+    ask.add_argument("sentence", nargs="+")
+    ask.add_argument("--reader", choices=["rules", "model"], default=None,
+                     help="try the built-in rules or the installed model, whatever config.toml says")
 
     search = sub.add_parser("search", parents=[common], help="find files by the words in them or in their names")
     search.add_argument("words", nargs="+")
@@ -834,11 +843,14 @@ def cmd_models(args, env, out, environ, stop: Optional[threading.Event] = None, 
             freed = service.remove_models()
             safe_write(f"Removed. {megabytes(freed)} given back." if freed else "Nothing was installed.", out)
             return 0
-        plan = service.models_plan()
+        plan = service.models_plan(getattr(args, "model", "small"))
         if args.models_command == "status":
             if installed:
                 safe_write(f"Installed: runtime {installed.get('runtime')}, model {installed.get('model')}", out)
                 safe_write(f"  in {service.models_folder}", out)
+                reader = service.settings.intent_reader
+                safe_write(f'Sentences are read by: {"the model" if reader == "model" else "the built-in rules"} '
+                           f'(intent_reader = "{reader}" in config.toml). To compare: dugup ask --reader model "..."', out)
             else:
                 safe_write("Plain-words search is not installed.", out)
             if service.settings.intent_url or service.settings.intent_server:
@@ -847,12 +859,15 @@ def cmd_models(args, env, out, environ, stop: Optional[threading.Event] = None, 
                 safe_write(plan.detail if isinstance(plan, Failure) else plan.describe(), out)
                 if not isinstance(plan, Failure):
                     safe_write("To install: dugup models install --yes", out)
+                    safe_write("There is also a larger model that reads sentences better and is slower (2.2 GB): "
+                               "dugup models install --model larger", out)
             return 0
         if isinstance(plan, Failure):
             return _fail(plan, out)
         safe_write(plan.describe(), out)
         if not args.yes:
-            safe_write("Nothing was downloaded. To go ahead: dugup models install --yes", out)
+            more = " --model larger" if getattr(args, "model", "small") == "larger" else ""
+            safe_write(f"Nothing was downloaded. To go ahead: dugup models install{more} --yes", out)
             return 1
         stop = stop or threading.Event()
         printer = ProgressPrinter(out)
@@ -868,7 +883,7 @@ def cmd_models(args, env, out, environ, stop: Optional[threading.Event] = None, 
         if install_signals and threading.current_thread() is threading.main_thread():
             previous = signal.signal(signal.SIGINT, on_interrupt)
         try:
-            result = service.install_models(stop, printer)
+            result = service.install_models(stop, printer, choice=getattr(args, "model", "small"))
         finally:
             if previous is not None:
                 signal.signal(signal.SIGINT, previous)
@@ -878,8 +893,38 @@ def cmd_models(args, env, out, environ, stop: Optional[threading.Event] = None, 
                 safe_write("[Interrupted] Stopped. Run `dugup models install --yes` again to continue.", out)
                 return 130
             return _fail(result, out)
-        safe_write("Installed. The window now has an \"In plain words\" box: dugup window", out)
+        safe_write("Installed. Try it: dugup ask --reader model \"pdfs about budgets from last month\"", out)
+        if service.settings.intent_reader != "model":
+            safe_write('The window keeps using the built-in rules until config.toml says intent_reader = "model".', out)
         return 0
+
+
+def cmd_ask(args, env, out, environ) -> int:
+    service = _service(args, environ, out, create=False)
+    if service is None:
+        return 1
+    sentence = " ".join(args.sentence)
+    with service:
+        own = args.reader is not None
+        reader = service.reader_named(args.reader) if own else service.intent
+        if reader is None:
+            return _fail(Failure(FailureReason.NOT_INSTALLED,
+                                 "there is no model to read with. To fetch one: dugup models install"), out)
+        try:
+            folders = [root.path for root in service.list_roots()]
+            started = time.monotonic()
+            answer = reader.understand(sentence, folders)
+            took = time.monotonic() - started
+        finally:
+            if own:
+                reader.close()
+        if isinstance(answer, Failure):
+            return _fail(answer, out)
+        safe_write(answer.describe(), out)
+        for note in answer.notes:
+            safe_write(f"  note: {note}", out)
+        safe_write(f"Read in {took:.1f} s (the first sentence after a start includes loading the model).", out)
+    return 0
 
 
 def cmd_window(args, env, out, environ) -> int:
@@ -910,7 +955,7 @@ def cmd_window(args, env, out, environ) -> int:
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models}
+            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

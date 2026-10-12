@@ -85,6 +85,23 @@ MODEL = Pinned(
     "Gemma Terms of Use, https://ai.google.dev/gemma/terms (by downloading you accept them)")
 
 
+# The mid-size model, 4-bit file. Slower and far larger, and much better at reading a sentence. The times are an
+# estimate for a processor with no graphics card, not a measurement: see EXPERIMENT_LOG.
+LARGER = Pinned(
+    "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+    "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/6d70da17e749a471ccb62ade694486011a75cda3/"
+    "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+    2393232672, "e4165e3a71af97f1b4820da61079826d8752a2088e313af0c7d346796c38eff5",
+    "a mid-size language model that reads one sentence and fills in the search form (needs about 3 GB of memory; "
+    "without a graphics card expect several seconds a sentence, more on an old machine)",
+    "MIT licence, https://huggingface.co/microsoft/Phi-3.5-mini-instruct/blob/main/LICENSE")
+
+SMALL_CHOICE, LARGER_CHOICE = "small", "larger"
+MODELS: Dict[str, Pinned] = {SMALL_CHOICE: MODEL, LARGER_CHOICE: LARGER}
+# Seconds one sentence is given when this model was installed (the setting intent_seconds can only raise it).
+PATIENCE: Dict[str, float] = {SMALL_CHOICE: 30.0, LARGER_CHOICE: 180.0}
+
+
 def this_machine(system: Optional[str] = None, machine: Optional[str] = None) -> Tuple[str, str]:
     system = (system or platform.system()).lower()
     machine = (machine or platform.machine()).lower()
@@ -104,6 +121,7 @@ class Plan:
     runtime: Pinned
     model: Pinned
     folder: Path
+    choice: str = SMALL_CHOICE
 
     @property
     def items(self) -> Tuple[Pinned, ...]:
@@ -124,14 +142,17 @@ class Plan:
         return "\n".join(lines)
 
 
-def plan_for(folder: Path, system: Optional[str] = None, machine: Optional[str] = None) -> "Plan | Failure":
+def plan_for(folder: Path, system: Optional[str] = None, machine: Optional[str] = None,
+             choice: str = SMALL_CHOICE) -> "Plan | Failure":
+    if choice not in MODELS:
+        return Failure(FailureReason.OTHER, f"there is no model called {choice!r}; the choices are: " + ", ".join(MODELS))
     key = this_machine(system, machine)
     runtime = RUNTIMES.get(key)
     if runtime is None:
         return Failure(FailureReason.UNSUPPORTED,
                        f"there is no ready-made model server for this kind of machine ({key[0]} {key[1]}). "
                        "Plain-words search can still use a server you run yourself: set intent_url in config.toml")
-    return Plan(runtime, MODEL, Path(folder))
+    return Plan(runtime, MODELS[choice], Path(folder), choice)
 
 
 # ---- downloading --------------------------------------------------------------------------------------------
@@ -327,7 +348,8 @@ def install(folder: Path, progress: Optional[Callable[[Progress], None]] = None,
     if server is None:
         return Failure(FailureReason.CORRUPT, "the runtime archive holds no llama-server program")
     record = {"server": str(server), "model_file": str(paths[1]), "runtime": RUNTIME_TAG, "model": chosen.model.name,
-              "model_sha256": chosen.model.sha256}
+              "model_sha256": chosen.model.sha256, "choice": chosen.choice,
+              "seconds": PATIENCE.get(chosen.choice, PATIENCE[SMALL_CHOICE])}
     temporary = folder / (RECORD + ".new")
     temporary.write_text(json.dumps(record, indent=2), encoding="utf-8")
     os.replace(temporary, folder / RECORD)

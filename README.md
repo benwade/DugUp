@@ -83,6 +83,11 @@ internet. Set `intent_reader = "model"` in `config.toml` to use it. On the small
 any training for this job, the rules were clearly more reliable, so the rules are the default.
 `intent_url` points at a model server you run yourself (LM Studio, for example) instead.
 
+`dugup models install --model larger` fetches a mid-size model instead (2.2 GB, MIT licence). It needs about
+3 GB of memory and, without a graphics card, probably several seconds a sentence (an estimate, not yet
+measured). `dugup ask "pdfs about budgets from last month"` shows how a sentence fills in the form and how
+long that took; add `--reader model` or `--reader rules` to compare the two.
+
 The command line:
 
     dugup doctor
@@ -96,6 +101,12 @@ The command line:
     dugup status --attention
     dugup space                                       (what the index uses; --limit MB sets a spending limit)
     dugup space --compact                             (give back space left by removed and re-read text)
+    dugup ask "word files about rent, over 1 MB"      (how a sentence is read; changes nothing)
+
+The index keeps each piece of text once, compressed (`text_compression = "zlib"` in `config.toml`; `"none"`
+turns it off for new text). Searching is unaffected: the word index is built from the text as written. An
+index from an earlier version is converted the first time it is opened, which can take a minute on a
+large one; run `dugup space --compact` afterwards to hand the freed space back to the disk.
 
 `python -m dugup ...` does the same. The index lives in one per-user data folder (`%LOCALAPPDATA%\DugUp`
 on Windows, `~/.local/share/DugUp` on Linux); add `--data-dir FOLDER` to any command to keep it somewhere

@@ -14,6 +14,7 @@ import json
 import os
 import sqlite3
 import unicodedata
+import zlib
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
@@ -162,7 +163,56 @@ def _migration_4(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE pages SET ocr_engine = ? WHERE ocr = 'done' AND ocr_engine = ''", (usual[0],))
 
 
-MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3, _migration_4]
+TEXT_PLAIN, TEXT_ZLIB = 0, 1      # how a segment's text is stored (the `z` column); another codec is another number
+
+
+def pack_text(text: str, compress: bool = True) -> Tuple[object, int]:
+    """A piece of text as it is stored: compressed when that is asked for and actually smaller."""
+    if compress and text:
+        raw = text.encode("utf-8")
+        packed = zlib.compress(raw, 6)
+        if len(packed) < len(raw):
+            return packed, TEXT_ZLIB
+    return text, TEXT_PLAIN
+
+
+def unpack_text(value: object, z: object) -> str:
+    """The text of a stored segment, whatever way it was stored."""
+    if z == TEXT_ZLIB:
+        return zlib.decompress(value).decode("utf-8")     # type: ignore[arg-type]
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value or ""                                     # type: ignore[return-value]
+
+
+FTS_SOURCE = ("CREATE VIEW fts_src AS SELECT s.id AS id, dugup_clean(f.name) AS name, "
+              "CASE WHEN s.kind = 'name' THEN '' ELSE dugup_text(s.text, s.z) END AS body "
+              "FROM segments s JOIN files f ON f.id = s.file_id")
+
+
+def _migration_5(conn: sqlite3.Connection) -> None:
+    """A smaller index, with nothing changed for searching.
+
+    Until now every piece of text was stored twice: once in `segments` and once more inside the full-text
+    table. The full-text table now keeps only its word index and reads the text, when it needs it (to mark
+    a match), from `segments` through a view. And the one copy that is left is stored compressed.
+    """
+    conn.execute("ALTER TABLE segments ADD COLUMN z INTEGER NOT NULL DEFAULT 0")
+    conn.execute("DROP TABLE fts")
+    conn.execute(FTS_SOURCE)
+    conn.execute(f"CREATE VIRTUAL TABLE fts USING fts5(name, body, content='fts_src', content_rowid='id', tokenize=\"{TOKENIZER}\")")
+    cursor = conn.execute("SELECT id, text FROM segments WHERE kind != 'name'")
+    while True:
+        rows = cursor.fetchmany(500)
+        if not rows:
+            break
+        packed = [(value, z, seg_id) for seg_id, (value, z) in ((r[0], pack_text(r[1] or "")) for r in rows) if z]
+        conn.executemany("UPDATE segments SET text=?, z=? WHERE id=?", packed)
+    conn.execute("INSERT INTO fts(fts) VALUES('rebuild')")
+
+
+MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3, _migration_4,
+                                                          _migration_5]
 OCR_ORDER = 1_000_000   # the order number of a page's OCR text, after anything a text layer gave
 SCHEMA_VERSION = len(MIGRATIONS)  # informational; the live value is len(MIGRATIONS)
 
@@ -394,8 +444,9 @@ def closeness_matches(query: str, near_words: int) -> Optional[Tuple[str, str]]:
 # ---- the store -------------------------------------------------------------
 
 class SqliteStore:
-    def __init__(self, path: os.PathLike | str, near_words: int = 15) -> None:
+    def __init__(self, path: os.PathLike | str, near_words: int = 15, compress_text: bool = True) -> None:
         self.path = Path(path)
+        self.compress_text = compress_text     # for text stored from now on; text already stored is read either way
         self.near_words = near_words     # how close words must stand to rank above the same words far apart
         if not self.path.parent.is_dir():
             raise StoreError(f"the folder for the index does not exist: {self.path.parent}")
@@ -411,6 +462,8 @@ class SqliteStore:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA secure_delete=ON")
             conn.create_function("dugup_exact", 4, _exact_ok, deterministic=True)
+            conn.create_function("dugup_text", 2, unpack_text, deterministic=True)
+            conn.create_function("dugup_clean", 1, lambda name: _clean(name or ""), deterministic=True)
             self._migrate(conn)
         except BaseException:
             conn.close()
@@ -545,8 +598,7 @@ class SqliteStore:
         ).fetchone()
         name = _clean(name)
         if old is not None:
-            self.conn.execute("UPDATE fts SET name=? WHERE rowid=?", (name, old[0]))
-            return
+            return      # the same path has the same name: the word index already holds it
         cur = self.conn.execute(
             "INSERT INTO segments(file_id, page, ord, kind, text) VALUES(?,?,?,?,?)",
             (row_id, 0, 0, SegmentKind.NAME.value, ""),
@@ -609,11 +661,15 @@ class SqliteStore:
             if old_text != new_text and self.conn.execute("SELECT 1 FROM files WHERE path=?", (new_text,)).fetchone():
                 raise StoreError("cannot move a file onto a path the index already holds")
             row_id = int(row[0])
+            # The name sits beside every piece of text in the word index. The index reads what to take out
+            # from the stored rows, so the old entries go BEFORE the name changes, and the new ones come after.
+            ids = [r[0] for r in self.conn.execute("SELECT id FROM segments WHERE file_id=?", (row_id,))]
+            for seg_id in ids:
+                self.conn.execute("DELETE FROM fts WHERE rowid=?", (seg_id,))
             self.conn.execute("UPDATE files SET path=?, path_raw=?, name=?, folder=?, missing_since=NULL WHERE id=?",
                               (new_text, new_raw, name, folder, row_id))
-            ids = [r[0] for r in self.conn.execute("SELECT id FROM segments WHERE file_id=?", (row_id,))]
-            for seg_id in ids:   # the name sits beside every piece of text, so each row is refreshed
-                self.conn.execute("UPDATE fts SET name=? WHERE rowid=?", (_clean(name), seg_id))
+            self.conn.execute("INSERT INTO fts(rowid, name, body) SELECT s.id, s.name, s.body FROM fts_src s "
+                              "JOIN segments g ON g.id = s.id WHERE g.file_id=?", (row_id,))
         return row_id
 
     def remove_files(self, row_ids: Sequence[int]) -> int:
@@ -666,8 +722,8 @@ class SqliteStore:
                     raise ValueError("name segments are managed by the store")
                 text = _clean(seg.text)
                 cur = self.conn.execute(
-                    "INSERT INTO segments(file_id, page, ord, kind, text) VALUES(?,?,?,?,?)",
-                    (row_id, seg.page, seg.order, seg.kind.value, text),
+                    "INSERT INTO segments(file_id, page, ord, kind, text, z) VALUES(?,?,?,?,?,?)",
+                    (row_id, seg.page, seg.order, seg.kind.value) + pack_text(text, self.compress_text),
                 )
                 self.conn.execute(
                     "INSERT INTO fts(rowid, name, body) VALUES(?,?,?)", (cur.lastrowid, _clean(name_row[0]), text)
@@ -727,8 +783,8 @@ class SqliteStore:
             if lines:
                 name = self.conn.execute("SELECT name FROM files WHERE id=?", (row_id,)).fetchone()[0]
                 text = "\n".join(t for t, _ in lines)
-                cur = self.conn.execute("INSERT INTO segments(file_id, page, ord, kind, text) VALUES(?,?,?,?,?)",
-                                        (row_id, page, OCR_ORDER, SegmentKind.OCR.value, text))
+                cur = self.conn.execute("INSERT INTO segments(file_id, page, ord, kind, text, z) VALUES(?,?,?,?,?,?)",
+                                        (row_id, page, OCR_ORDER, SegmentKind.OCR.value) + pack_text(text, self.compress_text))
                 self.conn.execute("INSERT INTO fts(rowid, name, body) VALUES(?,?,?)", (cur.lastrowid, _clean(name), text))
                 self.conn.executemany(
                     "INSERT INTO regions(segment_id, engine, label, x0, y0, x1, y1, confidence, text) "
@@ -755,8 +811,8 @@ class SqliteStore:
             old = {r["page"]: r for r in self.conn.execute(
                 "SELECT page, ocr, ocr_engine, width, height, camera FROM pages WHERE file_id=?", (row_id,))}
             keep = {p.page for p in pages if p.needs_ocr and p.page in old and old[p.page]["ocr"] == "done"}
-            saved = [(r[0], r[1], r[2]) for r in self.conn.execute(
-                "SELECT id, page, text FROM segments WHERE file_id=? AND kind=?", (row_id, SegmentKind.OCR.value))
+            saved = [(r[0], r[1], unpack_text(r[2], r[3])) for r in self.conn.execute(
+                "SELECT id, page, text, z FROM segments WHERE file_id=? AND kind=?", (row_id, SegmentKind.OCR.value))
                 if r[1] in keep]
             lines = {seg_id: self.conn.execute(
                 "SELECT engine, label, x0, y0, x1, y1, confidence, text FROM regions WHERE segment_id=? ORDER BY id",
@@ -764,8 +820,8 @@ class SqliteStore:
             self.replace_segments(row_id, segments)
             name = _clean(self.conn.execute("SELECT name FROM files WHERE id=?", (row_id,)).fetchone()[0])
             for seg_id, page, text in saved:      # the same text under a new handle: old Evidence stops matching
-                cur = self.conn.execute("INSERT INTO segments(file_id, page, ord, kind, text) VALUES(?,?,?,?,?)",
-                                        (row_id, page, OCR_ORDER, SegmentKind.OCR.value, text))
+                cur = self.conn.execute("INSERT INTO segments(file_id, page, ord, kind, text, z) VALUES(?,?,?,?,?,?)",
+                                        (row_id, page, OCR_ORDER, SegmentKind.OCR.value) + pack_text(text, self.compress_text))
                 self.conn.execute("INSERT INTO fts(rowid, name, body) VALUES(?,?,?)", (cur.lastrowid, name, text))
                 self.conn.executemany(
                     "INSERT INTO regions(segment_id, engine, label, x0, y0, x1, y1, confidence, text) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -1011,12 +1067,12 @@ class SqliteStore:
         if evidence.segment_id is None:
             return None
         r = self.conn.execute(
-            "SELECT s.kind, s.page, s.text, f.name FROM segments s JOIN files f ON f.id = s.file_id "
+            "SELECT s.kind, s.page, s.text, s.z, f.name FROM segments s JOIN files f ON f.id = s.file_id "
             "WHERE s.id=? AND s.file_id=?", (evidence.segment_id, evidence.file_id)).fetchone()
         if r is None:
             return None
         kind = SegmentKind(r["kind"])
-        text = _clean(r["name"]) if kind is SegmentKind.NAME else r["text"]
+        text = _clean(r["name"]) if kind is SegmentKind.NAME else unpack_text(r["text"], r["z"])
         start = min(max(evidence.start, 0), len(text))
         end = min(max(evidence.end, start), len(text))
         left = max(0, start - max(context, 0))
@@ -1062,6 +1118,17 @@ class SqliteStore:
         pages = self.conn.execute("PRAGMA page_count").fetchone()[0]
         free = self.conn.execute("PRAGMA freelist_count").fetchone()[0]
         return free / pages if pages > 0 else 0.0
+
+    def check_word_index(self) -> bool:
+        """Whether the word index agrees with the stored text (a self-test; slow on a large index)."""
+        try:
+            try:
+                self.conn.execute("INSERT INTO fts(fts, rank) VALUES('integrity-check', 1)")
+            except sqlite3.OperationalError:      # an older SQLite: the plain form does the same comparison
+                self.conn.execute("INSERT INTO fts(fts) VALUES('integrity-check')")
+            return True
+        except sqlite3.DatabaseError:
+            return False
 
     def compact(self) -> None:
         """Rebuild the file without the free space that deleting and rewriting leave inside it. SQLite writes

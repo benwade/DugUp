@@ -405,6 +405,10 @@ def from_settings(settings: Settings, installed: Optional[Mapping[str, str]] = N
         return IntentParser(LocalRuntime(settings.intent_server, settings.intent_model_file, settings.intent_seconds,
                                          settings.intent_start_seconds, settings.intent_gpu_layers))
     if installed and installed.get("server") and installed.get("model_file"):
-        return IntentParser(LocalRuntime(installed["server"], installed["model_file"], settings.intent_seconds,
+        try:
+            patience = max(settings.intent_seconds, float(installed.get("seconds") or 0))   # a larger model is given longer
+        except (TypeError, ValueError):
+            patience = settings.intent_seconds
+        return IntentParser(LocalRuntime(installed["server"], installed["model_file"], patience,
                                          settings.intent_start_seconds, settings.intent_gpu_layers))
     return None

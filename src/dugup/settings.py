@@ -71,6 +71,8 @@ class Settings:
     intent_gpu_layers: int = 0         # 0 keeps the model on the processor; a small model does not need the GPU
     intent_seconds: float = 30.0       # time allowed for one sentence
     intent_start_seconds: float = 120.0   # time allowed for the server to load the model
+    # -- storage
+    text_compression: str = "zlib"     # how stored text is kept: "zlib" (smaller index) or "none"
     # -- searching
     near_words: int = 15               # words this close together rank above the same words far apart
     # -- indexing
@@ -125,6 +127,8 @@ def validate(s: Settings) -> List[str]:
         problems.append("intent_seconds and intent_start_seconds must be above 0, and intent_gpu_layers must not be negative")
     if s.intent_reader not in ("rules", "model"):
         problems.append('intent_reader must be "rules" or "model"')
+    if s.text_compression not in ("zlib", "none"):
+        problems.append('text_compression must be "zlib" or "none"')
     if s.near_words < 0:
         problems.append("near_words must not be negative")
     if s.ocr_seconds <= 0:

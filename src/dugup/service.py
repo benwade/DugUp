@@ -67,7 +67,8 @@ class LocalService:
             self.extractor = SandboxedExtractor(SubprocessSandbox(), self.settings)
         else:
             self.extractor = default_extractors(self.settings)
-        self._open_store = open_store or (lambda: SqliteStore(layout.index, near_words=self.settings.near_words))
+        self._open_store = open_store or (lambda: SqliteStore(layout.index, near_words=self.settings.near_words,
+                                                                compress_text=self.settings.text_compression != "none"))
         self.clock = clock
         self.case_insensitive = (os.name == "nt") if case_insensitive is None else case_insensitive
         self._fold: Callable[[str], str] = (lambda t: t.lower()) if self.case_insensitive else (lambda t: t)
@@ -173,18 +174,20 @@ class LocalService:
     def models_folder(self):
         return self.layout.models / "intent"
 
-    def models_plan(self) -> "models.Plan | Failure":
-        """What setting up plain-words search would download on this machine."""
-        return models.plan_for(self.models_folder)
+    def models_plan(self, choice: str = models.SMALL_CHOICE) -> "models.Plan | Failure":
+        """What setting up plain-words search would download on this machine, for the small or the larger model."""
+        return models.plan_for(self.models_folder, choice=choice)
 
     def models_installed(self) -> Optional[Mapping[str, str]]:
         return models.read_record(self.models_folder)
 
     def install_models(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
-                       opener=None, plan=None) -> "Mapping[str, str] | Failure":
+                       opener=None, plan=None, choice: str = models.SMALL_CHOICE) -> "Mapping[str, str] | Failure":
         """Download and set up the runtime and the model (the only thing in the program that uses the internet).
         Call it only when the person has asked for it, having seen models_plan().describe()."""
         more = {} if opener is None else {"opener": opener}
+        if plan is None:
+            plan = self.models_plan(choice)
         result = models.install(self.models_folder, progress, stop, plan=plan, free_bytes=self.layout.free_bytes,
                                 keep_free=self.settings.min_free_mb * 1024 * 1024, **more)
         if not isinstance(result, Failure):
@@ -200,6 +203,13 @@ class LocalService:
         if self._intent is not None:
             self._intent.close()
         self._intent, self._intent_looked = None, False
+
+    def reader_named(self, reader: str):
+        """A plain-words reader other than the configured one ("rules" or "model"), for trying one out.
+        The caller closes it. None when that reader has nothing to run with."""
+        import dataclasses
+        from .intent import from_settings
+        return from_settings(dataclasses.replace(self.settings, intent_reader=reader), models.read_record(self.models_folder))
 
     def understand(self, text: str):
         """A sentence as search-form fields (intent.Understood), or a Failure saying why not.

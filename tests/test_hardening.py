@@ -1,6 +1,7 @@
 """Second tries, the pause after a run of failures, the disk guards, OCR that survives a re-read,
 pages read by an older engine, and typed pages with figures. Scripted readers and engines; nothing sleeps."""
 
+import hashlib
 import io
 import threading
 
@@ -565,7 +566,7 @@ def test_a_paused_index_run_says_so(sh, monkeypatch):
 
 def test_compacting_gives_space_back_and_keeps_the_index(sh):
     for n in range(40):
-        (sh.docs / f"big{n}.txt").write_text(f"file {n} " + " ".join(f"word{n}x{i}" for i in range(4000)), encoding="utf-8")
+        (sh.docs / f"big{n}.txt").write_text(f"file {n} " + " ".join(hashlib.md5(f"{n}-{i}".encode()).hexdigest() for i in range(4000)), encoding="utf-8")
     sh.run("roots", "add", str(sh.docs))
     assert sh.run("index")[0] == 0
     assert sh.run("roots", "exclude", str(sh.docs), "big*.txt")[0] == 0     # skipped by choice: their text is deleted
@@ -600,7 +601,7 @@ def test_compacting_needs_room_for_a_copy_and_respects_the_lock(tmp_path, monkey
 
 def test_a_run_compacts_the_index_by_itself_when_enough_of_it_is_unused(sh):
     for n in range(40):
-        (sh.docs / f"big{n}.txt").write_text(f"file {n} " + " ".join(f"word{n}x{i}" for i in range(4000)), encoding="utf-8")
+        (sh.docs / f"big{n}.txt").write_text(f"file {n} " + " ".join(hashlib.md5(f"{n}-{i}".encode()).hexdigest() for i in range(4000)), encoding="utf-8")
     sh.run("roots", "add", str(sh.docs))
     code, text = sh.run("index")
     assert code == 0 and "compacted" not in text, "a first run leaves nothing to give back"
@@ -616,7 +617,7 @@ def test_a_run_compacts_the_index_by_itself_when_enough_of_it_is_unused(sh):
 
 def test_automatic_compacting_has_a_floor_can_be_turned_off_and_never_follows_a_stopped_run(sh, tmp_path, monkeypatch):
     for n in range(40):
-        (sh.docs / f"big{n}.txt").write_text(" ".join(f"word{n}x{i}" for i in range(4000)), encoding="utf-8")
+        (sh.docs / f"big{n}.txt").write_text(" ".join(hashlib.md5(f"{n}-{i}".encode()).hexdigest() for i in range(4000)), encoding="utf-8")
     sh.run("roots", "add", str(sh.docs))
     sh.run("index")
     sh.run("roots", "exclude", str(sh.docs), "big*.txt")
