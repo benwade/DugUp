@@ -25,6 +25,8 @@ Promises, the same as indexing:
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -68,6 +70,7 @@ class OcrReport:
     requeued: int = 0              # files with pages put back because another engine version read them
     left: int = 0                  # pages whose file could not be reached; they stay queued
     held_back: int = 0             # pages in folders whose level stops short of OCR; not looked at
+    readers: int = 1               # how many readers worked side by side
     stopped: bool = False
     out_of_time: bool = False
     paused: str = ""               # why the run paused itself (a run of failures)
@@ -93,7 +96,10 @@ class OcrRunner:
                  progress: Optional[Callable[[Progress], None]] = None,
                  timer: Optional[Callable[[], float]] = None, case_insensitive: Optional[bool] = None,
                  room: Optional[Callable[[], str]] = None,
-                 wanted: Optional[Callable[[str], bool]] = None) -> None:
+                 wanted: Optional[Callable[[str], bool]] = None, extra_backends: Sequence = (),
+                 first: str = "") -> None:
+        self.extra_backends = tuple(extra_backends)   # more readers working side by side, each with its own engine
+        self.first = first          # a folder whose pages are read before any others
         self.wanted = wanted        # says whether a file's folder asks for OCR at all; None: every folder does
         self.room = room            # says why nothing more may be written; "" when there is room
         self.store = store
@@ -154,15 +160,16 @@ class OcrRunner:
     def _room(self) -> str:
         return "" if self.room is None else str(self.room() or "")
 
-    def _read(self, task: OcrTask, stop: Optional[StopSignal]):
+    def _read(self, task: OcrTask, stop: Optional[StopSignal], backend=None):
+        backend = backend or self.backend
         more = {}
         if task.retry:      # the second try: more time, when the backend can say how much that is
-            patient = getattr(self.backend, "patient_limit", None)
+            patient = getattr(backend, "patient_limit", None)
             more["time_limit"] = (patient(self.settings.retry_patience) if patient is not None
                                   else self.settings.ocr_seconds * self.settings.retry_patience)
         if task.kind is FileKind.PDF:
-            return self.backend.read_page(task.path, task.page, language=self.settings.language, stop=stop, **more)
-        return self.backend.read(task.path, language=self.settings.language, stop=stop, **more)
+            return backend.read_page(task.path, task.page, language=self.settings.language, stop=stop, **more)
+        return backend.read(task.path, language=self.settings.language, stop=stop, **more)
 
     def run(self, stop: Optional[StopSignal] = None, roots: Optional[Sequence[str]] = None,
             budget_seconds: Optional[float] = None, retry_failed: bool = False, reread_old: bool = False) -> OcrReport:
@@ -190,25 +197,21 @@ class OcrRunner:
         report.total = len(tasks)
         in_a_row = 0
         queue = list(tasks)
-        at = -1
-        while at + 1 < len(queue):      # a page that runs out of time is put at the end, so the list can grow
-            at += 1
-            task = queue[at]
-            if at % ROOM_EVERY == 0 and at:
-                report.paused = self._room()
-                if report.paused:
-                    break
-            if _stopped(stop):
-                report.stopped = True
-                break
-            if budget_seconds is not None and self.timer() - started >= budget_seconds:
-                report.out_of_time = True
-                break
-            self._tell(Progress("ocr", "", report.read + report.failed, report.total, report.failed,
-                                self.timer() - started, task.path))
-            if task.retry:
-                report.second_tries += 1
-            result = self._read(task, stop)
+        if self.first:      # one folder was asked for first: its pages go ahead of the rest, each part in its own order
+            queue.sort(key=lambda t: 0 if _below(t.path, self.first, self.case_insensitive) else 1)
+        readers = [self.backend] + list(self.extra_backends)
+        report.readers = len(readers)
+        pool = ThreadPoolExecutor(len(readers), thread_name_prefix="dugup-ocr") if len(readers) > 1 else None
+        halt = threading.Event()                 # ends the reads still going on when the run ends early
+        both = _Either(stop, halt)
+        idle = list(reversed(readers))
+        flying: Dict[Future, Tuple[OcrTask, object]] = {}
+        at = 0
+        ending = False
+
+        def finished(task: OcrTask, result) -> bool:
+            """Take in one answer. True when the run must end."""
+            nonlocal in_a_row
             if isinstance(result, OcrResult):
                 with self.store.transaction():
                     self.store.save_ocr(task.row_id, task.page, result)
@@ -216,18 +219,18 @@ class OcrRunner:
                 report.read += 1
                 report.with_words += 1 if result.lines else 0
                 in_a_row = 0
-                continue
+                return False
             if not isinstance(result, Failure):
                 result = Failure(FailureReason.CRASHED, "the OCR engine returned nothing")
             if result.reason is FailureReason.STOPPED:
                 report.stopped = True
-                break
+                return True
             if result.reason in NOT_READY:
                 report.not_ready = result
-                break
+                return True
             if result.reason is FailureReason.UNREACHABLE:
                 report.left += 1          # the file or its drive is away: the page keeps its place in the queue
-                continue
+                return False
             reason = f"{result.reason.value}: {result.detail}".replace(";", ",")
             if result.reason is FailureReason.TIMED_OUT and not task.retry and self.settings.retry_patience > 1.0:
                 self.store.defer_ocr(task.row_id, task.page, reason)     # not failed yet: one more try, last of all
@@ -246,7 +249,61 @@ class OcrRunner:
                     report.paused = (f"{in_a_row} pages in a row failed or ran out of time (the last one: "
                                      f"{result.reason.value.replace('_', ' ')}), "
                                      "which looks like trouble with the OCR engine and not with the pictures")
+                    return True
+            return False
+
+        try:
+            while True:
+                while idle and at < len(queue) and not ending:   # a page that runs out of time is put at the end,
+                    task = queue[at]                             # so the list can grow
+                    if at % ROOM_EVERY == 0 and at:
+                        report.paused = self._room()
+                        if report.paused:
+                            ending = True
+                            break
+                    if _stopped(stop):
+                        report.stopped = True
+                        ending = True
+                        break
+                    if budget_seconds is not None and self.timer() - started >= budget_seconds:
+                        report.out_of_time = True
+                        ending = True
+                        break
+                    at += 1
+                    self._tell(Progress("ocr", "", report.read + report.failed, report.total, report.failed,
+                                        self.timer() - started, task.path))
+                    if task.retry:
+                        report.second_tries += 1
+                    reader = idle.pop()
+                    if pool is None:
+                        answer: Future = Future()
+                        answer.set_result(self._read(task, stop, reader))
+                    else:
+                        answer = pool.submit(self._read, task, both, reader)
+                    flying[answer] = (task, reader)
+                if not flying:
                     break
+                done, _ = wait(list(flying), return_when=FIRST_COMPLETED)
+                for answer in done:
+                    task, reader = flying.pop(answer)
+                    idle.append(reader)
+                    try:
+                        result = answer.result()
+                    except Exception as exc:          # a reader must never take the run down
+                        result = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
+                    if ending:
+                        # the run is ending: a page that was read all the same is kept, anything else stays queued
+                        if isinstance(result, OcrResult):
+                            finished(task, result)
+                    elif finished(task, result):
+                        ending = True
+                        halt.set()
+                if ending:
+                    halt.set()
+        finally:
+            halt.set()
+            if pool is not None:
+                pool.shutdown(wait=True)
         report.seconds = self.timer() - started
         self._tell(Progress("ocr", "", report.read + report.failed, report.total, report.failed, report.seconds))
         log.info("ocr run: total %s read %s failed %s left %s stopped %s", report.total, report.read, report.failed,
@@ -287,6 +344,23 @@ class OcrRunner:
     def _tell(self, progress: Progress) -> None:
         if self.progress is not None:
             self.progress(progress)
+
+
+class _Either:
+    """A stop signal that is set when either of two is."""
+
+    def __init__(self, first: Optional[StopSignal], second: threading.Event) -> None:
+        self.first, self.second = first, second
+
+    def is_set(self) -> bool:
+        return self.second.is_set() or (self.first is not None and self.first.is_set())
+
+
+def _below(path: str, folder: str, case_insensitive: Optional[bool]) -> bool:
+    fold = (lambda t: t.casefold()) if case_insensitive else (lambda t: t)
+    base = fold(folder.rstrip("/\\"))
+    path = fold(path)
+    return path.startswith(base + "/") or path.startswith(base + "\\")
 
 
 def _stopped(stop: Optional[StopSignal]) -> bool:

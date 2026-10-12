@@ -492,14 +492,36 @@ class LocalService:
                 count += 1
         return count
 
+    def fast_readers(self) -> int:
+        """How many readers fast mode would use on this machine now."""
+        from . import machine
+        s = self.settings
+        return machine.readers_for(s.ocr_fast_readers, s.ocr_reader_threads, s.ocr_reader_memory_mb,
+                                   free_bytes=machine.free_memory_bytes())
+
+    def _more_readers(self, count: int) -> list:
+        """`count` more OCR readers, each with its own worker. The caller closes them."""
+        return [SandboxOcrBackend(SubprocessSandbox(), self.settings, threads=self.settings.ocr_reader_threads)
+                for _ in range(max(0, count))]
+
     def run_ocr(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
                 roots: Optional[Sequence[str]] = None, budget_seconds: Optional[float] = None,
-                retry_failed: bool = False, reread_old: bool = False) -> "OcrReport | Failure":
+                retry_failed: bool = False, reread_old: bool = False, folder: Optional[str] = None,
+                fast: bool = False, again: bool = False) -> "OcrReport | Failure":
         """Read the pages and pictures that wait for OCR, in the calling thread, until done or stopped.
-        It writes to the index, so it takes the same lock as an indexing run: one or the other, never both."""
-        return self._tidy(self._run_ocr(stop, progress, roots, budget_seconds, retry_failed, reread_old))
+        It writes to the index, so it takes the same lock as an indexing run: one or the other, never both.
 
-    def _run_ocr(self, stop, progress, roots, budget_seconds, retry_failed, reread_old) -> "OcrReport | Failure":
+        `folder`: only what lies in this folder (an indexed folder or any folder inside one).
+        `fast`: several readers side by side (see fast_readers); the machine is busier while it runs.
+        `again`: with `folder`, read its pictures and scans afresh even where that was done before."""
+        return self._tidy(self._run_ocr(stop, progress, roots, budget_seconds, retry_failed, reread_old, folder, fast, again))
+
+    def _run_ocr(self, stop, progress, roots, budget_seconds, retry_failed, reread_old, folder=None, fast=False,
+                 again=False) -> "OcrReport | Failure":
+        if folder is not None:
+            folder = os.path.abspath(os.path.expanduser(folder))
+        if again and folder is None:
+            return Failure(FailureReason.UNSUPPORTED, "reading again needs a folder to be named")
         if not self._run_guard.acquire(blocking=False):
             return Failure(FailureReason.BUSY, "indexing or OCR is already going on in this program")
         try:
@@ -510,7 +532,15 @@ class LocalService:
                 try:
                     known = [r.path for r in store.list_roots()]
                     wanted = known if roots is None else [r for r in known if any(self._fold(r) == self._fold(w) for w in roots)]
+                    if folder is not None:
+                        if not any(_under(folder, r, self._fold) for r in known):
+                            return Failure(FailureReason.OTHER, f"that folder is not inside an indexed folder: {folder}")
+                        wanted = [folder]
                     here = [r for r in wanted if self.source.reachable(r)]
+                    if again and here:
+                        # no engine has this name, so every page below the folder counts as read by another one
+                        rows = store.requeue_ocr_not_by("(read again)", folder, self.case_insensitive)
+                        log.info("ocr again: %d file(s) put back in the queue", len(rows))
 
                     def tell(p: Progress) -> None:
                         self._progress = p
@@ -523,9 +553,17 @@ class LocalService:
                         owner = next((r for r in all_roots if _under(file_path, r.path, self._fold)), None)
                         return owner is None or level_reaches(level_for(owner, file_path, self.case_insensitive), LEVEL_OCR)
 
-                    runner = OcrRunner(store, self.ocr_backend, self.settings, tell,
-                                       case_insensitive=self.case_insensitive, room=self.room, wanted=asks_for_ocr)
-                    report = runner.run(stop, here, budget_seconds, retry_failed, reread_old)
+                    extra = self._more_readers(self.fast_readers() - 1) if fast else []
+                    try:
+                        runner = OcrRunner(store, self.ocr_backend, self.settings, tell,
+                                           case_insensitive=self.case_insensitive, room=self.room, wanted=asks_for_ocr,
+                                           extra_backends=extra)
+                        report = runner.run(stop, here, budget_seconds, retry_failed, reread_old)
+                    finally:
+                        for reader in extra:
+                            close = getattr(reader, "close", None)
+                            if close is not None:
+                                close()
                     report.away = tuple(r for r in wanted if r not in here)
                     return report
                 finally:

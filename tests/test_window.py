@@ -3,6 +3,7 @@
 a test that needs a background run to finish keeps handing the window its events until the run says so."""
 
 import datetime
+import threading
 import gc
 import os
 
@@ -663,5 +664,72 @@ def test_ocr_does_not_follow_where_the_level_stops_at_words_or_the_run_was_stopp
         assert bench.service.ocr_waiting() == 0 and "Then pictures and scans" not in bench.text(bench.app.status)
         assert "sign.png" not in bench.find("shop sign"), "the folder asked for words only"
         assert bench.ocr.calls == [] if hasattr(bench.ocr, "calls") else True
+    finally:
+        bench.close()
+
+
+# ---- read a folder now, fast ----------------------------------------------------------------------------------
+
+def fast_bench(tmp_path, monkeypatch):
+    from dugup import service as service_module
+    made = []
+
+    def more(self, count):
+        made.extend(ScriptedOcr(shapes={}) for _ in range(count))
+        return made[-count:] if count else []
+
+    monkeypatch.setattr(service_module.LocalService, "_more_readers", more)
+    bench = Bench(tmp_path, settings=Settings(ocr_after_index=False, ocr_fast_readers=3))
+    bench.extra = made
+    for name in ("one.png", "two.png", "three.png"):
+        (bench.docs / "sub" / name).write_bytes(build_png())
+    return bench
+
+
+def test_read_a_folder_now_reads_just_that_folder_with_several_readers(tmp_path, monkeypatch):
+    bench = fast_bench(tmp_path, monkeypatch)
+    try:
+        bench.ready()
+        bench.folder_to_add = str(bench.docs / "sub")
+        bench.app.read_folder_now()
+        assert "several readers" in bench.app.progress_text.get()
+        bench.finish_run()
+        status = bench.text(bench.app.status)
+        assert "OCR read 3 of 3 waiting page(s)" in status and "[3 readers side by side]" in status
+        assert len(bench.extra) == 2
+        read = [path for path, _ in bench.ocr.calls] + [path for reader in bench.extra for path, _ in reader.calls]
+        assert len(read) == 3 and all(os.sep + "sub" + os.sep in path for path in read), "only that folder"
+        assert bench.service.ocr_waiting() == 1, "the picture outside it still waits"
+        bench.folder_to_add = str(tmp_path)
+        bench.app.read_folder_now()
+        assert "not indexed yet" in bench.app.message.get() and bench.app.worker is None
+    finally:
+        bench.close()
+
+
+def test_read_a_folder_now_takes_over_from_a_run_that_is_going(tmp_path, monkeypatch):
+    bench = fast_bench(tmp_path, monkeypatch)
+    try:
+        bench.ready()
+        started, release = threading.Event(), threading.Event()
+
+        def hold(path, page):                 # the ordinary run is held on its first picture until the test lets it go
+            started.set()
+            assert release.wait(30)
+
+        bench.ocr.on_call = hold
+        bench.app.start("ocr")
+        assert started.wait(30)
+        bench.folder_to_add = str(bench.docs / "sub")
+        bench.app.read_folder_now()
+        assert bench.app.waiting_fast == str(bench.docs / "sub") and bench.app.stop.is_set()
+        assert "As soon as the current run has stopped" in bench.app.message.get()
+        bench.ocr.on_call = None
+        release.set()
+        bench.finish_run()                    # the stopped run ends, the fast one starts and ends
+        status = bench.text(bench.app.status)
+        assert bench.app.waiting_fast == "" and "readers side by side]" in status
+        waiting = [task.path for task in bench.service.store.ocr_queue()]
+        assert all(os.sep + "sub" + os.sep not in path for path in waiting), "everything in that folder was read"
     finally:
         bench.close()

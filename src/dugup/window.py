@@ -160,6 +160,7 @@ class App:
         self.pick = pick              # show the folder picker when a folder is added (False: add it whole, at once)
         self.picker = None            # the picker's window while it is open
         self.carried = ""             # the report of an index update that went straight on into OCR
+        self.waiting_fast = ""        # a folder to read fast as soon as the run now going has stopped
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
 
@@ -322,7 +323,8 @@ class App:
         self.run_buttons = []
         for text, command in (("Add folder...", self.add_folder), ("Choose what to index...", self.choose_what),
                               ("Update the index", lambda: self.start("index")),
-                              ("Read pictures and scans (OCR)", lambda: self.start("ocr"))):
+                              ("Read pictures and scans (OCR)", lambda: self.start("ocr")),
+                              ("Read a folder now, fast...", self.read_folder_now)):
             button = ttk.Button(buttons, text=text, command=command)
             button.pack(side="left", padx=2)
             self.run_buttons.append(button)
@@ -685,6 +687,28 @@ class App:
             chosen = roots[0]
         self.start("plan", path=chosen)
 
+    def read_folder_now(self) -> None:
+        """Read one folder's pictures and scans at once, with several readers side by side. A run that is
+        going on is asked to stop first (what it has done is kept, the rest stays queued), and this starts
+        as soon as it has."""
+        chosen = self.choose_folder()
+        if not chosen:
+            return
+        chosen = os.path.normpath(chosen)
+        roots = [r.path for r in self.service.list_roots()]
+        fold = (lambda t: t.casefold()) if os.name == "nt" else (lambda t: t)
+        inside = any(fold(chosen) == fold(r) or fold(chosen).startswith(fold(r.rstrip("/\\")) + os.sep) for r in roots)
+        if not inside:
+            self.say("That folder is not indexed yet. Add it (or a folder above it) first, then update the index.")
+            return
+        if self.busy():
+            self.waiting_fast = chosen
+            self.stop.set()
+            self.progress_text.set("Stopping what is running; then that folder is read, fast.")
+            self.say(f"As soon as the current run has stopped, {chosen} is read with several readers.")
+            return
+        self.start("fast", path=chosen)
+
     def _show_picker(self, material) -> None:
         from .pickerwindow import PickerDialog
         if self.picker is not None and not self.picker.closed:
@@ -734,6 +758,8 @@ class App:
             try:
                 if what == "plan":
                     report = service.plan_folder(path, stop)
+                elif what == "fast":
+                    report = service.run_ocr(stop, events.put, folder=path, fast=True)
                 elif what == "models":
                     report = service.install_models(stop, events.put)
                 elif what == "ocr":
@@ -748,7 +774,8 @@ class App:
         for button in self.run_buttons:
             button.configure(state="disabled")
         self.stop_button.configure(state="normal")
-        self.progress_text.set(f"Looking through {path} (no file is opened) ..." if what == "plan" else "Starting ...")
+        self.progress_text.set(f"Looking through {path} (no file is opened) ..." if what == "plan" else
+                               f"Starting several readers for {path} ..." if what == "fast" else "Starting ...")
         self.bar.configure(value=0.0)
         self.tabs.select(1)
         self.worker.start()
@@ -795,6 +822,15 @@ class App:
         self.stop_button.configure(state="disabled")
         self.bar.configure(value=0.0)
         out = io.StringIO()
+        if self.waiting_fast and what in ("index", "ocr", "fast"):
+            # a folder was asked for "now": the run that was going has stopped, so that one starts
+            folder, self.waiting_fast = self.waiting_fast, ""
+            self.carried = ""
+            self.refresh_folders()
+            self.refresh_status("The run that was going was stopped to read a folder now. What it had not finished is still "
+                                "queued: Update the index picks it up again.")
+            self.start("fast", path=folder)
+            return
         if what == "plan":
             if isinstance(report, Failure):
                 stopped = report.reason is FailureReason.STOPPED
@@ -833,7 +869,7 @@ class App:
             if answer is not None:
                 self.start("index", REREAD if answer else KEEP)
             return
-        if what == "ocr":
+        if what in ("ocr", "fast"):
             print_ocr_report(report, out)
         else:
             print_report(report, out, self.service.settings.missing_retention_days)

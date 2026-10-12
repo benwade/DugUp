@@ -224,3 +224,13 @@ def test_a_changed_picture_is_read_again(tmp_path):
     assert "No files found" in run(data, "search", "bakery")[1], "the old words left with the old picture"
     assert run(data, "ocr")[0] == 0
     assert "sign.png" in run(data, "search", "library")[1]
+
+
+def test_a_reader_kept_to_a_few_threads_reads_the_same_words(tmp_path, sandbox):
+    """Fast mode runs several readers, each told how many processor threads it may use."""
+    path = tmp_path / "sign.png"
+    save(sign(["Harbour Bakery", "open daily"]), path)
+    limited = SandboxOcrBackend(sandbox, threads=2).read(path)
+    free = SandboxOcrBackend(sandbox).read(path)
+    assert not isinstance(limited, Failure), limited
+    assert texts(limited) == texts(free) and "harbour" in texts(limited)

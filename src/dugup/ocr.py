@@ -72,7 +72,8 @@ def result_from_data(data: Any) -> "OcrResult | Failure":
 
 class SandboxOcrBackend:
     def __init__(self, sandbox: Sandbox, settings: Optional[Settings] = None, job: str = OCR,
-                 probe_job: str = PROBE) -> None:
+                 probe_job: str = PROBE, threads: int = 0) -> None:
+        self.threads = threads      # processor threads this reader's engine may use; 0 leaves it to the engine
         self.sandbox = sandbox
         self.settings = settings or Settings()
         self.job = job
@@ -108,7 +109,7 @@ class SandboxOcrBackend:
             return Failure(FailureReason.UNSUPPORTED,
                            f"OCR in language {language!r} is not set up (available: {', '.join(LANGUAGES)})")
         payload = {"path": path_to_data(path), "page": page, "dpi": self.settings.ocr_dpi,
-                   "max_pixels": self.settings.ocr_max_pixels,
+                   "max_pixels": self.settings.ocr_max_pixels, "threads": self.threads,
                    "region": None if region is None else [region.x0, region.y0, region.x1, region.y1]}
         answer = self.sandbox.run(self.job, payload, self._limits(time_limit), stop)
         if isinstance(answer, Failure):

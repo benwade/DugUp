@@ -8,6 +8,7 @@ console in a legacy code page shows an escape instead of crashing on a name it c
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import datetime
 import logging
 import logging.handlers
@@ -217,6 +218,13 @@ def build_parser() -> argparse.ArgumentParser:
     ocr.add_argument("--root", action="append", default=None, metavar="FOLDER", help="only this folder (repeatable)")
     ocr.add_argument("--minutes", type=float, default=None, metavar="N", help="stop after about N minutes")
     ocr.add_argument("--retry-failed", action="store_true", help="try the pages OCR failed on again")
+    ocr.add_argument("--folder", default=None, metavar="FOLDER",
+                     help="only what lies in this folder: an indexed folder or any folder inside one")
+    ocr.add_argument("--fast", action="store_true",
+                     help="several readers side by side; the computer is busier while it runs")
+    ocr.add_argument("--readers", type=int, default=0, metavar="N", help="fast, with exactly N readers")
+    ocr.add_argument("--again", action="store_true",
+                     help="with --folder: read its pictures and scans afresh, even where that was done before")
     ocr.add_argument("--reread-old", action="store_true",
                      help="read again the pages that an older version of the OCR engine read")
 
@@ -678,7 +686,8 @@ def print_ocr_report(report, out: TextIO) -> None:
         return
     safe_write(f"OCR read {report.read:,} of {report.total:,} waiting page(s) in {format_seconds(report.seconds)} "
                f"({report.rate * 60:.1f} pages/min): {report.with_words:,} with words, "
-               f"{report.read - report.with_words:,} with none, {report.failed:,} failed", out)
+               f"{report.read - report.with_words:,} with none, {report.failed:,} failed"
+               + (f" [{report.readers} readers side by side]" if getattr(report, "readers", 1) > 1 else ""), out)
     if report.second_tries:
         safe_write(f"{report.second_tries:,} page(s) ran out of time and were read again, last, with more time.", out)
     if report.left:
@@ -725,7 +734,15 @@ def cmd_ocr(args, env, out, environ, stop: Optional[threading.Event] = None, ins
                 safe_write("--minutes must be above 0", out)
                 return 1
             budget = None if args.minutes is None else args.minutes * 60.0
-            report = service.run_ocr(stop, printer, roots, budget, args.retry_failed, args.reread_old)
+            if args.again and not args.folder:
+                safe_write("--again needs --folder: say which folder to read afresh", out)
+                return 1
+            if args.fast or args.readers:
+                if args.readers:
+                    service.settings = replace(service.settings, ocr_fast_readers=max(1, args.readers))
+                safe_write(f"Fast: {service.fast_readers()} reader(s) side by side. The computer will be busier until this ends.", out)
+            report = service.run_ocr(stop, printer, roots, budget, args.retry_failed, args.reread_old,
+                                     folder=args.folder, fast=bool(args.fast or args.readers), again=args.again)
             printer.finish()
             if isinstance(report, Failure):
                 return _fail(report, out)

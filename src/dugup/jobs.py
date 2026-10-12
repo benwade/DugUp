@@ -160,9 +160,15 @@ def ocr(payload: Mapping[str, Any]) -> Dict[str, Any]:
     if limit and longest > limit:
         shrink = limit / float(longest)
         picture = picture.resize((max(1, round(picture.width * shrink)), max(1, round(picture.height * shrink))))
-    if "rapidocr" not in _engines:
-        _engines["rapidocr"] = RapidOCR(params={"Global.log_level": "error"})
-    found = _engines["rapidocr"](numpy.ascontiguousarray(numpy.asarray(picture)[:, :, ::-1]))
+    threads = int(payload.get("threads") or 0)       # 0: the engine decides (it takes every core it finds)
+    key = f"rapidocr:{threads}"
+    if key not in _engines:
+        params: Dict[str, Any] = {"Global.log_level": "error"}
+        if threads > 0:              # readers working side by side must each keep to a few cores
+            params["EngineConfig.onnxruntime.intra_op_num_threads"] = threads
+            params["EngineConfig.onnxruntime.inter_op_num_threads"] = 1
+        _engines[key] = RapidOCR(params=params)
+    found = _engines[key](numpy.ascontiguousarray(numpy.asarray(picture)[:, :, ::-1]))
     items = []
     if found is not None and getattr(found, "boxes", None) is not None and found.txts is not None:
         scores = found.scores if found.scores is not None else [None] * len(found.txts)

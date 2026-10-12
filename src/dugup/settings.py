@@ -81,6 +81,9 @@ class Settings:
     # -- file kinds: extension (no dot, lower case) -> kind name
     extensions: Mapping[str, FileKind] = field(default_factory=lambda: dict(DEFAULT_EXTENSIONS))
 
+    ocr_fast_readers: int = 0              # readers side by side in fast mode; 0 works it out from cores and free memory
+    ocr_reader_threads: int = 2            # processor threads each of them may use
+    ocr_reader_memory_mb: int = 1500       # memory allowed for when counting how many fit [a guess; the engine is hungry]
     ocr_after_index: bool = True           # the window's "Update the index" goes straight on to OCR where a folder asks for it
     # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
     book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
@@ -149,6 +152,8 @@ def validate(s: Settings) -> List[str]:
         problems.append('book_folder_level must be "", "names", "words", "ocr" or "meaning"')
     if not 0.0 < s.picture_heavy_fraction <= 1.0 or s.picture_heavy_min < 0:
         problems.append("picture_heavy_fraction must be above 0 and at most 1, and picture_heavy_min must not be negative")
+    if s.ocr_fast_readers < 0 or s.ocr_reader_threads < 1 or s.ocr_reader_memory_mb < 0:
+        problems.append("ocr_fast_readers and ocr_reader_memory_mb must not be negative, and ocr_reader_threads must be at least 1")
     if s.missing_retention_days < 0:
         problems.append("missing_retention_days must not be negative")
     return problems

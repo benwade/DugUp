@@ -122,6 +122,12 @@ level asks for it, as one run with one Stop. `ocr_after_index = false` in `confi
 `dugup index` does the same; `dugup index --no-ocr` stops once the index is up to date, and `dugup ocr`
 reads what waits at any time.
 
+OCR normally reads one page at a time so the computer stays pleasant to use. `dugup ocr --fast` runs
+several readers side by side (about half the processor cores, limited by free memory; `--readers N` sets the
+number), and `--folder "D:\Some Folder\Scans"` reads just one folder. `--again` with `--folder` reads that
+folder afresh. In the window, "Read a folder now, fast..." does the same and takes over from a run that is
+going on: that run stops cleanly, and what it had not finished stays queued.
+
 Levels let one folder be treated differently from the rest: `names` keeps file names only, `words` also
 reads the text of readable files, `ocr` also reads pictures and scans, `meaning` is everything (the default).
 A folder's level applies to everything below it until a folder further down has its own; `inherit` takes a
