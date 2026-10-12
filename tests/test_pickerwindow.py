@@ -9,6 +9,15 @@ from dugup.shapes import LEVEL_MEANING, LEVEL_NAMES, LEVEL_WORDS
 from test_window import Bench
 
 
+
+@pytest.fixture(autouse=True)
+def windows_are_collected_on_this_thread():
+    """After every test here, whatever the test left behind is collected now, on the main thread. A window
+    holds tkinter variables in reference cycles; left to chance they are collected during a later test's
+    background run, on its thread, which tkinter does not allow (a warning on Windows, and once a hang)."""
+    yield
+    gc.collect()
+
 @pytest.fixture
 def bench(tmp_path):
     made = Bench(tmp_path, pick=True)
