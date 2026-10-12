@@ -9,9 +9,11 @@ single-writer lock is lockfile.py (one indexing run at a time).
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import sqlite3
+import unicodedata
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
@@ -226,6 +228,10 @@ def _first_span(marked: str, window: int = SPAN_WINDOW) -> Optional[Tuple[int, i
     that takes in the most different matched words, ending at the last word needed for that; the earliest
     such stretch wins. So a query of two words points at the place where both stand together, when there is one.
     """
+    return _best_span(_marked_runs(marked), window)
+
+
+def _marked_runs(marked: str) -> List[Tuple[int, int, str]]:
     runs: List[Tuple[int, int, str]] = []   # (start, end, word) in the text without markers
     removed = 0
     at = 0
@@ -239,6 +245,10 @@ def _first_span(marked: str, window: int = SPAN_WINDOW) -> Optional[Tuple[int, i
         runs.append((start - removed, end - removed - 1, marked[start + 1:end].casefold()))
         removed += 2
         at = end + 1
+    return runs
+
+
+def _best_span(runs: List[Tuple[int, int, str]], window: int = SPAN_WINDOW) -> Optional[Tuple[int, int]]:
     if not runs:
         return None
     best = (0, runs[0][0], runs[0][1])
@@ -252,6 +262,51 @@ def _first_span(marked: str, window: int = SPAN_WINDOW) -> Optional[Tuple[int, i
                 if len(seen) > best[0]:
                     best = (len(seen), start, end)
     return best[1], best[2]
+
+
+def _fold_word(word: str) -> str:
+    """A word as the index compares it: case and accents do not count."""
+    return "".join(c for c in unicodedata.normalize("NFD", word.casefold()) if unicodedata.category(c) != "Mn")
+
+
+def _words(text: str) -> Iterator[Tuple[int, int, str]]:
+    """(start, end, folded word) for every word of a text, cut where the index's tokenizer cuts
+    (letters, numbers, marks and private-use characters make words; everything else separates them)."""
+    start = -1
+    for at, ch in enumerate(text):
+        cat = unicodedata.category(ch)
+        inside = cat[0] in "LNM" or cat == "Co"
+        if inside and start < 0:
+            start = at
+        elif not inside and start >= 0:
+            yield start, at, _fold_word(text[start:at])
+            start = -1
+    if start >= 0:
+        yield start, len(text), _fold_word(text[start:])
+
+
+def exact_terms(query: str) -> Tuple[str, ...]:
+    """The words of a query, folded, for an exact-form search."""
+    return tuple(dict.fromkeys(word for _, _, word in _words(query) if word))
+
+
+@functools.lru_cache(maxsize=64)
+def _term_set(terms_json: str) -> frozenset:
+    return frozenset(json.loads(terms_json))
+
+
+def _exact_ok(name: Optional[str], body: Optional[str], place: str, terms_json: str) -> int:
+    """SQL function: 1 when every asked-for word stands in this row in exactly that form.
+    `place` says where it must stand: in the name, in the body, or in either."""
+    terms = _term_set(terms_json)
+    in_name = {w for _, _, w in _words(name or "")} if place != "body" else set()
+    in_body = {w for _, _, w in _words(body or "")} if place != "name" else set()
+    return int(all(t in in_name or t in in_body for t in terms))
+
+
+def _exact_span(text: str, terms: Sequence[str]) -> Optional[Tuple[int, int]]:
+    wanted = set(terms)
+    return _best_span([(start, end, word) for start, end, word in _words(text) if word in wanted])
 
 
 def _ascii_lower(text: str) -> str:
@@ -302,6 +357,7 @@ class SqliteStore:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA secure_delete=ON")
+            conn.create_function("dugup_exact", 4, _exact_ok, deterministic=True)
             self._migrate(conn)
         except BaseException:
             conn.close()
@@ -751,17 +807,26 @@ class SqliteStore:
     # scores come from the `rank` column, never from bm25() (which also fails inside GROUP BY on 3.37).
 
     @staticmethod
-    def _narrow(match: str, filters: Optional[SearchFilters]) -> Tuple[str, str, str, List[object]]:
-        """(the match text, a clause on the segment, a clause on the file, the file clause's values)."""
+    def _narrow(match: str, filters: Optional[SearchFilters], query: str = ""
+                ) -> Tuple[str, str, List[object], str, List[object], Tuple[str, ...]]:
+        """(the match text, a clause on the segment and its values, a clause on the file and its values,
+        the words that must stand in exactly that form, or () when any form will do)."""
         if filters is None:
-            return match, "", "", []
+            return match, "", [], "", [], ()
         seg = ""
+        seg_args: List[object] = []
+        terms: Tuple[str, ...] = ()
         if filters.where == WHERE_NAME:
             match, seg = f"name : ({match})", " AND s.kind = 'name'"
         elif filters.where == WHERE_TEXT:
             match = f"body : ({match})"
         elif filters.where == WHERE_OCR:
             match, seg = f"body : ({match})", " AND s.kind = 'ocr'"
+        if filters.exact:
+            terms = exact_terms(query)
+            place = {WHERE_NAME: "name", WHERE_TEXT: "body", WHERE_OCR: "body"}.get(filters.where, "either")
+            seg += " AND dugup_exact(fts.name, fts.body, ?, ?) = 1"
+            seg_args = [place, json.dumps(sorted(terms))]
         clauses: List[str] = []
         args: List[object] = []
         if filters.folder is not None:
@@ -776,7 +841,7 @@ class SqliteStore:
             if value is not None:
                 clauses.append(f"{column} {sign} ?")
                 args.append(value)
-        return match, seg, "".join(f" AND {c}" for c in clauses), args
+        return match, seg, seg_args, "".join(f" AND {c}" for c in clauses), args, terms
 
     def search_words(self, query: str, limit: int = 100, offset: int = 0,
                      sort="rank", descending: bool = False, filters: Optional[SearchFilters] = None) -> SearchPage:
@@ -786,11 +851,11 @@ class SqliteStore:
         match = build_match(query)
         if match is None:
             return SearchPage([], 0, offset, limit)
-        match, seg_clause, file_clause, file_args = self._narrow(match, filters)
+        match, seg_clause, seg_args, file_clause, file_args, terms = self._narrow(match, filters, query)
         total = self.conn.execute(
             "SELECT COUNT(DISTINCT s.file_id) FROM fts CROSS JOIN segments s ON s.id = fts.rowid "
             f"CROSS JOIN files f ON f.id = s.file_id WHERE fts MATCH ?{seg_clause}{file_clause}",
-            [match] + file_args,
+            [match] + seg_args + file_args,
         ).fetchone()[0]
         order = ", ".join(f"{SORT_COLUMNS[key]} {'DESC' if down else 'ASC'}" for key, down in keys)
         # The score is read from FTS5's `rank` column (bm25 by default). Unlike the bm25() function it is an
@@ -806,24 +871,33 @@ class SqliteStore:
             SearchRow(r["id"], decode_path(r["path"], r["path_raw"]), r["name"], r["folder"], r["size"],
                       r["modified"], r["kind"], r["state"], r["matches"], r["rank"],
                       missing_since=r["missing_since"])
-            for r in self.conn.execute(sql, [match] + file_args + [limit, offset])
+            for r in self.conn.execute(sql, [match] + seg_args + file_args + [limit, offset])
         ]
-        self._attach_evidence(rows, match, seg_clause)
+        self._attach_evidence(rows, match, seg_clause, seg_args, terms)
         return SearchPage(rows, total, offset, limit)
 
-    def _attach_evidence(self, rows: List[SearchRow], match: str, seg_clause: str = "") -> None:
+    @staticmethod
+    def _span(r: sqlite3.Row, is_name: bool, terms: Sequence[str]) -> Optional[Tuple[int, int]]:
+        """Where the words stand in a matched row. For an exact-form search the marks the index makes are
+        not used: they also mark other forms of a word."""
+        if terms:
+            return _exact_span(r["raw_name"] if is_name else r["raw_body"], terms)
+        return _first_span(r["in_name"] if is_name else r["in_body"])
+
+    def _attach_evidence(self, rows: List[SearchRow], match: str, seg_clause: str = "",
+                         seg_args: Sequence[object] = (), terms: Sequence[str] = ()) -> None:
         """Give each row the places its words were found: text first, then the file name, best first."""
         found: Dict[int, List[Tuple[int, float, Evidence]]] = {}
         ids = [r.file_id for r in rows]
         for at in range(0, len(ids), 500):
             chunk = ids[at:at + 500]
             marks = ",".join("?" * len(chunk))
-            sql = ("SELECT s.id, s.file_id, s.page, s.kind, fts.rank AS score, "
+            sql = ("SELECT s.id, s.file_id, s.page, s.kind, fts.rank AS score, fts.name AS raw_name, fts.body AS raw_body, "
                    "highlight(fts, 0, char(2), char(3)) AS in_name, highlight(fts, 1, char(2), char(3)) AS in_body "
                    f"FROM fts CROSS JOIN segments s ON s.id = fts.rowid WHERE fts MATCH ?{seg_clause} AND s.file_id IN ({marks})")
-            for r in self.conn.execute(sql, [match] + chunk):
+            for r in self.conn.execute(sql, [match] + list(seg_args) + chunk):
                 is_name = r["kind"] == SegmentKind.NAME.value
-                span = _first_span(r["in_name"] if is_name else r["in_body"])
+                span = self._span(r, is_name, terms)
                 if span is None:
                     continue   # a piece of text that matched only through the file name: the name row covers it
                 box = self._line_box(r["id"], span[0]) if r["kind"] == SegmentKind.OCR.value else None
@@ -840,15 +914,16 @@ class SqliteStore:
         match = build_match(query)
         if match is None or limit <= 0:
             return []
-        match, seg_clause, _, _ = self._narrow(match, filters)
-        sql = ("SELECT s.id, s.page, s.kind, highlight(fts, 0, char(2), char(3)) AS in_name, "
+        match, seg_clause, seg_args, _, _, terms = self._narrow(match, filters, query)
+        sql = ("SELECT s.id, s.page, s.kind, fts.name AS raw_name, fts.body AS raw_body, "
+               "highlight(fts, 0, char(2), char(3)) AS in_name, "
                "highlight(fts, 1, char(2), char(3)) AS in_body "
                f"FROM fts CROSS JOIN segments s ON s.id = fts.rowid WHERE fts MATCH ?{seg_clause} AND s.file_id = ? "
                "ORDER BY (s.kind = 'name'), s.page, s.ord, s.id")
         found: List[Evidence] = []
-        for r in self.conn.execute(sql, (match, file_id)):
+        for r in self.conn.execute(sql, [match] + seg_args + [file_id]):
             is_name = r["kind"] == SegmentKind.NAME.value
-            span = _first_span(r["in_name"] if is_name else r["in_body"])
+            span = self._span(r, is_name, terms)
             if span is None:
                 continue      # a piece of text that matched only through the file name
             box = self._line_box(r["id"], span[0]) if r["kind"] == SegmentKind.OCR.value else None

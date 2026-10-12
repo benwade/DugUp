@@ -58,7 +58,8 @@ The window:
     dugup window        (or: dugup-window, which opens without a console)
 
 Type words and press Enter. Narrow by folder, by where the words are (text, file name, text read by OCR),
-by kind of file, by date and by size. Click a column header to sort; click up to three and the earlier
+by kind of file, by date and by size. Words are matched by their stem, so "education" also finds
+"educate"; tick "Exact form" (or use `dugup search --exact`) for the very form you typed. Click a column header to sort; click up to three and the earlier
 ones become the second and third sort keys. Double-click a result to open it; the buttons under the list
 open it for editing, show it in its folder, or copy its path. The Index tab adds folders, brings the index
 up to date and reads pictures and scans, with progress and a Stop button.

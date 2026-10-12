@@ -59,6 +59,7 @@ BROKEN = [
     (fs.WhereIsIgnored, "where_the_words_must_be"),
     (fs.FileEvidenceStopsAtThree, "every_place_in_one_file_can_be_listed"),
     (fs.FileEvidenceOutOfOrder, "every_place_in_one_file_can_be_listed"),
+    (fs.ExactMatchesRelatives, "exact_form_finds_only_the_very_word"),
     (fs.SetRootForgetsStatus, "roots_round_trip_and_keep_their_status"),
 ]
 

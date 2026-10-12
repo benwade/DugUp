@@ -1,3 +1,4 @@
+import helpers
 import os
 import random
 
@@ -356,3 +357,35 @@ def test_evidence_for_two_words_points_at_where_both_stand(store):
     store.replace_segments(row, [SegmentIn(1, 0, SegmentKind.TEXT, text)])
     evidence = store.search_words("gamma delta").rows[0].evidence[0]
     assert text[evidence.start:evidence.end] == "gamma meets delta"
+
+
+def test_word_forms_are_found_together_unless_the_exact_form_is_asked_for(store):
+    """The index stores words by their stem (a choice, see TOKENIZER). The exact-form filter narrows that."""
+    from dugup.shapes import FileKind, FileRecord, SearchFilters, SegmentIn, SegmentKind
+    for name, text in (("a.txt", "they educate the public"), ("b.txt", "educated people value education highly"),
+                       ("c.txt", "nursing staff"), ("d.txt", "the nurse on duty")):
+        row = store.upsert_file(FileRecord(path=f"/d/{name}", size=1, modified=1.0, kind=FileKind.TEXT))
+        store.replace_segments(row, [SegmentIn(0, 0, SegmentKind.TEXT, text)])
+    names = lambda page: sorted(r.name for r in page.rows)
+    assert names(store.search_words("education")) == ["a.txt", "b.txt"], "by stem: educate, educated, education"
+    assert names(store.search_words("nursing")) == ["c.txt", "d.txt"]
+    exact = SearchFilters(exact=True)
+    assert names(store.search_words("education", filters=exact)) == ["b.txt"]
+    assert names(store.search_words("nursing", filters=exact)) == ["c.txt"]
+    assert names(store.search_words("nurses", filters=exact)) == [], "no file holds that very form"
+    row = store.search_words("educated education", filters=exact).rows[0]
+    shown = store.get_passage(row.evidence[0], context=0)
+    assert shown.text == "educated people value education", "several exact words: the stretch that holds them"
+
+
+def test_exact_words_are_cut_and_folded_like_the_index():
+    from dugup.store import _exact_ok, _exact_span, _words, exact_terms
+    import json
+    assert [w for _, _, w in _words(f"E-mail the {helpers.CAFE}, re: R2-D2!")] == ["e", "mail", "the", "cafe", "re", "r2", "d2"]
+    assert exact_terms(f"  {helpers.CAFE.upper()}  e-mail e-mail ") == ("cafe", "e", "mail")
+    terms = json.dumps(["cafe"])
+    assert _exact_ok(f"{helpers.CAFE}.txt", "", "name", terms) == 1 and _exact_ok(f"{helpers.CAFE}.txt", "", "body", terms) == 0
+    assert _exact_ok("x", f"the {helpers.CAFE}s", "either", terms) == 0, "a plural is another form"
+    assert _exact_ok(None, None, "either", terms) == 0
+    assert _exact_span(f"caf\u00e9s and a {helpers.CAFE} here", ["cafe"]) == (12, 16)
+    assert _exact_span("nothing here", ["cafe"]) is None

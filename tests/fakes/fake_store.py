@@ -809,6 +809,16 @@ class FileEvidenceOutOfOrder(FakeStore):
         return list(reversed(super()._in_reading_order(hits)))
 
 
+class ExactMatchesRelatives(FakeStore):
+    """Treats words as the same when their first six letters agree, even for an exact-form search."""
+
+    def _row_matches(self, name, body, terms):
+        def close(haystack, needle):
+            return any(h[:6] == n[:6] for n in needle for h in haystack)
+        name_t, body_t = tokens(name), tokens(body)
+        return all(close(name_t, t) or close(body_t, t) for t in terms)
+
+
 class IgnoresSecondSortKey(FakeStore):
     def _keys(self, sort, descending):
         return super()._keys(sort, descending)[:1]

@@ -467,3 +467,16 @@ def test_more_lists_every_place_in_the_selected_file_a_lot_at_a_time(bench, monk
     app.tree.selection_set(str(names.index("beta.txt")))
     bench.root.update()
     assert str(app.places_button.cget("state")) == "disabled" and app.places is None, "another file starts afresh"
+
+
+def test_exact_form_tick_box(bench):
+    (bench.docs / "forms.txt").write_text("we educate; they were educated", encoding="utf-8")
+    (bench.docs / "school.txt").write_text("education for all", encoding="utf-8")
+    bench.ready()
+    assert sorted(bench.find("education")) == ["forms.txt", "school.txt"], "off: other forms of the word are found too"
+    bench.app.exact.set(True)
+    assert bench.find("education") == ["school.txt"]
+    assert bench.app.filters().exact is True
+    bench.app.clear_filters()
+    assert bench.app.exact.get() is False and len(bench.find("education")) == 2
+    assert w.build_filters(exact=True).exact and not w.build_filters().exact

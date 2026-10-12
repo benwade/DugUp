@@ -167,6 +167,8 @@ class SearchFilters:
     min_size: Optional[int] = None          # bytes, inclusive
     max_size: Optional[int] = None          # bytes, inclusive
     case_insensitive: Optional[bool] = None  # how `folder` is compared; None means the platform's rule
+    exact: bool = False                     # only the very word forms asked for: "education" then does not
+                                            # find "educate" (case and accents still do not matter)
 
     def __post_init__(self) -> None:
         if self.where not in WHERE_CHOICES:

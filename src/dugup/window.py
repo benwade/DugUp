@@ -82,7 +82,7 @@ ALL_FOLDERS = "All indexed folders"
 
 
 def build_filters(folder: str = "", where: str = WHERE_ANYWHERE, kinds: Sequence[str] = (), after: str = "",
-                  before: str = "", smallest: str = "", largest: str = "") -> SearchFilters:
+                  before: str = "", smallest: str = "", largest: str = "", exact: bool = False) -> SearchFilters:
     """The filters a filled-in form stands for. Raises ValueError with a sentence for the person who typed."""
     low, high = parse_size(smallest), parse_size(largest)
     start, end = parse_day(after), parse_day(before, end_of_day=True)
@@ -93,7 +93,7 @@ def build_filters(folder: str = "", where: str = WHERE_ANYWHERE, kinds: Sequence
     every = {value for _, value in KIND_LABELS}
     chosen = tuple(k for k in kinds if k in every)
     return SearchFilters(folder=folder or None, kinds=() if set(chosen) == every else chosen, where=where,
-                         modified_after=start, modified_before=end, min_size=low, max_size=high)
+                         modified_after=start, modified_before=end, min_size=low, max_size=high, exact=bool(exact))
 
 
 COLUMNS = (("name", "Name", 190), ("folder", "Folder", 195), ("kind", "Type", 60), ("size", "Size", 85),
@@ -204,6 +204,7 @@ class App:
         self.after_day, self.before_day = tk.StringVar(), tk.StringVar()
         self.smallest, self.largest = tk.StringVar(), tk.StringVar()
         self.kinds: Dict[str, object] = {value: tk.BooleanVar(value=True) for _, value in KIND_LABELS}
+        self.exact = tk.BooleanVar(value=False)
 
         ttk.Label(form, text="Words:").grid(row=0, column=0, sticky="w")
         self.words_entry = ttk.Entry(form, textvariable=self.words)
@@ -220,6 +221,8 @@ class App:
                      values=[label for label, _ in WHERE_LABELS]).grid(row=1, column=3, padx=4)
         for at, (label, value) in enumerate(KIND_LABELS):
             ttk.Checkbutton(form, text=label, variable=self.kinds[value]).grid(row=1, column=4 + at, padx=2)
+        ttk.Checkbutton(form, text="Exact form", variable=self.exact).grid(row=1, column=8, padx=(14, 2))
+        ttk.Label(form, text="(off: education also finds educate)").grid(row=1, column=9, columnspan=2, sticky="w")
 
         narrow = ttk.Frame(form)
         narrow.grid(row=2, column=0, columnspan=11, sticky="w", pady=2)
@@ -360,7 +363,7 @@ class App:
         if not kinds:
             raise ValueError("No kind of file is ticked, so nothing can be found. Tick at least one.")
         return build_filters("" if folder == ALL_FOLDERS else folder, where, kinds, self.after_day.get(),
-                             self.before_day.get(), self.smallest.get(), self.largest.get())
+                             self.before_day.get(), self.smallest.get(), self.largest.get(), self.exact.get())
 
     def clear_filters(self) -> None:
         self.folder.set(ALL_FOLDERS)
@@ -369,6 +372,7 @@ class App:
             variable.set("")
         for variable in self.kinds.values():
             variable.set(True)    # type: ignore[attr-defined]
+        self.exact.set(False)
 
     def search(self) -> None:
         words = self.words.get().strip()

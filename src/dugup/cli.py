@@ -26,7 +26,7 @@ from .filesource import SUGGESTED_EXCLUDES
 from .indexer import KEEP, REFUSE, REREAD, IndexReport, Progress
 from .protocols import WARN_MASS_LOSS, WARN_ROOT_EMPTY
 from .service import LocalService
-from .shapes import POLICIES, POLICY_OPEN, Failure, Root, SearchPage, SearchRow
+from .shapes import POLICIES, POLICY_OPEN, Failure, Root, SearchFilters, SearchPage, SearchRow
 from .store import SORT_COLUMNS, StoreError
 from .suggest import SAFE, Suggestion
 
@@ -206,6 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--offset", type=int, default=0)
     search.add_argument("--sort", choices=sorted(SORT_COLUMNS), default="rank")
     search.add_argument("--desc", action="store_true", help="largest (or last) first")
+    search.add_argument("--exact", action="store_true",
+                        help="only the very word forms typed: education then does not find educate")
     search.add_argument("--context", type=int, default=60, help="characters shown on each side of a match")
 
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
@@ -660,7 +662,8 @@ def cmd_search(args, env, out, environ) -> int:
         return 1
     query = " ".join(args.words)
     with service:
-        page = service.search(query, max(0, args.limit), max(0, args.offset), args.sort, args.desc)
+        filters = SearchFilters(exact=True) if args.exact else None
+        page = service.search(query, max(0, args.limit), max(0, args.offset), args.sort, args.desc, filters)
         if isinstance(page, Failure):
             return _fail(page, out)
         print_results(page, query, service, max(0, args.context), out)

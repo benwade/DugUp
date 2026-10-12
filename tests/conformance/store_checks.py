@@ -610,6 +610,31 @@ def check_every_place_in_one_file_can_be_listed(s):
             "only the file asked about")
 
 
+def check_exact_form_finds_only_the_very_word(s):
+    add(s, "/d/a.txt", "they educate the public")
+    b = add(s, "/d/b.txt", "educated people value education highly")
+    add(s, "/d/Education.txt", "nothing of the sort")
+    add(s, f"/d/{helpers.CAFE}.txt", f"the {helpers.CAFE} on the corner")
+    exact = SearchFilters(exact=True)
+
+    def found(query, filters=exact):
+        return sorted(paths(s.search_words(query, filters=filters)))
+
+    require(found("education") == ["/d/Education.txt", "/d/b.txt"], "exact: only files with that very word (in text or name)")
+    require(found("EDUCATION") == found("education"), "exact is about the form of the word, not its case")
+    require(found(helpers.CAFE_PLAIN) == [f"/d/{helpers.CAFE}.txt"], "nor about accents")
+    require(found("educate") == ["/d/a.txt"], "'educate' does not find 'educated' or 'education'")
+    require(found("education highly") == ["/d/b.txt"], "every word, each in its exact form")
+    require(found("education", SearchFilters(exact=True, where="name")) == ["/d/Education.txt"], "exact combines with the place")
+    require(found("education", SearchFilters(exact=True, where="text")) == ["/d/b.txt"], "exact in the text only")
+    row = next(r for r in s.search_words("education", filters=exact).rows if r.file_id == b)
+    shown = s.get_passage(row.evidence[0], context=0)
+    require(shown is not None and shown.text == "education", "the evidence covers the exact word, not a relative that stands before it")
+    place = list(s.file_evidence(b, "education", exact))
+    require(len(place) == 1 and s.get_passage(place[0], context=0).text == "education", "the same for the full list of places")
+    require(s.search_words("education", limit=1, filters=exact).total == 2, "the total counts exact matches only")
+
+
 # ---- OCR -----------------------------------------------------------------------------------------------
 
 def _scan(s, path="/d/scan.pdf", kind=FileKind.PDF):
@@ -837,6 +862,7 @@ CHECKS = {
     "ocr_text_is_searchable_with_a_box": check_ocr_text_is_searchable_with_a_box,
     "ocr_blank_and_failed_pages_leave_the_queue": check_ocr_blank_and_failed_pages_leave_the_queue,
     "reread_clears_ocr": check_reread_clears_ocr,
+    "exact_form_finds_only_the_very_word": check_exact_form_finds_only_the_very_word,
     "every_place_in_one_file_can_be_listed": check_every_place_in_one_file_can_be_listed,
     "filters_narrow_the_search": check_filters_narrow_the_search,
     "where_the_words_must_be": check_where_the_words_must_be,
