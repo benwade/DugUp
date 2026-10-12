@@ -176,33 +176,65 @@ def _judge(key: str, folder: _Folder, parent: Optional[_Folder]) -> Optional[Tup
     return None
 
 
+def _judge_safe(key: str, folder: _Folder) -> Optional[Tuple[str, str, str]]:
+    verdict = _judge(key, folder, None)
+    return verdict if verdict is not None and verdict[1] == SAFE else None
+
+
+def _walk(folders: Dict[str, _Folder], judge, skip: Sequence[str] = ()) -> List[Tuple[str, Tuple[str, str, str]]]:
+    """Folders with a verdict, top-down. Nothing inside a folder that already has one, or inside `skip`, is judged."""
+    covered = list(skip)
+    out = []
+    for key in sorted((k for k in folders if k), key=lambda k: (k.count("/"), k.lower())):
+        if any(key == top or key.startswith(top + "/") for top in covered):
+            continue
+        verdict = judge(key)
+        if verdict is not None:
+            covered.append(key)
+            out.append((key, verdict))
+    return out
+
+
 def suggest_excludes(root: str, files: Iterable[Tuple[str, int]],
                      extensions: Optional[Mapping[str, FileKind]] = None) -> List[Suggestion]:
     """Candidates for --exclude, the safest and largest first. `files` is (path, size) for every file below root.
+
+    Two passes. First the safe folders are found wherever they are. Then everything else is judged as if
+    those folders were already gone: a project is not "almost all unreadable" because of the environment
+    inside it, and a safe folder is never hidden under a broader "your call" suggestion.
 
     A folder inside a folder that is already offered is not offered again, and the root itself never is.
     A suggestion for one particular folder is written as a path; at the top of the root it starts with a
     slash ("/Trash"), so that accepting it does not also skip every other folder called Trash.
     """
-    folders = _tree(root, files, extensions)
-    found: Dict[Tuple[str, str, str], List[Tuple[str, _Folder]]] = {}
-    covered: List[str] = []
-    spelling: Dict[str, str] = {}
-    for key in sorted((k for k in folders if k), key=lambda k: (k.count("/"), k.lower())):
-        if any(key.startswith(top + "/") for top in covered):
-            continue
+    files = list(files)
+    everything = _tree(root, files, extensions)
+    safe = _walk(everything, lambda key: _judge_safe(key, everything[key]))
+    safe_keys = [key for key, _ in safe]
+
+    base = root.rstrip("/\\")
+    def outside_safe(path: str) -> bool:
+        relative = path[len(base) + 1:].replace("\\", "/")
+        return not any(relative.startswith(key + "/") for key in safe_keys)
+
+    rest = _tree(root, (f for f in files if outside_safe(f[0])), extensions) if safe_keys else everything
+
+    def judge_rest(key: str) -> Optional[Tuple[str, str, str]]:
         parent_key = key.rsplit("/", 1)[0] if "/" in key else ""
-        verdict = _judge(key, folders[key], folders.get(parent_key))
-        if verdict is None:
-            continue
-        covered.append(key)
-        pattern, group, reason = verdict
+        verdict = _judge(key, rest[key], rest.get(parent_key))
+        return verdict if verdict is not None and verdict[1] != SAFE else None
+
+    review = _walk(rest, judge_rest, skip=safe_keys)
+
+    found: Dict[Tuple[str, str, str], List[Tuple[str, _Folder]]] = {}
+    spelling: Dict[str, str] = {}
+    for key, (pattern, group, reason) in [(k, v) for k, v in safe] + [(k, v) for k, v in review]:
+        folder = everything[key] if group == SAFE else rest[key]
         spelling.setdefault(pattern.casefold(), pattern)     # patterns ignore case: .git and .GIT are one
-        found.setdefault((pattern.casefold(), group, reason), []).append((key, folders[key]))
+        found.setdefault((pattern.casefold(), group, reason), []).append((key, folder))
     out = []
     for (folded, group, reason), places in found.items():
-        pattern = spelling[folded]
-        out.append(Suggestion(pattern, group, reason, len(places), sum(f.files for _, f in places),
+        out.append(Suggestion(spelling[folded], group, reason, len(places), sum(f.files for _, f in places),
                               sum(f.bytes for _, f in places), sum(f.readable for _, f in places), places[0][0]))
     out.sort(key=lambda s: (s.group != SAFE, -s.files, s.pattern.lower()))
     return out

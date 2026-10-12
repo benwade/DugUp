@@ -1,0 +1,5 @@
+# Text files are stored with LF in the repository and checked out with the line endings of the platform.
+* text=auto
+*.png binary
+*.jpg binary
+*.pdf binary

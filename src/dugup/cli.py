@@ -329,7 +329,7 @@ def cmd_roots(args, env, out, environ) -> int:
             safe_write("Next: dugup index", out)
             return 0
         if args.roots_command == "suggest":
-            safe_write(f"Looking through {args.path} (nothing is changed) ...", out)
+            safe_write(f"Looking through {args.path}" + ("" if args.apply_safe else " (nothing is changed)") + " ...", out)
             found = service.suggest_excludes(args.path)
             if isinstance(found, Failure):
                 return _fail(found, out)

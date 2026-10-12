@@ -51,6 +51,25 @@ def test_tool_data_and_system_folders_are_safe_and_names_ignore_case():
     assert found[".git"].places == 2
 
 
+def test_a_safe_folder_is_never_hidden_under_a_broader_suggestion():
+    # a project whose bulk is its environment and packages: without them it is an ordinary, readable project
+    files = (many("proj/.venv/Lib/site-packages/big", 400, "py") + ["proj/.venv/pyvenv.cfg"]
+             + many("proj/web/node_modules/dep", 300, "js") + ["proj/.ruff_cache/x.bin", "proj/.git/HEAD"]
+             + ["proj/notes.md", "proj/report.docx", "proj/src/main.py"])
+    found = by_pattern(suggest_excludes(ROOT, listing(*files)))
+    assert {"proj/.venv", "node_modules", ".ruff_cache", ".git"} <= set(found)
+    assert all(found[p].group == SAFE for p in ("proj/.venv", "node_modules", ".ruff_cache", ".git"))
+    assert "/proj" not in found, "the project is not 'almost all unreadable' once its packages are set aside"
+    assert found["proj/.venv"].files == 401
+
+
+def test_what_is_left_after_the_safe_folders_is_judged_on_its_own():
+    files = many("proj/.venv/lib", 50, "py") + ["proj/.venv/pyvenv.cfg"] + many("proj/data", 400, "bin") + ["proj/a.txt"]
+    found = by_pattern(suggest_excludes(ROOT, listing(*files)))
+    assert found["proj/.venv"].group == SAFE
+    assert found["/proj"].group == REVIEW and found["/proj"].files == 401, "counted without the environment's files"
+
+
 def test_trash_backups_and_build_output_are_the_users_call():
     found = by_pattern(suggest_excludes(ROOT, listing(
         "Trash/old.txt", "work/Temp/x.txt", "Backups/2024/a.docx",
