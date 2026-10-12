@@ -1,0 +1,3 @@
+platformdirs
+pypdfium2>=4.30
+tomli; python_version < "3.11"

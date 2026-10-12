@@ -1,0 +1,16 @@
+# environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# local material that is not part of the program
+_backup_*.tgz
+_Pics_with_letters/
+_scratch/
