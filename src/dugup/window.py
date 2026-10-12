@@ -159,6 +159,7 @@ class App:
                  pick: bool = True) -> None:
         self.pick = pick              # show the folder picker when a folder is added (False: add it whole, at once)
         self.picker = None            # the picker's window while it is open
+        self.carried = ""             # the report of an index update that went straight on into OCR
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
 
@@ -845,9 +846,26 @@ class App:
             self.progress_text.set("Finishing ...")
             self.root.update_idletasks()
             print_compacted(self.service.compact_if_worthwhile(), out)
+        text = out.getvalue()
+        if what == "ocr" and self.carried:
+            text = self.carried.rstrip() + "\n\nThen pictures and scans were read (OCR):\n" + text
+        self.carried = ""
+        if what == "index" and not report.stopped and not report.paused and self.service.settings.ocr_after_index:
+            # an index update goes straight on to the pictures and scans its folders ask for: one run, one Stop
+            try:
+                waiting = self.service.ocr_waiting()
+            except Exception:
+                waiting = 0
+            if waiting:
+                self.carried = text
+                self.refresh_folders()
+                self.refresh_status(text.rstrip() + f"\n\nNow reading {waiting:,} picture(s) and scanned page(s) (OCR). "
+                                    "Stop keeps what is done; the rest waits for next time.")
+                self.start("ocr")
+                return
         self.progress_text.set(f"Finished in {format_seconds(report.seconds)}." if not report.stopped else "Stopped.")
         self.refresh_folders()
-        self.refresh_status(out.getvalue())
+        self.refresh_status(text)
 
     # -- closing
 

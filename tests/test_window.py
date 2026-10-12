@@ -152,7 +152,8 @@ class Bench:
         self.sign = str(self.docs / "sign.png")
         self.ocr = ScriptedOcr({(self.sign, 1): words("needle on a shop sign")}, shapes={})
         self.layout = DataLayout(tmp_path / "data").ensure()
-        self.service = LocalService(self.layout, settings or Settings(), ocr_backend=self.ocr, intent=intent)
+        # most tests look at one step at a time, so an index update does not run on into OCR unless a test asks
+        self.service = LocalService(self.layout, settings or Settings(ocr_after_index=False), ocr_backend=self.ocr, intent=intent)
         self.root = make_root()
         self.desktop = FakeDesktop()
         self.asked = []
@@ -628,3 +629,39 @@ def test_a_sentence_fills_in_the_form_and_waits_for_the_person(tmp_path):
         bench.app = bench.root = None
         gc.collect()        # as the fixture does: a closed window's leftovers are collected in this thread
     assert reader.closed, "closing the window ends the model server"
+
+
+# ---- an index update goes on into OCR -------------------------------------------------------------------------
+
+def test_update_the_index_goes_straight_on_to_the_pictures_and_says_so(tmp_path):
+    bench = Bench(tmp_path, settings=Settings())
+    try:
+        bench.app.add_folder()
+        bench.app.start("index")
+        bench.finish_run()                       # the index update, then the OCR it started
+        status = bench.text(bench.app.status)
+        assert "Read 5 file(s)" in status and "Then pictures and scans were read (OCR):" in status
+        assert status.index("Read 5 file(s)") < status.index("Then pictures and scans"), "both reports, in the order they happened"
+        assert "wait for OCR" not in status.split("Then pictures and scans")[1].split("Data folder")[1]
+        assert "sign.png" in bench.find("shop sign"), "one press made the picture findable"
+        assert bench.app.progress_text.get().startswith("Finished in ") and bench.app.carried == ""
+        bench.app.start("index")
+        bench.finish_run()
+        assert "Then pictures and scans" not in bench.text(bench.app.status), "nothing waits now: no second OCR run"
+    finally:
+        bench.close()
+
+
+def test_ocr_does_not_follow_where_the_level_stops_at_words_or_the_run_was_stopped(tmp_path):
+    from dugup.shapes import LEVEL_WORDS
+    bench = Bench(tmp_path, settings=Settings())
+    try:
+        bench.app.add_folder()
+        bench.service.set_level(str(bench.docs), LEVEL_WORDS)
+        bench.app.start("index")
+        bench.finish_run()
+        assert bench.service.ocr_waiting() == 0 and "Then pictures and scans" not in bench.text(bench.app.status)
+        assert "sign.png" not in bench.find("shop sign"), "the folder asked for words only"
+        assert bench.ocr.calls == [] if hasattr(bench.ocr, "calls") else True
+    finally:
+        bench.close()

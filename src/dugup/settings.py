@@ -81,6 +81,7 @@ class Settings:
     # -- file kinds: extension (no dot, lower case) -> kind name
     extensions: Mapping[str, FileKind] = field(default_factory=lambda: dict(DEFAULT_EXTENSIONS))
 
+    ocr_after_index: bool = True           # the window's "Update the index" goes straight on to OCR where a folder asks for it
     # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
     book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
     book_folder_level: str = "names"       # what a folder with such a name starts at; "" makes no guess about books

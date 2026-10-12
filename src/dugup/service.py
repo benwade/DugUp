@@ -482,6 +482,16 @@ class LocalService:
         finally:
             self._run_guard.release()
 
+    def ocr_waiting(self) -> int:
+        """Pages and pictures that wait for OCR in folders whose level asks for it (what an OCR run would take up)."""
+        roots = list(self.store.list_roots())
+        count = 0
+        for task in self.store.ocr_queue():
+            owner = next((r for r in roots if _under(task.path, r.path, self._fold)), None)
+            if owner is None or level_reaches(level_for(owner, task.path, self.case_insensitive), LEVEL_OCR):
+                count += 1
+        return count
+
     def run_ocr(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
                 roots: Optional[Sequence[str]] = None, budget_seconds: Optional[float] = None,
                 retry_failed: bool = False, reread_old: bool = False) -> "OcrReport | Failure":

@@ -117,6 +117,10 @@ library by name only), each with its reason, and nothing changes until Apply. "C
 opens it again for a folder that is already indexed. The guesses can be tuned in `config.toml`
 (`book_folders`, `book_folder_level`, `picture_heavy_fraction`, `picture_heavy_min`).
 
+In the window, "Update the index" goes straight on to reading pictures and scans (OCR) in the folders whose
+level asks for it, as one run with one Stop. `ocr_after_index = false` in `config.toml` keeps the two apart.
+On the command line they stay separate: `dugup index`, then `dugup ocr`.
+
 Levels let one folder be treated differently from the rest: `names` keeps file names only, `words` also
 reads the text of readable files, `ocr` also reads pictures and scans, `meaning` is everything (the default).
 A folder's level applies to everything below it until a folder further down has its own; `inherit` takes a
