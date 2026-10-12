@@ -138,7 +138,7 @@ class FakeDesktop:
 
 
 class Bench:
-    def __init__(self, tmp_path, intent=None):
+    def __init__(self, tmp_path, intent=None, settings=None):
         self.docs = tmp_path / helpers.AWKWARD_FOLDER
         self.docs.mkdir()
         (self.docs / "sub").mkdir()
@@ -152,7 +152,7 @@ class Bench:
         self.sign = str(self.docs / "sign.png")
         self.ocr = ScriptedOcr({(self.sign, 1): words("needle on a shop sign")}, shapes={})
         self.layout = DataLayout(tmp_path / "data").ensure()
-        self.service = LocalService(self.layout, Settings(), ocr_backend=self.ocr, intent=intent)
+        self.service = LocalService(self.layout, settings or Settings(), ocr_backend=self.ocr, intent=intent)
         self.root = make_root()
         self.desktop = FakeDesktop()
         self.asked = []
@@ -527,13 +527,59 @@ def finish_asking(bench):
     bench.root.update()
 
 
-def test_without_a_model_there_is_no_plain_words_row(bench):
-    assert bench.service.intent is None
-    assert bench.app.ask_row.winfo_manager() == "", "the row is not on the window at all"
-    bench.app.sentence.set("anything")
-    bench.app.ask_in_plain_words()
+def test_plain_words_work_out_of_the_box_by_rules(bench):
+    bench.ready()
+    app = bench.app
+    assert app.ask_row.winfo_manager() == "grid", "the row is there with nothing set up"
+    assert app.setup_button.winfo_manager() == "", "and nothing is offered for download"
+    app.sentence.set("text files about needle bigger than 150 bytes")
+    app.ask_in_plain_words()
     finish_asking(bench)
-    assert "not set up" in bench.app.message.get()
+    assert (app.words.get(), app.smallest.get()) == ("needle", "150")
+    assert [k for k, v in app.kinds.items() if v.get()] == ["text"]
+    assert app.message.get().startswith("Filled in: words: needle; types: text; at least 150")
+    app.search()
+    bench.root.update()
+    assert bench.names() == ["alpha.txt"]
+
+
+def test_a_model_can_be_set_up_from_the_window_when_one_is_asked_for(tmp_path, monkeypatch):
+    from dugup.intent import Understood
+    bench = Bench(tmp_path, settings=Settings(intent_reader="model"))
+    try:
+        app = bench.app
+        assert app.ask_row.winfo_manager() == "", "a model is asked for and none is there: no row yet"
+        assert app.setup_button.winfo_manager() == "pack"
+        app.sentence.set("anything")
+        app.ask_in_plain_words()
+        finish_asking(bench)
+        assert "not set up" in app.message.get()
+        bench.answer = False
+        app.set_up_plain_words()
+        assert "huggingface.co" in bench.asked[-1] and "Download now?" in bench.asked[-1], "the person sees what and from where first"
+        assert app.message.get() == "Nothing was downloaded." and app.worker is None
+        reader = FakeReader()
+        reader.answer = Understood(words="needle")
+
+        def pretend_install(stop=None, progress=None):
+            bench.service._intent, bench.service._intent_looked = reader, True
+            return {"server": "s", "model_file": "m"}
+
+        monkeypatch.setattr(bench.service, "install_models", pretend_install)
+        bench.answer = True
+        app.set_up_plain_words()
+        bench.finish_run()
+        assert app.ask_row.winfo_manager() == "grid" and app.setup_button.winfo_manager() == ""
+        assert app.progress_text.get() == "Plain-words search is set up."
+        from dugup.shapes import Failure, FailureReason
+        monkeypatch.setattr(bench.service, "install_models", lambda stop=None, progress=None: Failure(FailureReason.UNREACHABLE, "no network"))
+        app.start("models")
+        bench.finish_run()
+        assert "no network" in bench.text(app.status) and app.progress_text.get() == "The download did not finish."
+    finally:
+        bench.close()
+        bench.app = bench.root = None
+        gc.collect()
 
 
 def test_a_sentence_fills_in_the_form_and_waits_for_the_person(tmp_path):

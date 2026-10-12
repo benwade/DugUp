@@ -306,11 +306,16 @@ def test_a_server_that_never_becomes_ready_is_ended_after_its_time():
 
 
 def test_settings_choose_how_the_model_is_reached():
-    assert from_settings(Settings()) is None, "nothing set up: the feature does not exist"
-    assert from_settings(Settings(intent_server="llama-server")) is None, "a server program without a model file is not enough"
-    remote = from_settings(Settings(intent_url="http://127.0.0.1:1234", intent_model="m", intent_seconds=9))
+    assert type(from_settings(Settings(intent_url="http://127.0.0.1:1234"))).__name__ == "RuleReader", \
+        "the built-in rules read the sentence unless the model reader is chosen"
+    model = dict(intent_reader="model")
+    assert from_settings(Settings(**model)) is None, "a model was asked for and there is none: nothing to read with"
+    assert from_settings(Settings(intent_server="llama-server", **model)) is None, "a server program without a model file is not enough"
+    remote = from_settings(Settings(intent_url="http://127.0.0.1:1234", intent_model="m", intent_seconds=9, **model))
     assert isinstance(remote.backend, ChatServer) and (remote.backend.model, remote.backend.seconds) == ("m", 9)
-    local = from_settings(Settings(intent_server="llama-server", intent_model_file="m.gguf", intent_gpu_layers=3))
+    local = from_settings(Settings(intent_server="llama-server", intent_model_file="m.gguf", intent_gpu_layers=3, **model))
     assert isinstance(local.backend, LocalRuntime) and local.backend.gpu_layers == 3 and local.backend._running is None
     with pytest.raises(ValueError):
         Settings(intent_seconds=0)
+    with pytest.raises(ValueError):
+        Settings(intent_reader="oracle")

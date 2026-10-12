@@ -321,6 +321,10 @@ class App:
             button = ttk.Button(buttons, text=text, command=command)
             button.pack(side="left", padx=2)
             self.run_buttons.append(button)
+        self.setup_button = ttk.Button(buttons, text="Set up plain-words search...", command=self.set_up_plain_words)
+        if self.service.intent is None:          # only when a model was asked for (intent_reader) and none is there
+            self.setup_button.pack(side="left", padx=2)
+            self.run_buttons.append(self.setup_button)
         self.stop_button = ttk.Button(buttons, text="Stop", command=self.stop_work, state="disabled")
         self.stop_button.pack(side="left", padx=2)
         ttk.Button(buttons, text="Refresh", command=self.refresh_status).pack(side="left", padx=2)
@@ -406,7 +410,7 @@ class App:
             events.put(("ask", answer))
 
         self.ask_button.configure(state="disabled")
-        self.say("Reading your sentence ... (the first time, the model has to load)")
+        self.say("Reading your sentence ...")
         self.asker = threading.Thread(target=work, name="dugup-window-ask", daemon=True)
         self.asker.start()
 
@@ -661,6 +665,17 @@ class App:
         self.refresh_status()
         self.say(f"Added {result.path}. Update the index to read it.")
 
+    def set_up_plain_words(self) -> None:
+        """Show what would be downloaded and, on a yes, fetch it in the background."""
+        plan = self.service.models_plan()
+        if isinstance(plan, Failure):
+            self.say(plan.detail)
+            return
+        if not self.ask("Set up plain-words search", plan.describe() + "\n\nDownload now?"):
+            self.say("Nothing was downloaded.")
+            return
+        self.start("models")
+
     def busy(self) -> bool:
         return self.worker is not None and self.worker.is_alive()
 
@@ -669,7 +684,7 @@ class App:
         if self.busy():
             self.say("Something is already running. Stop it first, or wait.")
             return
-        if not self.service.list_roots():
+        if what != "models" and not self.service.list_roots():
             self.say("There is no folder to index yet. Add one first.")
             return
         self.stop = threading.Event()
@@ -677,7 +692,9 @@ class App:
 
         def work() -> None:
             try:
-                if what == "ocr":
+                if what == "models":
+                    report = service.install_models(stop, events.put)
+                elif what == "ocr":
                     report = service.run_ocr(stop, events.put)
                 else:
                     report = service.run_indexing(stop, events.put, None, on_settings_change)
@@ -720,7 +737,7 @@ class App:
                 finished.append(item)    # type: ignore[arg-type]
         if latest is not None and not finished:
             self.progress_text.set(progress_text(latest))
-            self.bar.configure(value=latest.percent if latest.phase in ("read", "ocr") else 0.0)
+            self.bar.configure(value=latest.percent if latest.phase in ("read", "ocr", "download") else 0.0)
         for what, report in finished:
             if what == "ask":
                 self._understood(report)
@@ -736,6 +753,19 @@ class App:
         self.stop_button.configure(state="disabled")
         self.bar.configure(value=0.0)
         out = io.StringIO()
+        if what == "models":
+            if isinstance(report, Failure):
+                stopped = report.reason is FailureReason.STOPPED
+                self.progress_text.set("Stopped. What was downloaded is kept." if stopped else "The download did not finish.")
+                self.refresh_status("" if stopped else f"Plain-words search was not set up: {report.detail}")
+                return
+            self.progress_text.set("Plain-words search is set up.")
+            if self.service.intent is not None:
+                self.ask_row.grid(row=3, column=0, columnspan=11, sticky="ew", pady=(4, 0))
+                self.setup_button.pack_forget()
+                self.run_buttons = [b for b in self.run_buttons if b is not self.setup_button]
+            self.refresh_status('Plain-words search is ready: type a sentence in the "In plain words" box at the top.')
+            return
         if isinstance(report, Failure):
             self.progress_text.set("It could not run.")
             self.refresh_status(f"Could not do that ({report.reason.value.replace('_', ' ')}): {report.detail}")

@@ -391,12 +391,20 @@ class IntentParser:
         self.backend.close()
 
 
-def from_settings(settings: Settings) -> Optional[IntentParser]:
-    """The parser the settings describe, or None when plain-words search is not set up."""
+def from_settings(settings: Settings, installed: Optional[Mapping[str, str]] = None) -> Optional[IntentParser]:
+    """Who reads a sentence typed in plain words. By default the built-in rules (plainwords.py).
+    With intent_reader = "model": a server named in the settings, else the runtime and model that
+    `dugup models install` put in place, else None (asked for, but nothing to run it with)."""
+    if settings.intent_reader != "model":
+        from .plainwords import RuleReader       # the default: built in, nothing to set up
+        return RuleReader()
     if settings.intent_url:
         return IntentParser(ChatServer(settings.intent_url, settings.intent_model, settings.intent_seconds,
                                        settings.intent_allow_remote))
     if settings.intent_server and settings.intent_model_file:
         return IntentParser(LocalRuntime(settings.intent_server, settings.intent_model_file, settings.intent_seconds,
+                                         settings.intent_start_seconds, settings.intent_gpu_layers))
+    if installed and installed.get("server") and installed.get("model_file"):
+        return IntentParser(LocalRuntime(installed["server"], installed["model_file"], settings.intent_seconds,
                                          settings.intent_start_seconds, settings.intent_gpu_layers))
     return None

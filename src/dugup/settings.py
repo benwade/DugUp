@@ -61,6 +61,7 @@ class Settings:
     ocr_failures_in_a_row: int = 5         # this many pages failing one after another pauses the run
     # -- plain-words search (optional): a small language model fills in the search form from a sentence.
     #    Either name a server that is already running (LM Studio, for example) ...
+    intent_reader: str = "rules"       # who reads the sentence: "rules" (built in, no download) or "model"
     intent_url: str = ""               # for example "http://127.0.0.1:1234"; empty: not used
     intent_model: str = ""             # the model's name on that server, when the server needs one
     intent_allow_remote: bool = False  # a server on another machine would be sent what you type; off by default
@@ -122,6 +123,8 @@ def validate(s: Settings) -> List[str]:
         problems.append("compact_at_fraction must be between 0 and 1, and compact_min_mb must not be negative")
     if s.intent_seconds <= 0 or s.intent_start_seconds <= 0 or s.intent_gpu_layers < 0:
         problems.append("intent_seconds and intent_start_seconds must be above 0, and intent_gpu_layers must not be negative")
+    if s.intent_reader not in ("rules", "model"):
+        problems.append('intent_reader must be "rules" or "model"')
     if s.near_words < 0:
         problems.append("near_words must not be negative")
     if s.ocr_seconds <= 0:

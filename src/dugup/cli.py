@@ -88,6 +88,13 @@ def progress_text(p: Progress) -> str:
         return f"[scan] looking through {p.root}"
     if p.phase == "record":
         return f"[scan] recording changes: {p.done:,} of {p.total:,}"
+    if p.phase == "download":
+        left = p.remaining_seconds
+        left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
+        return (f"[download] {p.root}: {p.done / 1048576:,.1f} of {p.total / 1048576:,.1f} MB ({p.percent:.0f}%)  "
+                f"{p.rate / 1048576:.1f} MB/s  {left_text}")
+    if p.phase == "unpack":
+        return f"[download] unpacking {p.root}"
     if p.phase == "measure":
         return f"[ocr] looking at the size of the pictures: {p.done:,} of {p.total:,}"
     left = p.remaining_seconds
@@ -199,6 +206,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="stop indexing and OCR when the index is larger than this many megabytes (0: no limit)")
 
     sub.add_parser("window", parents=[common], help="open the search window")
+
+    models_parser = sub.add_parser("models", help="the optional language model for plain-words search")
+    models_sub = models_parser.add_subparsers(dest="models_command", required=True)
+    models_sub.add_parser("status", parents=[common], help="what is installed, and what an install would download")
+    install = models_sub.add_parser("install", parents=[common],
+                                    help="download the model and its runtime (Ctrl+C stops; run again to continue)")
+    install.add_argument("--yes", action="store_true", help="go ahead; without this the plan is shown and nothing is downloaded")
+    models_sub.add_parser("remove", parents=[common], help="delete the downloaded model and runtime")
 
     search = sub.add_parser("search", parents=[common], help="find files by the words in them or in their names")
     search.add_argument("words", nargs="+")
@@ -809,6 +824,64 @@ def cmd_space(args, env, out, environ) -> int:
     return 0
 
 
+def cmd_models(args, env, out, environ, stop: Optional[threading.Event] = None, install_signals: bool = True) -> int:
+    service = _service(args, environ, out, create=args.models_command == "install" and args.yes)
+    if service is None:
+        return 1
+    with service:
+        installed = service.models_installed()
+        if args.models_command == "remove":
+            freed = service.remove_models()
+            safe_write(f"Removed. {megabytes(freed)} given back." if freed else "Nothing was installed.", out)
+            return 0
+        plan = service.models_plan()
+        if args.models_command == "status":
+            if installed:
+                safe_write(f"Installed: runtime {installed.get('runtime')}, model {installed.get('model')}", out)
+                safe_write(f"  in {service.models_folder}", out)
+            else:
+                safe_write("Plain-words search is not installed.", out)
+            if service.settings.intent_url or service.settings.intent_server:
+                safe_write("config.toml names its own model server, which is used instead of an installed one.", out)
+            if not installed:
+                safe_write(plan.detail if isinstance(plan, Failure) else plan.describe(), out)
+                if not isinstance(plan, Failure):
+                    safe_write("To install: dugup models install --yes", out)
+            return 0
+        if isinstance(plan, Failure):
+            return _fail(plan, out)
+        safe_write(plan.describe(), out)
+        if not args.yes:
+            safe_write("Nothing was downloaded. To go ahead: dugup models install --yes", out)
+            return 1
+        stop = stop or threading.Event()
+        printer = ProgressPrinter(out)
+        previous = None
+
+        def on_interrupt(signum, frame):
+            if stop.is_set():
+                raise KeyboardInterrupt
+            stop.set()
+            printer.finish()
+            safe_write("Stopping. What was downloaded is kept. Press Ctrl+C again to stop at once.", out)
+
+        if install_signals and threading.current_thread() is threading.main_thread():
+            previous = signal.signal(signal.SIGINT, on_interrupt)
+        try:
+            result = service.install_models(stop, printer)
+        finally:
+            if previous is not None:
+                signal.signal(signal.SIGINT, previous)
+        printer.finish()
+        if isinstance(result, Failure):
+            if result.reason.value == "stopped":
+                safe_write("[Interrupted] Stopped. Run `dugup models install --yes` again to continue.", out)
+                return 130
+            return _fail(result, out)
+        safe_write("Installed. The window now has an \"In plain words\" box: dugup window", out)
+        return 0
+
+
 def cmd_window(args, env, out, environ) -> int:
     try:
         import tkinter
@@ -837,7 +910,7 @@ def cmd_window(args, env, out, environ) -> int:
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window}
+            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

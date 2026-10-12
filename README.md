@@ -66,25 +66,22 @@ ones become the second and third sort keys. Double-click a result to open it; th
 open it for editing, show it in its folder, or copy its path. The Index tab adds folders, brings the index
 up to date and reads pictures and scans, with progress and a Stop button.
 
-### Optional: search in plain words
+### Search in plain words
 
-With a small language model set up, the window gains an "In plain words" box. Type a sentence such as
-"PDFs about nursing from last month over 1 MB" and it fills in the search form for you to check; nothing
-is searched until you press Enter. The model only reads your sentence. It never sees your files, and it
-must run on this machine unless you say otherwise.
+The window's "In plain words" box turns a sentence into the search form. Type "PDFs about nursing from
+last month over 1 MB" and it fills in the words, the type, the dates and the size for you to check; nothing
+is searched until you press Enter. It understands kinds of file, sizes, times (yesterday, last week, in
+March, since 2026-01-15, in 2024), "in the file name", "on a sign" or "in a picture", "the exact word",
+quoted phrases, and the names of your indexed folders. English only.
 
-Two ways to set it up, in `config.toml` in the data folder:
+This is done by rules built into the program: nothing to install, and the same answer every time.
 
-    # let DugUp start llama.cpp's server itself (and end it when the window closes)
-    intent_server = 'C:\Tools\llama\llama-server.exe'
-    intent_model_file = 'C:\Models\a-small-function-calling-model.gguf'
-
-    # or point at a server that is already running, for example LM Studio
-    intent_url = "http://127.0.0.1:1234"
-    intent_model = "the-model-name-as-the-server-lists-it"
-
-A small model does not need a GPU (`intent_gpu_layers = 0` is the default). Without either setting the
-box is not shown and nothing else changes.
+Experimental: a small language model can read the sentence instead. `dugup models install` shows what
+would be downloaded (a model server and a model file, about 300 MB, each checked against a known
+checksum) and `dugup models install --yes` fetches them; that download is the only time DugUp uses the
+internet. Set `intent_reader = "model"` in `config.toml` to use it. On the smallest model, tried without
+any training for this job, the rules were clearly more reliable, so the rules are the default.
+`intent_url` points at a model server you run yourself (LM Studio, for example) instead.
 
 The command line:
 
@@ -133,7 +130,8 @@ folder; see `src/dugup/settings.py` for the names and defaults. The ones most li
 | `launcher.py` | The one place outside programs and workers are started; ends a program with everything it started. |
 | `sandbox.py`, `worker.py`, `jobs.py` | The Sandbox: risky work in a worker process with limits, and what crosses the boundary. |
 | `ocr.py`, `ocrqueue.py` | The OcrBackend (the engine, in a worker) and the queue that decides what is read first. |
-| `intent.py` | Optional: a sentence to a filled-in search form, through a small language model. |
+| `plainwords.py` | A sentence to a filled-in search form, by rules (the default). |
+| `intent.py`, `models.py` | Experimental: the same through a small language model, and fetching that model and its runtime. |
 | `suggest.py` | Suggestions for what to skip (a proposal for the user, never applied by itself). |
 | `settings.py`, `kinds.py`, `datadir.py`, `lockfile.py`, `doctor.py` | Settings, file kinds, the data folder, the run lock, the health report. |
 

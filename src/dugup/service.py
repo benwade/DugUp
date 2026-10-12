@@ -20,6 +20,7 @@ import time
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
 from . import doctor as doctor_module
+from . import models
 from .datadir import DataLayout, is_within
 from .dirscan import DirectoryScan
 from .extractors import default_extractors
@@ -162,9 +163,43 @@ class LocalService:
         """The plain-words reader, or None when it is not set up. Made on first use; making it starts nothing."""
         if self._intent is None and not self._intent_looked:
             from .intent import from_settings
-            self._intent = from_settings(self.settings)
+            self._intent = from_settings(self.settings, models.read_record(self.models_folder))
             self._intent_looked = True
         return self._intent
+
+    # -- the optional model and its runtime
+
+    @property
+    def models_folder(self):
+        return self.layout.models / "intent"
+
+    def models_plan(self) -> "models.Plan | Failure":
+        """What setting up plain-words search would download on this machine."""
+        return models.plan_for(self.models_folder)
+
+    def models_installed(self) -> Optional[Mapping[str, str]]:
+        return models.read_record(self.models_folder)
+
+    def install_models(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
+                       opener=None, plan=None) -> "Mapping[str, str] | Failure":
+        """Download and set up the runtime and the model (the only thing in the program that uses the internet).
+        Call it only when the person has asked for it, having seen models_plan().describe()."""
+        more = {} if opener is None else {"opener": opener}
+        result = models.install(self.models_folder, progress, stop, plan=plan, free_bytes=self.layout.free_bytes,
+                                keep_free=self.settings.min_free_mb * 1024 * 1024, **more)
+        if not isinstance(result, Failure):
+            self._forget_intent()
+        return result
+
+    def remove_models(self) -> int:
+        """End a running model server and delete what install_models put in place. Returns the bytes given back."""
+        self._forget_intent()
+        return models.remove(self.models_folder)
+
+    def _forget_intent(self) -> None:
+        if self._intent is not None:
+            self._intent.close()
+        self._intent, self._intent_looked = None, False
 
     def understand(self, text: str):
         """A sentence as search-form fields (intent.Understood), or a Failure saying why not.
