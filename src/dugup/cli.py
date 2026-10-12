@@ -747,9 +747,13 @@ def cmd_ocr(args, env, out, environ, stop: Optional[threading.Event] = None, ins
                 safe_write("--again needs --folder: say which folder to read afresh", out)
                 return 1
             if args.fast or args.readers:
-                if args.readers:
-                    service.settings = replace(service.settings, ocr_fast_readers=max(1, args.readers))
-                safe_write(f"Fast: {service.fast_readers()} reader(s) side by side. The computer will be busier until this ends.", out)
+                on_card = service.settings.ocr_gpu if args.gpu is None else bool(args.gpu)
+                if args.readers:        # the number asked for applies to whichever kind of reader this run uses
+                    service.settings = replace(service.settings, ocr_fast_readers=max(1, args.readers),
+                                               ocr_gpu_readers=max(1, args.readers))
+                count = service.settings.ocr_gpu_readers if on_card else service.fast_readers()
+                safe_write(f"Fast: {count} reader(s) side by side" + (", sharing the graphics card" if on_card else "")
+                           + ". The computer will be busier until this ends.", out)
             report = service.run_ocr(stop, printer, roots, budget, args.retry_failed, args.reread_old,
                                      folder=args.folder, fast=bool(args.fast or args.readers), again=args.again,
                                      gpu=args.gpu)

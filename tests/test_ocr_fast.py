@@ -215,6 +215,9 @@ def test_fast_on_the_card_uses_a_few_readers_and_the_setting_turns_it_on(sh):
     sh.device = "graphics card (CUDA)"
     code, text = sh.run("ocr", "--fast")
     assert code == 0 and sh.asked_gpu is True and len(sh.extra) == 3, "the setting asks for the card; fast uses ocr_gpu_readers"
+    assert "Fast: 3 reader(s) side by side, sharing the graphics card" in text, "the count said is the count used"
+    code, text = sh.run("ocr", "--folder", str(sh.docs), "--again", "--readers", "5")
+    assert "Fast: 5 reader(s) side by side, sharing the graphics card" in text and len(sh.extra) == 5
     assert "Read on the graphics card (CUDA)." in text
     code, text = sh.run("ocr", "--folder", str(sh.docs), "--again", "--no-gpu")
     assert code == 0 and "graphics card" not in text, "--no-gpu wins over the setting"
