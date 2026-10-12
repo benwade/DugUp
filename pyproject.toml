@@ -11,6 +11,9 @@ ocr = ["rapidocr", "onnxruntime", "pillow"]
 [project.scripts]
 dugup = "dugup.cli:main"
 
+[project.gui-scripts]
+dugup-window = "dugup.window:main"
+
 [build-system]
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"

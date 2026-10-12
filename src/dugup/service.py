@@ -32,7 +32,9 @@ from .filesource import matches_rules
 from .protocols import Extractor, FileSource, ScanRules, StopSignal, Store
 from .sandbox import SubprocessSandbox
 from .settings import Settings
-from .shapes import (POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
+from dataclasses import replace
+
+from .shapes import (SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
                      Passage, Root, SearchPage)
 from .store import SqliteStore
 from .suggest import Suggestion, suggest_excludes
@@ -137,10 +139,12 @@ class LocalService:
 
     # -- search
 
-    def search(self, query: str, limit: int = 100, offset: int = 0, sort: str = "rank",
-               descending: bool = False) -> "SearchPage | Failure":
+    def search(self, query: str, limit: int = 100, offset: int = 0, sort="rank",
+               descending: bool = False, filters: Optional[SearchFilters] = None) -> "SearchPage | Failure":
+        if filters is not None and filters.folder is not None and filters.case_insensitive is None:
+            filters = replace(filters, case_insensitive=self.case_insensitive)
         try:
-            page = self.store.search_words(query, limit, offset, sort, descending)
+            page = self.store.search_words(query, limit, offset, sort, descending, filters)
         except ValueError as exc:
             return Failure(FailureReason.UNSUPPORTED, str(exc))
         away = [r.path for r in self.store.list_roots() if not r.reachable]
@@ -148,6 +152,10 @@ class LocalService:
             for row in page.rows:
                 row.unavailable = any(_under(row.path, folder, self._fold) for folder in away)
         return page
+
+    def more_evidence(self, file_id: int, query: str, filters: Optional[SearchFilters] = None) -> Sequence[Evidence]:
+        """Every place in one file where the words were found, in reading order."""
+        return list(self.store.file_evidence(file_id, query, filters))
 
     def get_evidence(self, evidence: Evidence, context: int = 80) -> "Passage | Failure":
         passage = self.store.get_passage(evidence, context)

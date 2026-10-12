@@ -19,7 +19,8 @@ from enum import Enum
 from pathlib import Path
 from typing import (Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable)
 
-from .shapes import (Box, Evidence, Failure, FileKind, FileRecord, FileState, Passage, Root, SearchPage, SegmentIn)
+from .shapes import (Box, Evidence, Failure, FileKind, FileRecord, FileState, Passage, Root, SearchFilters, SearchPage,
+                     SegmentIn)
 
 
 @runtime_checkable
@@ -298,7 +299,14 @@ class Store(Protocol):
         """How many files are in each state. Missing files are counted under "missing", not their old state."""
 
     def search_words(self, query: str, limit: int = 100, offset: int = 0,
-                     sort: str = "rank", descending: bool = False) -> SearchPage: ...
+                     sort="rank", descending: bool = False, filters: Optional[SearchFilters] = None) -> SearchPage:
+        """`sort` is one key (with `descending`), or up to three (key, descending) pairs applied in order.
+        Filtering and sorting happen before the page is cut, so the total and the order are honest."""
+
+    def file_evidence(self, file_id: int, query: str, filters: Optional[SearchFilters] = None,
+                      limit: int = 2000) -> Sequence[Evidence]:
+        """Every place in one file where the words were found, in reading order (by page, then position;
+        a match in the file name last). A search row carries only the best few; this is the rest."""
 
     def get_passage(self, evidence: Evidence, context: int = 80) -> Optional[Passage]:
         """The text around a piece of Evidence, or None when that segment no longer exists."""
@@ -381,8 +389,8 @@ class Annotator(Protocol):
 
 @runtime_checkable
 class Service(Protocol):
-    def search(self, query: str, limit: int = 100, offset: int = 0, sort: str = "rank",
-               descending: bool = False) -> "SearchPage | Failure": ...
+    def search(self, query: str, limit: int = 100, offset: int = 0, sort="rank",
+               descending: bool = False, filters: Optional[SearchFilters] = None) -> "SearchPage | Failure": ...
 
     def get_evidence(self, evidence: Evidence, context: int = 80) -> "Passage | Failure": ...
 

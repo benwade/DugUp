@@ -7,7 +7,8 @@ DugUp was inspired by the macOS app [DigUp](https://github.com/ARahim3/DigUp) bu
 written from scratch in Python; it shares no code with it.
 
 Status: early. Words in files, and words in pictures and scanned pages (OCR), work and are tested on
-Windows 11 and Linux. Search by meaning, photo search and a window are planned and not built yet.
+Windows 11 and Linux, from a search window or the command line. Search by meaning and photo search are
+planned and not built yet.
 
 ## What works today
 
@@ -52,6 +53,18 @@ It reads printed words well. Drawn or handwritten lettering and blurred photos a
 
 ## Use
 
+The window:
+
+    dugup window        (or: dugup-window, which opens without a console)
+
+Type words and press Enter. Narrow by folder, by where the words are (text, file name, text read by OCR),
+by kind of file, by date and by size. Click a column header to sort; click up to three and the earlier
+ones become the second and third sort keys. Double-click a result to open it; the buttons under the list
+open it for editing, show it in its folder, or copy its path. The Index tab adds folders, brings the index
+up to date and reads pictures and scans, with progress and a Stop button.
+
+The command line:
+
     dugup doctor
     dugup roots add "D:\Some Folder"
     dugup roots suggest "D:\Some Folder"              (what may not be worth indexing; changes nothing)
@@ -93,6 +106,7 @@ folder; see `src/dugup/settings.py` for the names and defaults. The ones most li
 | `indexer.py` | Scan, record changes, read what is waiting. Talks only to the three contracts above. |
 | `service.py` | LocalService: what every client talks to. Policy and the single writer live here. |
 | `cli.py` | The command line, a client of the service. |
+| `window.py`, `desktop.py` | The search window (tkinter), another client of the service, and handing a file to the desktop. |
 | `launcher.py` | The one place outside programs and workers are started; ends a program with everything it started. |
 | `sandbox.py`, `worker.py`, `jobs.py` | The Sandbox: risky work in a worker process with limits, and what crosses the boundary. |
 | `ocr.py`, `ocrqueue.py` | The OcrBackend (the engine, in a worker) and the queue that decides what is read first. |

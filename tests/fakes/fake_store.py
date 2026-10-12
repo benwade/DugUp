@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import os
 
 from dugup.protocols import OCR_DONE, OCR_FAILED, OCR_WAITING, OcrTask, PageInfo
-from dugup.shapes import (Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SegmentIn, SegmentKind)
+from dugup.shapes import (sort_keys, Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SegmentIn, SegmentKind)
 from dugup.store import SORT_COLUMNS, SearchPage, SearchRow, StoreError
 
 FakeSearchRow = SearchRow   # the real row carries evidence now; the old name is kept for the broken variants
@@ -441,15 +441,45 @@ class FakeStore:
         name_t, body_t = tokens(name), tokens(body)
         return all(_contains(name_t, t) or _contains(body_t, t) for t in terms)
 
-    def _hits(self, query: str):
+    def _file_passes(self, rec: FileRecord, filters) -> bool:
+        if filters is None:
+            return True
+        if filters.folder is not None and not self._under(rec.path, filters.folder.rstrip("/\\"),
+                                                          self._fold(filters.case_insensitive)):
+            return False
+        if filters.kinds and rec.kind.value not in filters.kinds:
+            return False
+        if filters.modified_after is not None and rec.modified < filters.modified_after:
+            return False
+        if filters.modified_before is not None and rec.modified >= filters.modified_before:
+            return False
+        if filters.min_size is not None and rec.size < filters.min_size:
+            return False
+        return not (filters.max_size is not None and rec.size > filters.max_size)
+
+    def _where_passes(self, where: str, index: int, kind, name: str, body: str, terms) -> bool:
+        """Whether a row counts for the place the words are asked for (the name row is index 0)."""
+        if where == "anywhere":
+            return self._row_matches(name, body, terms)
+        if where == "name":
+            return index == 0 and self._row_matches(name, "", terms)
+        if index == 0 or (where == "ocr" and kind is not SegmentKind.OCR):
+            return False
+        return self._row_matches("", body, terms)
+
+    def _hits(self, query: str, filters=None):
         terms = self._terms(query)
         if not terms:
             return {}
+        where = "anywhere" if filters is None else filters.where
         found: Dict[int, List[tuple]] = {}
         for row_id in self.files:
+            if not self._file_passes(self.files[row_id], filters):
+                continue
             handles = self._segment_handles(row_id)
+            kinds = [None] + [seg.kind for seg in self.segments[row_id]]
             for index, (name, body, page) in enumerate(self._rows_of(row_id)):
-                if self._row_matches(name, body, terms):
+                if self._where_passes(where, index, kinds[index] if index < len(kinds) else None, name, body, terms):
                     handle = handles[index] if index < len(handles) else None
                     in_body = any(_contains(tokens(body), t) for t in terms)
                     # a piece of text that matched only through the file name counts as a match,
@@ -458,19 +488,29 @@ class FakeStore:
                     found.setdefault(row_id, []).append((page, span, handle))
         return found
 
+    def file_evidence(self, file_id, query, filters=None, limit=2000):
+        from dugup.shapes import SearchFilters
+        place = None if filters is None else SearchFilters(where=filters.where)    # only the place applies to one file
+        hits = self._hits(query, place).get(file_id, [])
+        ordered = self._in_reading_order([h for h in hits if h[1] is not None])
+        return [Evidence(file_id, page, span[0], span[1], self._line_box(handle, span[0]), handle)
+                for page, span, handle in ordered][:max(limit, 0)]
+
+    def _in_reading_order(self, hits):
+        return sorted(hits, key=lambda h: (h[2] is not None and h[2] < 0, h[0], h[2] or 0))
+
     def _sort_key(self, sort: str, row: SearchRow):
         return {
             "name": _ascii_lower(row.name), "folder": _ascii_lower(row.folder), "size": row.size,
             "modified": row.modified, "kind": row.kind, "matches": row.matches, "rank": row.rank,
         }[sort]
 
-    def search_words(self, query: str, limit: int = 100, offset: int = 0, sort: str = "rank",
-                     descending: bool = False) -> SearchPage:
-        if sort not in SORT_COLUMNS:
-            raise ValueError(f"cannot sort by {sort!r}; choose one of {sorted(SORT_COLUMNS)}")
+    def search_words(self, query: str, limit: int = 100, offset: int = 0, sort="rank",
+                     descending: bool = False, filters=None) -> SearchPage:
+        keys = self._keys(sort, descending)
         if limit < 0 or offset < 0:
             raise ValueError("limit and offset must not be negative")
-        found = self._hits(query)
+        found = self._hits(query, filters)
         rows = []
         for row_id, hits in found.items():
             rec = self.files[row_id]
@@ -483,7 +523,19 @@ class FakeStore:
                 evidence = (Evidence(row_id, hits[0][0], 0, 0, None, hits[0][2]),)
             rows.append(FakeSearchRow(row_id, rec.path, name, folder, rec.size, rec.modified, rec.kind.value,
                                       rec.state.value, len(hits), -float(len(hits)), evidence, rec.missing_since))
-        return self._page(rows, sort, descending, limit, offset)
+        if len(keys) == 1:
+            return self._page(rows, keys[0][0], keys[0][1], limit, offset)
+        return self._page_by(rows, keys, limit, offset)
+
+    def _keys(self, sort, descending):
+        return sort_keys(sort, descending, SORT_COLUMNS)
+
+    def _page_by(self, rows, keys, limit, offset) -> SearchPage:
+        """Several keys: sort by the last first, each sort stable, with the row id as the final tie-break."""
+        rows.sort(key=lambda r: r.file_id)
+        for key, down in reversed(keys):
+            rows.sort(key=lambda r: self._sort_key(key, r), reverse=down)   # stable, in either direction
+        return SearchPage(rows[offset:offset + limit], len(rows), offset, limit)
 
     def _page(self, rows, sort, descending, limit, offset) -> SearchPage:
         rows.sort(key=lambda r: r.file_id)
@@ -633,8 +685,11 @@ class SilentUnknownIds(FakeStore):
 
 
 class AcceptsAnySortKey(FakeStore):
-    def search_words(self, query, limit=100, offset=0, sort="rank", descending=False):
-        return super().search_words(query, limit, offset, sort if sort in SORT_COLUMNS else "rank", descending)
+    def search_words(self, query, limit=100, offset=0, sort="rank", descending=False, filters=None):
+        if not isinstance(sort, str):
+            sort = [(k, d) for k, d in sort if k in SORT_COLUMNS] or "rank"
+        return super().search_words(query, limit, offset, sort if not isinstance(sort, str) or sort in SORT_COLUMNS else "rank",
+                                    descending, filters)
 
 
 class FingerprintHidesMissingKeys(FakeStore):
@@ -744,6 +799,40 @@ class PagesAppend(FakeStore):
         self.pages[row_id] = self.pages.get(row_id, []) + list(pages)
 
 
+class FileEvidenceStopsAtThree(FakeStore):
+    def file_evidence(self, file_id, query, filters=None, limit=2000):
+        return super().file_evidence(file_id, query, filters, min(limit, 3))
+
+
+class FileEvidenceOutOfOrder(FakeStore):
+    def _in_reading_order(self, hits):
+        return list(reversed(super()._in_reading_order(hits)))
+
+
+class IgnoresSecondSortKey(FakeStore):
+    def _keys(self, sort, descending):
+        return super()._keys(sort, descending)[:1]
+
+
+class FiltersAfterTruncating(FakeStore):
+    def search_words(self, query, limit=100, offset=0, sort="rank", descending=False, filters=None):
+        page = super().search_words(query, limit, offset, sort, descending, None)
+        rows = [r for r in page.rows if self._file_passes(self.files[r.file_id], filters)]
+        return SearchPage(rows, page.total, offset, limit)
+
+
+class WhereIsIgnored(FakeStore):
+    def _where_passes(self, where, index, kind, name, body, terms):
+        return super()._where_passes("anywhere", index, kind, name, body, terms)
+
+
+class SizeLimitsAreExclusive(FakeStore):
+    def _file_passes(self, rec, filters):
+        if filters is not None and (rec.size == filters.min_size or rec.size == filters.max_size):
+            return False
+        return super()._file_passes(rec, filters)
+
+
 class OcrTextNotSearchable(FakeStore):
     def save_ocr(self, row_id, page, result):
         self._mark_read(row_id, page, self._page_index(row_id, page))
@@ -824,8 +913,8 @@ class PassageSurvivesReplace(FakeStore):
 class EvidenceOnEveryMatchingRow(FakeStore):
     """Points at every piece of text of a file whose name matched, although the words are not in that text."""
 
-    def _hits(self, query):
-        found = super()._hits(query)
+    def _hits(self, query, filters=None):
+        found = super()._hits(query, filters)
         return {row: [(page, span or (0, 0), handle) for page, span, handle in hits] for row, hits in found.items()}
 
 

@@ -51,6 +51,14 @@ BROKEN = [
     (fs.RereadKeepsOcrOfPagesThatNoLongerNeedIt, "replace_text_keeps_what_ocr_read"),
     (fs.DeferredPagesLeaveTheQueue, "a_deferred_page_stays_queued_and_is_marked"),
     (fs.RequeueIgnoresTheEngine, "pages_read_by_another_engine_can_be_requeued"),
+    (fs.IgnoresSecondSortKey, "sorting_by_several_keys"),
+    (fs.AcceptsAnySortKey, "sorting_by_several_keys"),
+    (fs.FiltersAfterTruncating, "filters_narrow_the_search"),
+    (fs.PurgesWithoutBoundary, "filters_narrow_the_search"),
+    (fs.SizeLimitsAreExclusive, "filters_narrow_the_search"),
+    (fs.WhereIsIgnored, "where_the_words_must_be"),
+    (fs.FileEvidenceStopsAtThree, "every_place_in_one_file_can_be_listed"),
+    (fs.FileEvidenceOutOfOrder, "every_place_in_one_file_can_be_listed"),
     (fs.SetRootForgetsStatus, "roots_round_trip_and_keep_their_status"),
 ]
 

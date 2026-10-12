@@ -82,6 +82,27 @@ def shorten(text: str, width: int) -> str:
     return text if len(text) <= width else text[: max(0, width - 3)] + "..."
 
 
+def progress_text(p: Progress) -> str:
+    """One line that says where a run is: phase, counts, percent, rate, time left, current file."""
+    if p.phase == "scan":
+        return f"[scan] looking through {p.root}"
+    if p.phase == "record":
+        return f"[scan] recording changes: {p.done:,} of {p.total:,}"
+    if p.phase == "measure":
+        return f"[ocr] looking at the size of the pictures: {p.done:,} of {p.total:,}"
+    left = p.remaining_seconds
+    left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
+    if p.phase == "ocr":
+        line = (f"[ocr] {p.done:,} of {p.total:,} page(s) ({p.percent:.1f}%)  {p.rate * 60:.1f} pages/min  "
+                f"{left_text}  failed {p.failed:,}")
+    else:
+        line = (f"[read] {p.done:,} of {p.total:,} ({p.percent:.1f}%)  {p.rate:.1f} files/s  "
+                f"{left_text}  failed {p.failed:,}")
+    if p.current:
+        line += "  | " + shorten(os.path.basename(p.current), 40)
+    return line
+
+
 class ProgressPrinter:
     """Prints progress at most once a second: phase, counts, percent, rate, time left, current file."""
 
@@ -100,26 +121,7 @@ class ProgressPrinter:
         if not fresh and self._last_time is not None and now - self._last_time < self.interval:
             return
         self._last_time, self._last_phase = now, p.phase
-        if p.phase == "scan":
-            line = f"[scan] looking through {p.root}"
-        elif p.phase == "record":
-            line = f"[scan] recording changes: {p.done:,} of {p.total:,}"
-        elif p.phase == "measure":
-            line = f"[ocr] looking at the size of the pictures: {p.done:,} of {p.total:,}"
-        elif p.phase == "ocr":
-            left = p.remaining_seconds
-            left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
-            line = (f"[ocr] {p.done:,} of {p.total:,} page(s) ({p.percent:.1f}%)  {p.rate * 60:.1f} pages/min  "
-                    f"{left_text}  failed {p.failed:,}")
-            if p.current:
-                line += "  | " + shorten(os.path.basename(p.current), 40)
-        else:
-            left = p.remaining_seconds
-            left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
-            line = (f"[read] {p.done:,} of {p.total:,} ({p.percent:.1f}%)  {p.rate:.1f} files/s  "
-                    f"{left_text}  failed {p.failed:,}")
-            if p.current:
-                line += "  | " + shorten(os.path.basename(p.current), 40)
+        line = progress_text(p)
         if self.live:
             pad = " " * max(0, self._width - len(line))
             self._width = len(line)
@@ -195,6 +197,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="give back the disk space that removed and re-read text left in the index")
     space.add_argument("--limit", type=int, default=None, metavar="MB",
                        help="stop indexing and OCR when the index is larger than this many megabytes (0: no limit)")
+
+    sub.add_parser("window", parents=[common], help="open the search window")
 
     search = sub.add_parser("search", parents=[common], help="find files by the words in them or in their names")
     search.add_argument("words", nargs="+")
@@ -802,8 +806,31 @@ def cmd_space(args, env, out, environ) -> int:
     return 0
 
 
+def cmd_window(args, env, out, environ) -> int:
+    try:
+        import tkinter
+    except ImportError:
+        safe_write("The window needs tkinter, which this Python does not have. On Windows it comes with Python "
+                   "(tick 'tcl/tk' in the installer); on Linux install your system's python3-tk package.", out)
+        return 1
+    from .window import App
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError as exc:
+        safe_write(f"A window cannot be opened here ({exc}). The other commands work without one.", out)
+        return 1
+    try:
+        service = _service(args, environ, out, create=True)
+    except BaseException:
+        root.destroy()
+        raise
+    App(root, service)
+    root.mainloop()
+    return 0
+
+
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space}
+            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

@@ -12,7 +12,7 @@ import random
 
 import helpers
 from dugup.protocols import OCR_DONE, OCR_FAILED, OCR_WAITING, OcrLine, OcrResult, PageInfo, PageVerdict
-from dugup.shapes import Box, Evidence, FileKind, FileRecord, FileState, Root, SegmentIn, SegmentKind
+from dugup.shapes import SearchFilters, Box, Evidence, FileKind, FileRecord, FileState, Root, SegmentIn, SegmentKind
 from dugup.store import StoreError
 
 from .common import CheckFailed, require
@@ -504,6 +504,112 @@ def check_pages_round_trip_and_replace(s):
     require(list(s.get_pages(row)) == [], "purging a file must remove its page records")
 
 
+# ---- filters and several sort keys ------------------------------------------------------------------------
+
+def _library(s):
+    """Five files that all hold or are named "needle", differing in kind, size, date and folder."""
+    rows = {}
+    for path, kind, size, modified, text in (
+            ("/d/a.pdf", FileKind.PDF, 100, 10.0, "a needle in a document"),
+            ("/d/b.txt", FileKind.TEXT, 200, 20.0, "a needle in notes"),
+            ("/e/c.txt", FileKind.TEXT, 300, 30.0, "another needle"),
+            ("/d/needle.docx", FileKind.OFFICE, 400, 40.0, "nothing of the sort inside"),
+            ("/dd/photo.jpg", FileKind.IMAGE, 300, 20.0, "")):
+        rows[path] = add(s, path, text, size=size, modified=modified, kind=kind)
+    s.set_pages(rows["/dd/photo.jpg"], [PageInfo(1, PageVerdict.NO_LAYER, True)])
+    s.save_ocr(rows["/dd/photo.jpg"], 1, _read(("needle shop sign", (10, 10, 90, 20))))
+    return rows
+
+
+def _found(s, limit=100, sort="name", **filters):
+    return paths(s.search_words("needle", limit=limit, sort=sort, filters=SearchFilters(**filters)))
+
+
+def check_filters_narrow_the_search(s):
+    _library(s)
+    require(len(paths(s.search_words("needle"))) == 5, "without filters all five files match")
+    require(_found(s) == ["/d/a.pdf", "/d/b.txt", "/e/c.txt", "/d/needle.docx", "/dd/photo.jpg"], "an empty filter narrows nothing")
+    require(_found(s, kinds=("pdf",)) == ["/d/a.pdf"], "filter by one kind")
+    require(_found(s, kinds=("text", "image")) == ["/d/b.txt", "/e/c.txt", "/dd/photo.jpg"], "filter by several kinds")
+    require(_found(s, folder="/d", case_insensitive=False) == ["/d/a.pdf", "/d/b.txt", "/d/needle.docx"],
+            "a folder filter takes whole path parts: /d is not /dd")
+    require(_found(s, folder="/D", case_insensitive=True) == ["/d/a.pdf", "/d/b.txt", "/d/needle.docx"], "the case rule is the caller's")
+    require(_found(s, folder="/D", case_insensitive=False) == [], "and is respected")
+    require(_found(s, modified_after=20.0) == ["/d/b.txt", "/e/c.txt", "/d/needle.docx", "/dd/photo.jpg"], "after includes the moment itself")
+    require(_found(s, modified_before=20.0) == ["/d/a.pdf"], "before excludes the moment itself")
+    require(_found(s, modified_after=20.0, modified_before=30.0) == ["/d/b.txt", "/dd/photo.jpg"], "a date range")
+    require(_found(s, min_size=200, max_size=300) == ["/d/b.txt", "/e/c.txt", "/dd/photo.jpg"], "size limits include their ends")
+    require(_found(s, kinds=("text",), min_size=250) == ["/e/c.txt"], "filters combine")
+    page = s.search_words("needle", limit=1, sort="name", descending=True, filters=SearchFilters(kinds=("text", "image")))
+    require(page.total == 3 and page.truncated and paths(page) == ["/dd/photo.jpg"],
+            "filtering happens before the page is cut: the total and the first row are of the filtered set")
+    require(s.search_words("needle", filters=SearchFilters(kinds=("other",))).total == 0, "a filter nothing passes gives an empty page")
+
+
+def check_where_the_words_must_be(s):
+    rows = _library(s)
+    require(_found(s, where="name") == ["/d/needle.docx"], "name: only files whose NAME holds the words")
+    require(_found(s, where="text") == ["/d/a.pdf", "/d/b.txt", "/e/c.txt", "/dd/photo.jpg"], "text: typed text and OCR text, not names")
+    require(_found(s, where="ocr") == ["/dd/photo.jpg"], "ocr: only text read from pixels")
+    named = s.search_words("needle", filters=SearchFilters(where="name")).rows[0]
+    require(named.matches == 1, "a name match counts once, however many pieces of text the file has")
+    require(s.get_passage(named.evidence[0]).kind is SegmentKind.NAME, "its evidence points into the name")
+    read = s.search_words("sign", filters=SearchFilters(where="ocr")).rows[0]
+    require(read.file_id == rows["/dd/photo.jpg"] and s.get_passage(read.evidence[0]).kind is SegmentKind.OCR
+            and read.evidence[0].box == Box(10, 10, 90, 20), "OCR evidence keeps its kind and its box under the filter")
+    s.replace_segments(rows["/dd/photo.jpg"], [SegmentIn(1, 0, SegmentKind.TEXT, "a caption that also says sign")])
+    s.save_ocr(rows["/dd/photo.jpg"], 1, _read(("needle shop sign", (10, 10, 90, 20))))
+    both = s.search_words("sign", filters=SearchFilters(where="ocr")).rows[0]
+    require(both.matches == 1 and all(s.get_passage(e).kind is SegmentKind.OCR for e in both.evidence),
+            "under the OCR filter, typed text of the same file is neither counted nor pointed at")
+    require(s.search_words("sign").rows[0].matches == 2, "without the filter both places count")
+    require(s.search_words("inside needle", filters=SearchFilters(where="text")).total == 0,
+            "with a place given, every word must be found in that place")
+    require(s.search_words("inside needle").total == 1, "anywhere: words may be split between the name and the text")
+
+
+def check_sorting_by_several_keys(s):
+    _library(s)
+
+    def order(*keys):
+        return paths(s.search_words("needle", sort=list(keys)))
+
+    require(order(("kind", False), ("size", True)) == ["/dd/photo.jpg", "/d/needle.docx", "/d/a.pdf", "/e/c.txt", "/d/b.txt"],
+            "first key kind (image, office, pdf, text), then size downwards within a kind")
+    require(order(("size", True), ("modified", False), ("name", False)) ==
+            ["/d/needle.docx", "/dd/photo.jpg", "/e/c.txt", "/d/b.txt", "/d/a.pdf"], "three keys: equal sizes fall back to the date")
+    require(order(("size", True), ("modified", True)) == ["/d/needle.docx", "/e/c.txt", "/dd/photo.jpg", "/d/b.txt", "/d/a.pdf"],
+            "the second key has its own direction")
+    require(order(("size", False), ("size", True)) == order(("size", False)), "a key given twice counts once")
+    require(paths(s.search_words("needle", sort=[("kind", False)])) == paths(s.search_words("needle", sort="kind")),
+            "one pair is the same as one key")
+    page = s.search_words("needle", limit=2, offset=1, sort=[("kind", False), ("size", True)])
+    require(paths(page) == ["/d/needle.docx", "/d/a.pdf"] and page.total == 5, "several keys sort before the page is cut")
+    raises(ValueError, lambda: s.search_words("needle", sort=[("kind", False), ("colour", False)]), "an unknown second key")
+    raises(ValueError, lambda: s.search_words("needle", sort=[("kind", False), ("size", False), ("name", False), ("modified", False)]),
+           "more than three keys")
+    raises(ValueError, lambda: s.search_words("needle", sort=[]), "no key at all")
+
+
+def check_every_place_in_one_file_can_be_listed(s):
+    pages = [f"page {n} holds a needle" if n % 2 else f"page {n} holds nothing of interest" for n in range(1, 13)]
+    row = add(s, "/d/needle-book.pdf", pages=pages, kind=FileKind.PDF)
+    other = add(s, "/d/other.txt", "a needle elsewhere")
+    places = list(s.file_evidence(row, "needle"))
+    require([e.page for e in places] == [1, 3, 5, 7, 9, 11, 0],
+            "every place, in reading order by page, and the match in the file name last")
+    for e in places:
+        passage = s.get_passage(e, context=0)
+        require(passage is not None and passage.text.casefold() == "needle", "each place points at the word")
+    require([e.page for e in s.file_evidence(row, "needle", limit=2)] == [1, 3], "a limit takes the first places in reading order")
+    require([e.page for e in s.file_evidence(row, "needle", SearchFilters(where="name"))] == [0], "the place asked for is respected")
+    require([e.page for e in s.file_evidence(row, "needle", SearchFilters(where="text"))] == [1, 3, 5, 7, 9, 11], "text only: no name match")
+    require(list(s.file_evidence(row, "zebra")) == [] and list(s.file_evidence(row, "  ")) == [], "no match and no words give nothing")
+    require(list(s.file_evidence(424242, "needle")) == [], "an unknown file has no places")
+    require(all(e.file_id == other for e in s.file_evidence(other, "needle")) and len(list(s.file_evidence(other, "needle"))) == 1,
+            "only the file asked about")
+
+
 # ---- OCR -----------------------------------------------------------------------------------------------
 
 def _scan(s, path="/d/scan.pdf", kind=FileKind.PDF):
@@ -731,6 +837,10 @@ CHECKS = {
     "ocr_text_is_searchable_with_a_box": check_ocr_text_is_searchable_with_a_box,
     "ocr_blank_and_failed_pages_leave_the_queue": check_ocr_blank_and_failed_pages_leave_the_queue,
     "reread_clears_ocr": check_reread_clears_ocr,
+    "every_place_in_one_file_can_be_listed": check_every_place_in_one_file_can_be_listed,
+    "filters_narrow_the_search": check_filters_narrow_the_search,
+    "where_the_words_must_be": check_where_the_words_must_be,
+    "sorting_by_several_keys": check_sorting_by_several_keys,
     "compacting_changes_nothing_that_is_stored": check_compacting_changes_nothing_that_is_stored,
     "a_deferred_page_stays_queued_and_is_marked": check_a_deferred_page_stays_queued_and_is_marked,
     "replace_text_keeps_what_ocr_read": check_replace_text_keeps_what_ocr_read,

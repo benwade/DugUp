@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .protocols import OCR_DONE, OCR_FAILED, OCR_WAITING, OcrResult, OcrTask, PageInfo, PageVerdict
-from .shapes import (Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SearchPage, SearchRow, SegmentIn,
+from .shapes import (WHERE_ANYWHERE, WHERE_NAME, WHERE_OCR, WHERE_TEXT, SearchFilters, sort_keys, Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SearchPage, SearchRow, SegmentIn,
                      SegmentKind)
 
 __all__ = ["SqliteStore", "StoreError", "StoreVersionError", "SearchPage", "SearchRow", "SORT_COLUMNS",
@@ -750,39 +750,68 @@ class SqliteStore:
     # then highlight() fails with "unable to use function in the requested context". For the same reason
     # scores come from the `rank` column, never from bm25() (which also fails inside GROUP BY on 3.37).
 
+    @staticmethod
+    def _narrow(match: str, filters: Optional[SearchFilters]) -> Tuple[str, str, str, List[object]]:
+        """(the match text, a clause on the segment, a clause on the file, the file clause's values)."""
+        if filters is None:
+            return match, "", "", []
+        seg = ""
+        if filters.where == WHERE_NAME:
+            match, seg = f"name : ({match})", " AND s.kind = 'name'"
+        elif filters.where == WHERE_TEXT:
+            match = f"body : ({match})"
+        elif filters.where == WHERE_OCR:
+            match, seg = f"body : ({match})", " AND s.kind = 'ocr'"
+        clauses: List[str] = []
+        args: List[object] = []
+        if filters.folder is not None:
+            clause, more = _under_clause(filters.folder, filters.case_insensitive, "f.path")
+            clauses.append(clause)
+            args.extend(more)
+        if filters.kinds:
+            clauses.append(f"f.kind IN ({','.join('?' * len(filters.kinds))})")
+            args.extend(filters.kinds)
+        for column, sign, value in (("f.modified", ">=", filters.modified_after), ("f.modified", "<", filters.modified_before),
+                                    ("f.size", ">=", filters.min_size), ("f.size", "<=", filters.max_size)):
+            if value is not None:
+                clauses.append(f"{column} {sign} ?")
+                args.append(value)
+        return match, seg, "".join(f" AND {c}" for c in clauses), args
+
     def search_words(self, query: str, limit: int = 100, offset: int = 0,
-                     sort: str = "rank", descending: bool = False) -> SearchPage:
-        if sort not in SORT_COLUMNS:
-            raise ValueError(f"cannot sort by {sort!r}; choose one of {sorted(SORT_COLUMNS)}")
+                     sort="rank", descending: bool = False, filters: Optional[SearchFilters] = None) -> SearchPage:
+        keys = sort_keys(sort, descending, SORT_COLUMNS)
         if limit < 0 or offset < 0:
             raise ValueError("limit and offset must not be negative")
         match = build_match(query)
         if match is None:
             return SearchPage([], 0, offset, limit)
+        match, seg_clause, file_clause, file_args = self._narrow(match, filters)
         total = self.conn.execute(
-            "SELECT COUNT(DISTINCT s.file_id) FROM fts CROSS JOIN segments s ON s.id = fts.rowid WHERE fts MATCH ?",
-            (match,),
+            "SELECT COUNT(DISTINCT s.file_id) FROM fts CROSS JOIN segments s ON s.id = fts.rowid "
+            f"CROSS JOIN files f ON f.id = s.file_id WHERE fts MATCH ?{seg_clause}{file_clause}",
+            [match] + file_args,
         ).fetchone()[0]
-        direction = "DESC" if descending else "ASC"
+        order = ", ".join(f"{SORT_COLUMNS[key]} {'DESC' if down else 'ASC'}" for key, down in keys)
         # The score is read from FTS5's `rank` column (bm25 by default). Unlike the bm25() function it is an
         # ordinary column value, so it can be grouped and sorted on every SQLite version.
         sql = (
             "SELECT f.id, f.path, f.path_raw, f.name, f.folder, f.size, f.modified, f.kind, f.state, "
             "f.missing_since, COUNT(*) AS matches, MIN(fts.rank) AS rank "
             "FROM fts CROSS JOIN segments s ON s.id = fts.rowid CROSS JOIN files f ON f.id = s.file_id "
-            "WHERE fts MATCH ? GROUP BY f.id "
-            f"ORDER BY {SORT_COLUMNS[sort]} {direction}, f.id ASC LIMIT ? OFFSET ?"
+            f"WHERE fts MATCH ?{seg_clause}{file_clause} GROUP BY f.id "
+            f"ORDER BY {order}, f.id ASC LIMIT ? OFFSET ?"
         )
         rows = [
             SearchRow(r["id"], decode_path(r["path"], r["path_raw"]), r["name"], r["folder"], r["size"],
                       r["modified"], r["kind"], r["state"], r["matches"], r["rank"],
                       missing_since=r["missing_since"])
-            for r in self.conn.execute(sql, (match, limit, offset))
+            for r in self.conn.execute(sql, [match] + file_args + [limit, offset])
         ]
-        self._attach_evidence(rows, match)
+        self._attach_evidence(rows, match, seg_clause)
         return SearchPage(rows, total, offset, limit)
 
-    def _attach_evidence(self, rows: List[SearchRow], match: str) -> None:
+    def _attach_evidence(self, rows: List[SearchRow], match: str, seg_clause: str = "") -> None:
         """Give each row the places its words were found: text first, then the file name, best first."""
         found: Dict[int, List[Tuple[int, float, Evidence]]] = {}
         ids = [r.file_id for r in rows]
@@ -791,7 +820,7 @@ class SqliteStore:
             marks = ",".join("?" * len(chunk))
             sql = ("SELECT s.id, s.file_id, s.page, s.kind, fts.rank AS score, "
                    "highlight(fts, 0, char(2), char(3)) AS in_name, highlight(fts, 1, char(2), char(3)) AS in_body "
-                   f"FROM fts CROSS JOIN segments s ON s.id = fts.rowid WHERE fts MATCH ? AND s.file_id IN ({marks})")
+                   f"FROM fts CROSS JOIN segments s ON s.id = fts.rowid WHERE fts MATCH ?{seg_clause} AND s.file_id IN ({marks})")
             for r in self.conn.execute(sql, [match] + chunk):
                 is_name = r["kind"] == SegmentKind.NAME.value
                 span = _first_span(r["in_name"] if is_name else r["in_body"])
@@ -805,6 +834,28 @@ class SqliteStore:
             if not hits:   # the words are spread over the name and the text: point at the best text
                 hits = self._fallback_evidence(row.file_id, match)
             row.evidence = tuple(h[2] for h in hits[:EVIDENCE_PER_ROW])
+
+    def file_evidence(self, file_id: int, query: str, filters: Optional[SearchFilters] = None,
+                      limit: int = 2000) -> List[Evidence]:
+        match = build_match(query)
+        if match is None or limit <= 0:
+            return []
+        match, seg_clause, _, _ = self._narrow(match, filters)
+        sql = ("SELECT s.id, s.page, s.kind, highlight(fts, 0, char(2), char(3)) AS in_name, "
+               "highlight(fts, 1, char(2), char(3)) AS in_body "
+               f"FROM fts CROSS JOIN segments s ON s.id = fts.rowid WHERE fts MATCH ?{seg_clause} AND s.file_id = ? "
+               "ORDER BY (s.kind = 'name'), s.page, s.ord, s.id")
+        found: List[Evidence] = []
+        for r in self.conn.execute(sql, (match, file_id)):
+            is_name = r["kind"] == SegmentKind.NAME.value
+            span = _first_span(r["in_name"] if is_name else r["in_body"])
+            if span is None:
+                continue      # a piece of text that matched only through the file name
+            box = self._line_box(r["id"], span[0]) if r["kind"] == SegmentKind.OCR.value else None
+            found.append(Evidence(file_id, r["page"], span[0], span[1], box, r["id"]))
+            if len(found) >= limit:
+                break
+        return found
 
     def _fallback_evidence(self, file_id: int, match: str) -> List[Tuple[int, float, Evidence]]:
         sql = ("SELECT s.id, s.page, s.kind, s.text FROM fts CROSS JOIN segments s ON s.id = fts.rowid "

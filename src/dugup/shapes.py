@@ -149,6 +149,51 @@ Pair = Tuple[int, int]
 
 # ---- search results --------------------------------------------------------------------------------------
 
+WHERE_ANYWHERE, WHERE_TEXT, WHERE_NAME, WHERE_OCR = "anywhere", "text", "name", "ocr"
+WHERE_CHOICES = (WHERE_ANYWHERE, WHERE_TEXT, WHERE_NAME, WHERE_OCR)
+MAX_SORT_KEYS = 3
+
+
+@dataclass(frozen=True)
+class SearchFilters:
+    """Narrowing a search. Every part is optional; an empty one narrows nothing."""
+
+    folder: Optional[str] = None            # only files in this folder or below it (whole path parts)
+    kinds: Tuple[str, ...] = ()             # FileKind values; empty means every kind
+    where: str = WHERE_ANYWHERE             # where the words must be: anywhere, in the text (OCR text included),
+                                            # in the file name, or in text read by OCR
+    modified_after: Optional[float] = None  # at or after this time
+    modified_before: Optional[float] = None  # before this time
+    min_size: Optional[int] = None          # bytes, inclusive
+    max_size: Optional[int] = None          # bytes, inclusive
+    case_insensitive: Optional[bool] = None  # how `folder` is compared; None means the platform's rule
+
+    def __post_init__(self) -> None:
+        if self.where not in WHERE_CHOICES:
+            raise ValueError(f"where must be one of {', '.join(WHERE_CHOICES)}")
+        known = {k.value for k in FileKind}
+        for kind in self.kinds:
+            if kind not in known:
+                raise ValueError(f"{kind!r} is not a kind of file ({', '.join(sorted(known))})")
+
+
+def sort_keys(sort, descending: bool, allowed) -> List[Tuple[str, bool]]:
+    """Normalise a sort request: one key with a direction, or up to three (key, descending) pairs.
+    A key given twice counts once, where it first stands."""
+    pairs = [(sort, bool(descending))] if isinstance(sort, str) else [(k, bool(d)) for k, d in sort]
+    out: List[Tuple[str, bool]] = []
+    for key, down in pairs:
+        if key not in allowed:
+            raise ValueError(f"cannot sort by {key!r}; choose one of {sorted(allowed)}")
+        if key not in [k for k, _ in out]:
+            out.append((key, down))
+    if not out:
+        raise ValueError("at least one sort key is needed")
+    if len(out) > MAX_SORT_KEYS:
+        raise ValueError(f"at most {MAX_SORT_KEYS} sort keys")
+    return out
+
+
 @dataclass
 class SearchRow:
     file_id: int
