@@ -1,5 +1,7 @@
 """The folder picker's window (pickerwindow.py) and its place in the main window."""
 
+import gc
+
 import pytest
 
 import helpers
