@@ -20,6 +20,8 @@ import time
 from typing import Callable, List, Optional, TextIO
 
 from . import __version__
+from . import catalogue
+from .settings import Settings
 from . import settings as settings_module
 from .datadir import DataDirError, DataLayout, ensure_data_dir, never_write_from_env, resolve_data_dir
 from .doctor import Environment, has_failure, render, run_checks
@@ -238,6 +240,18 @@ def build_parser() -> argparse.ArgumentParser:
                        help="stop indexing and OCR when the index is larger than this many megabytes (0: no limit)")
 
     sub.add_parser("window", parents=[common], help="open the search window")
+
+    config = sub.add_parser("config", help="show and change settings (each with a line of guidance)")
+    config_sub = config.add_subparsers(dest="config_command", required=True)
+    listing = config_sub.add_parser("list", parents=[common], help="the everyday settings and their values")
+    listing.add_argument("--all", action="store_true", help="every setting, the advanced ones too")
+    getting = config_sub.add_parser("get", parents=[common], help="one setting: its value, what it does, its choices")
+    getting.add_argument("name")
+    setting = config_sub.add_parser("set", parents=[common], help="change one setting (checked before it is saved)")
+    setting.add_argument("name")
+    setting.add_argument("value", nargs="+")
+    resetting = config_sub.add_parser("reset", parents=[common], help="put one setting back to its default")
+    resetting.add_argument("name")
 
     models_parser = sub.add_parser("models", help="the optional language model for plain-words search")
     models_sub = models_parser.add_subparsers(dest="models_command", required=True)
@@ -903,34 +917,68 @@ def space_hint(layout: DataLayout, settings, out: TextIO) -> None:
         safe_write("(Tidying the index now and then needs as much space again for a moment, so leave twice the limit free.)", out)
 
 
-def set_config_value(config, key: str, value: int) -> None:
-    """Write one `key = number` line into config.toml, replacing an earlier line for the same key and
-    leaving everything else in the file as it is."""
-    try:
-        lines = config.read_text(encoding="utf-8-sig").splitlines()
-    except FileNotFoundError:
-        lines = []
-    kept = []
-    section = False
-    done = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("["):
-            if not section and not done:      # top-level keys must stand before the first table
-                kept.append(f"{key} = {value}")
-                done = True
-            section = True
-        if not section and stripped.split("=")[0].strip() == key:
-            if not done:
-                kept.append(f"{key} = {value}")
-                done = True
-            continue
-        kept.append(line)
-    if not done:
-        kept.append(f"{key} = {value}")
-    temporary = config.with_name(config.name + ".new")
-    temporary.write_text("\n".join(kept) + "\n", encoding="utf-8")
-    os.replace(temporary, config)
+def set_config_value(config, key: str, value) -> None:
+    """Write one setting into config.toml, leaving everything else in the file as it is."""
+    catalogue.write(config, {key: value})
+
+
+def cmd_config(args, env, out, environ) -> int:
+    """Show and change settings. Every setting is described once, in catalogue.py; this only prints that."""
+    layout = _layout(args, environ, create=args.config_command in ("set", "reset"))
+    settings, notes = settings_module.load(layout.config)
+    for note in notes:
+        safe_write(f"[config] {note}", out)
+    command = args.config_command
+    if command == "list":
+        safe_write(f"Settings are kept in {layout.config}" + ("" if layout.config.exists() else " (not there yet: every setting is at its default)"), out)
+        for group in catalogue.GROUPS:
+            entries = catalogue.in_group(group.key, everyday_only=not args.all)
+            if not entries:
+                continue
+            safe_write("", out)
+            safe_write(group.title, out)
+            safe_write("  " + group.about, out)
+            for entry in entries:
+                value = getattr(settings, entry.name)
+                mark = "" if value == catalogue.default(entry.name) else "   [changed]"
+                safe_write(f"  {entry.name} = {catalogue.show(entry.name, value)}{mark}", out)
+                safe_write(f"      {entry.label}. {entry.help}", out)
+        safe_write("", out)
+        if not args.all:
+            hidden = len(catalogue.ENTRIES) - sum(1 for e in catalogue.ENTRIES.values() if e.everyday)
+            safe_write(f"These are the everyday settings. {hidden} more: dugup config list --all", out)
+        safe_write("To change one: dugup config set NAME VALUE     To go back to the default: dugup config reset NAME", out)
+        return 0
+    entry = catalogue.ENTRIES.get(args.name)
+    if entry is None:
+        return _fail(Failure(FailureReason.UNSUPPORTED,
+                             f"there is no setting called {args.name!r}. `dugup config list --all` shows them all"), out)
+    if command == "get":
+        value = getattr(settings, entry.name)
+        safe_write(f"{entry.name} = {catalogue.show(entry.name, value)}"
+                   + ("" if value == catalogue.default(entry.name)
+                      else f"   (the default is {catalogue.show(entry.name, catalogue.default(entry.name))})"), out)
+        safe_write(f"  {entry.label}. {entry.help}", out)
+        if entry.why:
+            safe_write(f"  Why it matters: {entry.why}", out)
+        if entry.choices:
+            safe_write("  Choices: " + "; ".join(
+                f"{'yes' if v is True else 'no' if v is False else (v if v != '' else chr(34) * 2)} ({words})"
+                for v, words in entry.choices), out)
+        return 0
+    if command == "reset":
+        catalogue.write(layout.config, {entry.name: None})
+        safe_write(f"{entry.name} is back at its default: {catalogue.show(entry.name, catalogue.default(entry.name))}", out)
+        return 0
+    changed = catalogue.apply(settings, {entry.name: " ".join(args.value)})
+    if isinstance(changed, Failure):
+        return _fail(changed, out)
+    value = getattr(changed, entry.name)
+    catalogue.write(layout.config, {entry.name: value})
+    safe_write(f"{entry.name} = {catalogue.show(entry.name, value)}   (saved in {layout.config})", out)
+    if entry.name in Settings().fingerprint():
+        safe_write("  This setting shapes what is stored. The next `dugup index` will ask whether to read every file again.", out)
+    return 0
 
 
 def cmd_space(args, env, out, environ) -> int:
@@ -1100,7 +1148,7 @@ def cmd_window(args, env, out, environ) -> int:
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask}
+            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

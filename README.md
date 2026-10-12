@@ -140,6 +140,11 @@ A folder's level applies to everything below it until a folder further down has 
 level away again. Lowering a folder to `names` removes the text kept for it at once. To leave a folder out
 completely, use `dugup roots exclude`.
 
+Settings: `dugup config list` shows the everyday settings, grouped, each with a line of guidance
+(`--all` shows every one); `dugup config get NAME` explains one; `dugup config set NAME VALUE` changes it
+after checking the value; `dugup config reset NAME` goes back to the default. They are kept in
+`config.toml` in the data folder, which you need not edit by hand.
+
 `python -m dugup ...` does the same. The index lives in one per-user data folder (`%LOCALAPPDATA%\DugUp`
 on Windows, `~/.local/share/DugUp` on Linux); add `--data-dir FOLDER` to any command to keep it somewhere
 else. Deleting that folder removes everything DugUp stored. Settings go in `config.toml` in the data
