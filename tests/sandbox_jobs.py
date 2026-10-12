@@ -79,3 +79,11 @@ def raw_socket(payload):
 
 def unserialisable(payload):
     return object()
+
+
+def hang_quietly(payload):
+    threading.Event().wait()      # stuck for ever, with nothing to tell the test
+
+
+def answer_nonsense(payload):
+    return {"neither": "a result", "nor": "a failure"}

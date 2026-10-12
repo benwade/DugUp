@@ -41,6 +41,12 @@ BROKEN = [
     (fs.PurgeMissingIgnoresAge, "purge_missing_respects_age_and_folder"),
     (fs.PurgesWithoutBoundary, "purge_missing_respects_age_and_folder"),
     (fs.PagesAppend, "pages_round_trip_and_replace"),
+    (fs.OcrTextNotSearchable, "ocr_text_is_searchable_with_a_box"),
+    (fs.OcrSaveAppends, "ocr_text_is_searchable_with_a_box"),
+    (fs.OcrWithoutBoxes, "ocr_text_is_searchable_with_a_box"),
+    (fs.OcrFailureStaysQueued, "ocr_blank_and_failed_pages_leave_the_queue"),
+    (fs.OcrQueueIncludesMissing, "ocr_queue_lists_waiting_pages"),
+    (fs.RereadKeepsOcrState, "reread_clears_ocr"),
     (fs.SetRootForgetsStatus, "roots_round_trip_and_keep_their_status"),
 ]
 

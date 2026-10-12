@@ -6,19 +6,21 @@ your machine.
 DugUp was inspired by the macOS app [DigUp](https://github.com/ARahim3/DigUp) but is a separate design,
 written from scratch in Python; it shares no code with it.
 
-Status: early. Phase 1 (words in files) works and is tested on Windows 11 and Linux. OCR for scans and
-photos, search by meaning, photo search and a window are planned and not built yet.
+Status: early. Words in files, and words in pictures and scanned pages (OCR), work and are tested on
+Windows 11 and Linux. Search by meaning, photo search and a window are planned and not built yet.
 
 ## What works today
 
 - Choose folders, index them, search by the words in files and in file names.
 - Reads plain text and HTML, PDF text layers, docx/xlsx/pptx and odt/ods/odp.
 - Suggests what to skip (downloaded requirements, tool caches, trash, build output) and never skips by itself.
-- Every file ends in a stated state. A scan or photo is `partial` ("pages wait for OCR") until the OCR
-  step exists; a file that cannot be read says why.
+- Reads the words in pictures and scanned PDF pages (`dugup ocr`), so a photo can be found by the sign in it.
+  Document pages are read first, then scans and screenshots, then photos, and tiny graphics last.
+- Every file ends in a stated state. A scan or photo is `partial` ("pages wait for OCR") until `dugup ocr`
+  has read it; a file that cannot be read says why.
 - Stop with Ctrl+C and run again to continue. Deleted files stay findable, flagged, for 30 days.
-- Files are parsed in a separate worker process with a time and a memory limit, so a damaged or hostile file
-  can cost one worker and never the index. The worker has no network access.
+- Files are parsed, and pictures are read, in separate worker processes with a time limit, so a damaged or
+  hostile file can cost one worker and never the index. The workers have no network access.
 
 ## Set up
 
@@ -30,6 +32,7 @@ Windows (PowerShell):
     .venv\Scripts\activate
     pip install -r requirements-dev.txt
     pip install -e .
+    pip install -r requirements-ocr.txt     (optional: to read pictures and scanned pages)
 
 Linux:
 
@@ -37,6 +40,10 @@ Linux:
     source .venv/bin/activate
     pip install -r requirements-dev.txt
     pip install -e .
+    pip install -r requirements-ocr.txt     (optional: to read pictures and scanned pages)
+
+The OCR engine is RapidOCR. Its models come inside the package, so nothing is downloaded when it runs.
+It reads printed words well. Drawn or handwritten lettering and blurred photos are often missed.
 
 ## Use
 
@@ -46,6 +53,7 @@ Linux:
     dugup roots suggest "D:\Some Folder" --apply-safe (skip downloaded requirements and tool data)
     dugup roots exclude "D:\Some Folder" /Trash Temp  (skip anything else; --undo takes it back)
     dugup index
+    dugup ocr                                         (read pictures and scanned pages; --minutes N to limit it)
     dugup search invoice 2024
     dugup status --attention
 
@@ -73,6 +81,7 @@ folder; see `src/dugup/settings.py` for the names and defaults.
 | `cli.py` | The command line, a client of the service. |
 | `launcher.py` | The one place outside programs and workers are started; ends a program with everything it started. |
 | `sandbox.py`, `worker.py`, `jobs.py` | The Sandbox: risky work in a worker process with limits, and what crosses the boundary. |
+| `ocr.py`, `ocrqueue.py` | The OcrBackend (the engine, in a worker) and the queue that decides what is read first. |
 | `suggest.py` | Suggestions for what to skip (a proposal for the user, never applied by itself). |
 | `settings.py`, `kinds.py`, `datadir.py`, `lockfile.py`, `doctor.py` | Settings, file kinds, the data folder, the run lock, the health report. |
 

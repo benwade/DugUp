@@ -11,8 +11,8 @@ from __future__ import annotations
 import random
 
 import helpers
-from dugup.protocols import PageInfo, PageVerdict
-from dugup.shapes import Evidence, FileKind, FileRecord, FileState, Root, SegmentIn, SegmentKind
+from dugup.protocols import OCR_DONE, OCR_FAILED, OCR_WAITING, OcrLine, OcrResult, PageInfo, PageVerdict
+from dugup.shapes import Box, Evidence, FileKind, FileRecord, FileState, Root, SegmentIn, SegmentKind
 from dugup.store import StoreError
 
 from .common import CheckFailed, require
@@ -504,6 +504,90 @@ def check_pages_round_trip_and_replace(s):
     require(list(s.get_pages(row)) == [], "purging a file must remove its page records")
 
 
+# ---- OCR -----------------------------------------------------------------------------------------------
+
+def _scan(s, path="/d/scan.pdf", kind=FileKind.PDF):
+    row = add(s, path, kind=kind)
+    s.set_pages(row, [PageInfo(1, PageVerdict.BORN_DIGITAL, False), PageInfo(2, PageVerdict.NO_LAYER, True),
+                      PageInfo(3, PageVerdict.NO_LAYER, True)])
+    return row
+
+
+def _read(*lines):
+    return OcrResult(tuple(OcrLine(text, Box(*box), 0.9) for text, box in lines), "fake-ocr", "1.0")
+
+
+def check_ocr_queue_lists_waiting_pages(s):
+    row = _scan(s)
+    gone = _scan(s, "/d/gone.pdf")
+    s.set_missing(gone, 5.0)
+    other = _scan(s, "/e/photo.jpg", FileKind.IMAGE)
+    tasks = list(s.ocr_queue())
+    require([(t.row_id, t.page) for t in tasks] == [(row, 2), (row, 3), (other, 2), (other, 3)],
+            "the queue must hold the pages that need OCR of files that are not missing, in file then page order")
+    require(tasks[0].path == "/d/scan.pdf" and tasks[0].kind is FileKind.PDF and tasks[0].width is None,
+            "a task must carry the file's path and kind, and no shape before one is recorded")
+    require([(t.row_id, t.page) for t in s.ocr_queue("/e")] == [(other, 2), (other, 3)], "the queue must respect the folder asked for")
+    s.set_page_shape(other, 2, 640, 480, True)
+    task = next(t for t in s.ocr_queue("/e") if t.page == 2)
+    require((task.width, task.height, task.camera) == (640, 480, True), "a recorded shape must come back with the task")
+    raises(StoreError, lambda: s.set_page_shape(other, 99, 1, 1, False), "set_page_shape on an unknown page")
+    raises(StoreError, lambda: s.save_ocr(row, 99, _read()), "save_ocr on an unknown page")
+    raises(StoreError, lambda: s.fail_ocr(424242, 1, "x"), "fail_ocr on an unknown file")
+
+
+def check_ocr_text_is_searchable_with_a_box(s):
+    row = _scan(s)
+    s.save_ocr(row, 2, _read(("Antonio's Trattoria", (100, 100, 600, 160)), ("  ", (0, 0, 10, 10)),
+                             ("open daily", (100, 700, 400, 760))))
+    require([(t.row_id, t.page) for t in s.ocr_queue()] == [(row, 3)], "a page that was read must leave the queue")
+    require(not s.get_pages(row)[1].needs_ocr, "a page that was read no longer needs OCR")
+    require(list(s.ocr_status(row)) == [(2, OCR_DONE, ""), (3, OCR_WAITING, "")], "ocr_status must say what became of each page")
+    found = s.search_words("daily").rows
+    require(len(found) == 1 and found[0].file_id == row, "text read by OCR must be searchable")
+    ev = found[0].evidence[0]
+    passage = s.get_passage(ev, context=0)
+    require(passage is not None and passage.kind is SegmentKind.OCR and passage.page == 2
+            and passage.text.casefold() == "daily", "the evidence must point at the word, on its page, as OCR text")
+    require(ev.box == Box(100, 700, 400, 760), "evidence from OCR must carry the box of the line the word is on")
+    require(s.search_words("antonio's").rows[0].evidence[0].box == Box(100, 100, 600, 160), "the first line has its own box")
+    s.save_ocr(row, 3, _read(("a b", (1, 1, 9, 9)), ("c d", (1, 11, 9, 19)), ("e zz", (1, 21, 9, 29))))
+    require(s.search_words("zz").rows[0].evidence[0].box == Box(1, 21, 9, 29),
+            "the last word of the last line must get that line's box (lines are joined by one line break)")
+    s.save_ocr(row, 3, _read())
+    s.save_ocr(row, 2, _read(("entirely different", (1, 1, 9, 9))))
+    require(s.search_words("daily").total == 0 and s.search_words("different").total == 1,
+            "saving OCR for a page again must replace what was stored, not add to it")
+    require(s.segment_count() == 1, "one page read twice holds one piece of OCR text")
+
+
+def check_ocr_blank_and_failed_pages_leave_the_queue(s):
+    row = _scan(s)
+    s.save_ocr(row, 2, _read())
+    require(s.segment_count() == 0, "a page with nothing on it stores no text")
+    s.fail_ocr(row, 3, f"timed_out: too slow {helpers.CAFE}")
+    require(list(s.ocr_queue()) == [], "a blank page and a failed page both leave the queue")
+    require(list(s.ocr_status(row)) == [(2, OCR_DONE, ""), (3, OCR_FAILED, f"timed_out: too slow {helpers.CAFE}")],
+            "a failed page must keep its reason")
+    require(list(s.retry_ocr("/elsewhere")) == [], "retry must respect the folder asked for")
+    require(list(s.retry_ocr()) == [row], "retry must name the files it put back")
+    require([(t.row_id, t.page) for t in s.ocr_queue()] == [(row, 3)], "a retried page waits again; a read page does not")
+    require(list(s.retry_ocr()) == [], "nothing is left to retry")
+
+
+def check_reread_clears_ocr(s):
+    row = _scan(s)
+    s.save_ocr(row, 2, _read(("needle", (1, 1, 9, 9))))
+    s.fail_ocr(row, 3, "crashed: x")
+    s.set_page_shape(row, 3, 10, 10, False)
+    s.replace_segments(row, [])
+    s.set_pages(row, [PageInfo(1, PageVerdict.NO_LAYER, False), PageInfo(2, PageVerdict.NO_LAYER, False), PageInfo(3, PageVerdict.NO_LAYER, True)])
+    require(s.search_words("needle").total == 0, "reading a file again must drop the OCR text of the old content")
+    tasks = list(s.ocr_queue())
+    require([(t.page, t.width) for t in tasks] == [(3, None)], "after a re-read the pages wait afresh, with no old shape or failure")
+    require(list(s.ocr_status(row)) == [(3, OCR_WAITING, "")], "old OCR outcomes must not survive a re-read")
+
+
 # ---- roots ---------------------------------------------------------------------------------------------
 
 def check_roots_round_trip_and_keep_their_status(s):
@@ -563,6 +647,10 @@ CHECKS = {
     "state_counts_by_folder": check_state_counts_by_folder,
     "remove_files_takes_them_out_completely": check_remove_files_takes_them_out_completely,
     "pages_round_trip_and_replace": check_pages_round_trip_and_replace,
+    "ocr_queue_lists_waiting_pages": check_ocr_queue_lists_waiting_pages,
+    "ocr_text_is_searchable_with_a_box": check_ocr_text_is_searchable_with_a_box,
+    "ocr_blank_and_failed_pages_leave_the_queue": check_ocr_blank_and_failed_pages_leave_the_queue,
+    "reread_clears_ocr": check_reread_clears_ocr,
     "roots_round_trip_and_keep_their_status": check_roots_round_trip_and_keep_their_status,
     "purge_case_rule_is_explicit": check_purge_case_rule_is_explicit,
     "purge_with_non_ascii_folder": check_purge_with_non_ascii_folder,

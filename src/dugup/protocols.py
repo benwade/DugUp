@@ -19,7 +19,7 @@ from enum import Enum
 from pathlib import Path
 from typing import (Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable)
 
-from .shapes import (Box, Evidence, Failure, FileRecord, FileState, Passage, Root, SearchPage, SegmentIn)
+from .shapes import (Box, Evidence, Failure, FileKind, FileRecord, FileState, Passage, Root, SearchPage, SegmentIn)
 
 
 @runtime_checkable
@@ -254,6 +254,25 @@ class Store(Protocol):
 
     def get_pages(self, row_id: int) -> Sequence[PageInfo]: ...
 
+    def ocr_queue(self, prefix: Optional[str] = None, case_insensitive: Optional[bool] = None
+                  ) -> Sequence[OcrTask]:
+        """Pages that wait for OCR, of files that are not missing, in file then page order."""
+
+    def set_page_shape(self, row_id: int, page: int, width: int, height: int, camera: bool) -> None: ...
+
+    def save_ocr(self, row_id: int, page: int, result: "OcrResult") -> None:
+        """Store what OCR read on a page (searchable, with a box per line) and mark the page read.
+        Safe to repeat. A result with no lines marks the page read and stores no text."""
+
+    def fail_ocr(self, row_id: int, page: int, reason: str) -> None:
+        """Mark a page as one OCR could not read, with the reason. It leaves the queue until retried."""
+
+    def retry_ocr(self, prefix: Optional[str] = None, case_insensitive: Optional[bool] = None) -> Sequence[int]:
+        """Put pages OCR failed on back in the queue. Returns the row ids of their files."""
+
+    def ocr_status(self, row_id: int) -> Sequence[Tuple[int, str, str]]:
+        """(page, OCR_WAITING | OCR_DONE | OCR_FAILED, reason) for each page that needed OCR, in page order."""
+
     def file_count(self) -> int: ...
 
     def segment_count(self, include_names: bool = False) -> int: ...
@@ -281,6 +300,22 @@ class Store(Protocol):
     def purge_folder(self, prefix: str, case_insensitive: Optional[bool] = None, thorough: bool = False) -> int: ...
 
     def close(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class OcrTask:
+    """One page that waits for OCR. For a picture the page is 1 and the shape is its size in pixels."""
+
+    row_id: int
+    path: str
+    kind: FileKind
+    page: int
+    width: Optional[int] = None    # None: not looked at yet; 0: could not be measured
+    height: Optional[int] = None
+    camera: bool = False           # the picture says which camera took it (a photo, not a scan or a screenshot)
+
+
+OCR_WAITING, OCR_DONE, OCR_FAILED = "waiting", "done", "failed"
 
 
 # ---- 7. Sandbox ----------------------------------------------------------------------------------------

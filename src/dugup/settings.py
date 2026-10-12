@@ -42,6 +42,13 @@ class Settings:
     reader_seconds_per_mb: float = 2.0     # extra time for each megabyte of the file
     reader_seconds_cap: float = 900.0      # never more than this for one file
     reader_memory_mb: int = 4096           # memory a reader may use; 0 means no limit
+    # -- OCR: pictures and scanned pages are read in a worker of their own
+    ocr_seconds: float = 120.0             # time allowed for one page or picture
+    ocr_memory_mb: int = 0                 # memory the OCR worker may use; 0 means no limit [the engine reserves a lot]
+    ocr_dpi: int = 150                     # a PDF page is drawn at this resolution to be read
+    ocr_max_pixels: int = 4000             # a larger picture is scaled down to this longest side before reading
+    ocr_tiny_pixels: int = 200             # a picture whose longest side is under this is queued last (icons, buttons)
+    ocr_failures_in_a_row: int = 5         # this many pages failing one after another pauses the run
     # -- indexing
     batch_files: int = 200             # files fetched per step of the work queue
     missing_retention_days: float = 30.0   # guide 5d item 10
@@ -83,6 +90,13 @@ def validate(s: Settings) -> List[str]:
             problems.append(f"{name} must be above 0")
     if s.reader_seconds_per_mb < 0 or s.reader_memory_mb < 0:
         problems.append("reader_seconds_per_mb and reader_memory_mb must not be negative")
+    if s.ocr_seconds <= 0:
+        problems.append("ocr_seconds must be above 0")
+    for name in ("ocr_dpi", "ocr_max_pixels", "ocr_failures_in_a_row"):
+        if getattr(s, name) < 1:
+            problems.append(f"{name} must be at least 1")
+    if s.ocr_memory_mb < 0 or s.ocr_tiny_pixels < 0:
+        problems.append("ocr_memory_mb and ocr_tiny_pixels must not be negative")
     if s.missing_retention_days < 0:
         problems.append("missing_retention_days must not be negative")
     return problems

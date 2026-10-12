@@ -104,6 +104,15 @@ class ProgressPrinter:
             line = f"[scan] looking through {p.root}"
         elif p.phase == "record":
             line = f"[scan] recording changes: {p.done:,} of {p.total:,}"
+        elif p.phase == "measure":
+            line = f"[ocr] looking at the size of the pictures: {p.done:,} of {p.total:,}"
+        elif p.phase == "ocr":
+            left = p.remaining_seconds
+            left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
+            line = (f"[ocr] {p.done:,} of {p.total:,} page(s) ({p.percent:.1f}%)  {p.rate * 60:.1f} pages/min  "
+                    f"{left_text}  failed {p.failed:,}")
+            if p.current:
+                line += "  | " + shorten(os.path.basename(p.current), 40)
         else:
             left = p.remaining_seconds
             left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
@@ -172,6 +181,12 @@ def build_parser() -> argparse.ArgumentParser:
     choice = index.add_mutually_exclusive_group()
     choice.add_argument("--reread", action="store_true", help="after a settings change: read every file again")
     choice.add_argument("--keep", action="store_true", help="after a settings change: keep what is stored as it is")
+
+    ocr = sub.add_parser("ocr", parents=[common],
+                         help="read the words in pictures and scanned pages (Ctrl+C stops cleanly; run again to continue)")
+    ocr.add_argument("--root", action="append", default=None, metavar="FOLDER", help="only this folder (repeatable)")
+    ocr.add_argument("--minutes", type=float, default=None, metavar="N", help="stop after about N minutes")
+    ocr.add_argument("--retry-failed", action="store_true", help="try the pages OCR failed on again")
 
     search = sub.add_parser("search", parents=[common], help="find files by the words in them or in their names")
     search.add_argument("words", nargs="+")
@@ -406,6 +421,8 @@ def print_report(report: IndexReport, out: TextIO, retention_days: float) -> Non
                    "shows which folders hold them.", out)
     if report.partial or report.failed:
         safe_write("See what failed, was read in part or waits for OCR: dugup status", out)
+    if report.partial:
+        safe_write("To read the words in pictures and scanned pages: dugup ocr", out)
 
 
 def _file_log(layout: DataLayout) -> Optional[logging.Handler]:
@@ -476,6 +493,84 @@ def cmd_index(args, env, out, environ, stop: Optional[threading.Event] = None, i
             handler.close()
 
 
+def _chosen_roots(service: LocalService, asked: Optional[List[str]], out: TextIO) -> "Optional[List[str]] | int":
+    if not asked:
+        return None
+    wanted = {os.path.normcase(os.path.abspath(r)) for r in asked}
+    roots = [r.path for r in service.list_roots() if os.path.normcase(r.path) in wanted]
+    if len(roots) != len(wanted):
+        safe_write("One of the --root folders is not an indexed folder. See: dugup roots list", out)
+        return 1
+    return roots
+
+
+def print_ocr_report(report, out: TextIO) -> None:
+    for path in report.away:
+        safe_write(f"Folder NOT AVAILABLE right now, left alone: {path}", out)
+    if report.total == 0 and report.not_ready is None:
+        safe_write("Nothing waits for OCR.", out)
+        return
+    safe_write(f"OCR read {report.read:,} of {report.total:,} waiting page(s) in {format_seconds(report.seconds)} "
+               f"({report.rate * 60:.1f} pages/min): {report.with_words:,} with words, "
+               f"{report.read - report.with_words:,} with none, {report.failed:,} failed", out)
+    if report.left:
+        safe_write(f"{report.left:,} page(s) belong to files that could not be reached; they stay queued.", out)
+    if report.failed:
+        safe_write("See what failed: dugup status --attention    Try those again: dugup ocr --retry-failed", out)
+    if report.not_ready is not None:
+        safe_write(f"OCR cannot run ({report.not_ready.reason.value.replace('_', ' ')}): {report.not_ready.detail}", out)
+        safe_write("Nothing was marked as failed; the pages stay queued.", out)
+    if report.paused:
+        safe_write(f"OCR paused itself: {report.paused}.", out)
+        safe_write("The rest stays queued. Run `dugup ocr` to go on, or `dugup ocr --retry-failed` to also retry the failed pages.", out)
+    if report.out_of_time:
+        safe_write(f"The time given is used up; {report.remaining:,} page(s) still wait. Run `dugup ocr` again to continue.", out)
+
+
+def cmd_ocr(args, env, out, environ, stop: Optional[threading.Event] = None, install_signals: bool = True) -> int:
+    service = _service(args, environ, out, create=False)
+    if service is None:
+        return 1
+    stop = stop or threading.Event()
+    printer = ProgressPrinter(out)
+    handler = _file_log(service.layout)
+    previous = None
+
+    def on_interrupt(signum, frame):
+        if stop.is_set():
+            raise KeyboardInterrupt   # the second Ctrl+C: stop at once
+        stop.set()
+        printer.finish()
+        safe_write("Stopping. The page being read is not lost: it stays queued. Press Ctrl+C again to stop at once.", out)
+
+    if install_signals and threading.current_thread() is threading.main_thread():
+        previous = signal.signal(signal.SIGINT, on_interrupt)
+    try:
+        with service:
+            roots = _chosen_roots(service, args.root, out)
+            if isinstance(roots, int):
+                return roots
+            if args.minutes is not None and args.minutes <= 0:
+                safe_write("--minutes must be above 0", out)
+                return 1
+            budget = None if args.minutes is None else args.minutes * 60.0
+            report = service.run_ocr(stop, printer, roots, budget, args.retry_failed)
+            printer.finish()
+            if isinstance(report, Failure):
+                return _fail(report, out)
+            print_ocr_report(report, out)
+            if report.stopped:
+                safe_write("[Interrupted] Stopped cleanly. Run `dugup ocr` again to continue where it stopped.", out)
+                return 130
+            return 1 if report.not_ready is not None or report.paused else 0
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
+        if handler is not None:
+            logging.getLogger("dugup").removeHandler(handler)
+            handler.close()
+
+
 def _flags(row: SearchRow, retention_days: float) -> List[str]:
     notes = []
     if row.missing_since is not None:
@@ -503,7 +598,12 @@ def print_results(page: SearchPage, query: str, service: LocalService, context: 
             passage = service.get_evidence(evidence, context)
             if isinstance(passage, Failure):
                 continue
-            where = "name" if passage.kind.value == "name" else (f"p.{passage.page}" if passage.page else "text")
+            if passage.kind.value == "name":
+                where = "name"
+            elif passage.kind.value == "ocr":     # words read from pixels: say so, they can be misread
+                where = "in the picture" if row.kind == "image" else f"p.{passage.page}, read by OCR"
+            else:
+                where = f"p.{passage.page}" if passage.page else "text"
             before, match, after = passage.text[:passage.start], passage.text[passage.start:passage.end], passage.text[passage.end:]
             shown = one_line(before) + (" " if before[-1:].isspace() else "") + "[" + one_line(match) + "]" \
                 + (" " if after[:1].isspace() else "") + one_line(after)
@@ -556,8 +656,8 @@ def cmd_status(args, env, out, environ) -> int:
             safe_write("No folders yet. Add one with: dugup roots add <folder>", out)
         tally = service.attention_counts()
         if tally["waiting_for_ocr"]:
-            safe_write(f"{tally['waiting_for_ocr']:,} file(s) wait for OCR (pictures and scanned pages; OCR is not built yet). "
-                       "Their names are searchable.", out)
+            safe_write(f"{tally['waiting_for_ocr']:,} file(s) wait for OCR (pictures and scanned pages). "
+                       "Their names are searchable already. To read the words in them: dugup ocr", out)
         if args.attention is not None:
             records = service.needs_attention(limit=max(0, args.attention))
             safe_write(f"Needs attention: showing {len(records):,} of {tally['attention']:,}", out)
@@ -570,7 +670,7 @@ def cmd_status(args, env, out, environ) -> int:
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status}
+            "status": cmd_status, "ocr": cmd_ocr}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

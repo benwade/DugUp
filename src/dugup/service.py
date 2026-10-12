@@ -26,6 +26,8 @@ from .extractors import default_extractors
 from .extractors.sandboxed import SandboxedExtractor
 from .indexer import POLICY_NOTE, REFUSE, Indexer, IndexReport, Progress, only_waits_for_ocr
 from .lockfile import RunLock
+from .ocr import SandboxOcrBackend
+from .ocrqueue import OcrReport, OcrRunner
 from .filesource import matches_rules
 from .protocols import Extractor, FileSource, ScanRules, StopSignal, Store
 from .sandbox import SubprocessSandbox
@@ -49,8 +51,9 @@ class LocalService:
     def __init__(self, layout: DataLayout, settings: Optional[Settings] = None,
                  source: Optional[FileSource] = None, extractor: Optional[Extractor] = None,
                  open_store: Optional[Callable[[], Store]] = None, clock: Callable[[], float] = time.time,
-                 case_insensitive: Optional[bool] = None) -> None:
+                 case_insensitive: Optional[bool] = None, ocr_backend=None) -> None:
         self.layout = layout
+        self._ocr_backend = ocr_backend      # made on first use: most commands never read a picture
         self.settings = settings or Settings()
         self.source = source or DirectoryScan()
         if extractor is not None:
@@ -90,6 +93,9 @@ class LocalService:
         close_readers = getattr(self.extractor, "close", None)
         if close_readers is not None:
             close_readers()      # ends any worker process and everything it started
+        close_ocr = getattr(self._ocr_backend, "close", None)
+        if close_ocr is not None:
+            close_ocr()
 
     def __enter__(self) -> "LocalService":
         return self
@@ -260,6 +266,41 @@ class LocalService:
                                       extra_excludes=(str(self.layout.root),))
                     report = indexer.run(stop, roots, on_settings_change, retry_failed)
                     self.last_report = report
+                    return report
+                finally:
+                    store.close()
+            finally:
+                self._lock.release()
+        finally:
+            self._run_guard.release()
+
+    def run_ocr(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
+                roots: Optional[Sequence[str]] = None, budget_seconds: Optional[float] = None,
+                retry_failed: bool = False) -> "OcrReport | Failure":
+        """Read the pages and pictures that wait for OCR, in the calling thread, until done or stopped.
+        It writes to the index, so it takes the same lock as an indexing run: one or the other, never both."""
+        if not self._run_guard.acquire(blocking=False):
+            return Failure(FailureReason.BUSY, "indexing or OCR is already going on in this program")
+        try:
+            if not self._lock.acquire():
+                return Failure(FailureReason.BUSY, "another program is writing to this data folder right now")
+            try:
+                store = self._open_store()
+                try:
+                    known = [r.path for r in store.list_roots()]
+                    wanted = known if roots is None else [r for r in known if any(self._fold(r) == self._fold(w) for w in roots)]
+                    here = [r for r in wanted if self.source.reachable(r)]
+                    if self._ocr_backend is None:
+                        self._ocr_backend = SandboxOcrBackend(SubprocessSandbox(), self.settings)
+
+                    def tell(p: Progress) -> None:
+                        self._progress = p
+                        if progress is not None:
+                            progress(p)
+
+                    runner = OcrRunner(store, self._ocr_backend, self.settings, tell, case_insensitive=self.case_insensitive)
+                    report = runner.run(stop, here, budget_seconds, retry_failed)
+                    report.away = tuple(r for r in wanted if r not in here)
                     return report
                 finally:
                     store.close()

@@ -14,8 +14,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import os
 
-from dugup.protocols import PageInfo
-from dugup.shapes import (Evidence, FileKind, FileRecord, FileState, Passage, Root, SegmentIn, SegmentKind)
+from dugup.protocols import OCR_DONE, OCR_FAILED, OCR_WAITING, OcrTask, PageInfo
+from dugup.shapes import (Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SegmentIn, SegmentKind)
 from dugup.store import SORT_COLUMNS, SearchPage, SearchRow, StoreError
 
 FakeSearchRow = SearchRow   # the real row carries evidence now; the old name is kept for the broken variants
@@ -61,6 +61,8 @@ class FakeStore:
         self.roots: Dict[str, Root] = {}
         self.segment_ids: Dict[int, List[int]] = {}   # row id -> the id of each stored segment, in order
         self.next_segment = 1
+        self.ocr: Dict[Tuple[int, int], dict] = {}      # (row id, page) -> state, reason, width, height, camera
+        self.lines: Dict[int, list] = {}                # segment id -> [(text, Box)] of an OCR segment
 
     # -- plumbing
     def close(self) -> None:
@@ -68,7 +70,7 @@ class FakeStore:
 
     def _state(self):
         return (self.files, self.segments, self.fingerprint, self.next_id, self.pages, self.roots,
-                self.segment_ids, self.next_segment)
+                self.segment_ids, self.next_segment, self.ocr, self.lines)
 
     @contextlib.contextmanager
     def transaction(self):
@@ -81,7 +83,7 @@ class FakeStore:
 
     def _restore(self, saved) -> None:
         (self.files, self.segments, self.fingerprint, self.next_id, self.pages, self.roots,
-         self.segment_ids, self.next_segment) = copy.deepcopy(saved)
+         self.segment_ids, self.next_segment, self.ocr, self.lines) = copy.deepcopy(saved)
 
     # -- fingerprint
     def set_fingerprint(self, fingerprint) -> None:
@@ -163,8 +165,15 @@ class FakeStore:
         self.files[row_id].missing_since = since
 
     def _drop(self, row_id: int) -> None:
+        for seg_id in self.segment_ids.get(row_id, []):
+            self.lines.pop(seg_id, None)
         for table in (self.files, self.segments, self.segment_ids, self.pages):
             table.pop(row_id, None)
+        self._forget_ocr(row_id)
+
+    def _forget_ocr(self, row_id: int) -> None:
+        for key in [k for k in self.ocr if k[0] == row_id]:
+            del self.ocr[key]
 
     def remove_files(self, row_ids) -> int:
         present = [i for i in row_ids if i in self.files]
@@ -183,9 +192,91 @@ class FakeStore:
         if row_id not in self.files:
             raise StoreError(f"no file with id {row_id}")
         self.pages[row_id] = sorted(pages, key=lambda p: p.page)
+        self._forget_ocr(row_id)
 
     def get_pages(self, row_id: int):
         return list(self.pages.get(row_id, []))
+
+    # -- OCR
+    def _page_index(self, row_id: int, page: int) -> int:
+        for index, info in enumerate(self.pages.get(row_id, [])):
+            if info.page == page:
+                return index
+        raise StoreError(f"file {row_id} has no page {page}")
+
+    def _ocr_entry(self, row_id: int, page: int) -> dict:
+        self._page_index(row_id, page)
+        return self.ocr.setdefault((row_id, page), {"state": "", "reason": "", "width": None, "height": None, "camera": False})
+
+    def ocr_queue(self, prefix=None, case_insensitive=None):
+        ids = sorted(self.files) if prefix is None else self._below(prefix, case_insensitive)
+        out = []
+        for row_id in ids:
+            rec = self.files[row_id]
+            if rec.missing_since is not None:
+                continue
+            for info in self.pages.get(row_id, []):
+                entry = self.ocr.get((row_id, info.page), {})
+                if info.needs_ocr and not entry.get("state"):
+                    out.append(OcrTask(row_id, rec.path, rec.kind, info.page, entry.get("width"), entry.get("height"),
+                                       bool(entry.get("camera"))))
+        return out
+
+    def set_page_shape(self, row_id, page, width, height, camera) -> None:
+        self._ocr_entry(row_id, page).update(width=int(width), height=int(height), camera=bool(camera))
+
+    def _drop_ocr_text(self, row_id: int, page: int) -> None:
+        keep = [(seg, seg_id) for seg, seg_id in zip(self.segments[row_id], self.segment_ids[row_id])
+                if not (seg.kind is SegmentKind.OCR and seg.page == page)]
+        for seg_id in set(self.segment_ids[row_id]) - {i for _, i in keep}:
+            self.lines.pop(seg_id, None)
+        self.segments[row_id] = [seg for seg, _ in keep]
+        self.segment_ids[row_id] = [seg_id for _, seg_id in keep]
+
+    def save_ocr(self, row_id, page, result) -> None:
+        index = self._page_index(row_id, page)
+        self._drop_ocr_text(row_id, page)
+        lines = [(" ".join(l.text.split()), l.box) for l in result.lines]
+        lines = [(t, b) for t, b in lines if t]
+        if lines:
+            self.segments[row_id].append(SegmentIn(page, 1_000_000, SegmentKind.OCR, "\n".join(t for t, _ in lines)))
+            self.segment_ids[row_id].append(self.next_segment)
+            self.lines[self.next_segment] = lines
+            self.next_segment += 1
+        self._mark_read(row_id, page, index)
+
+    def _mark_read(self, row_id, page, index) -> None:
+        info = self.pages[row_id][index]
+        self.pages[row_id][index] = PageInfo(info.page, info.verdict, False, info.unread_reason)
+        self._ocr_entry(row_id, page).update(state="done", reason="")
+
+    def fail_ocr(self, row_id, page, reason) -> None:
+        self._ocr_entry(row_id, page).update(state="failed", reason=reason)
+
+    def retry_ocr(self, prefix=None, case_insensitive=None):
+        ids = set(self.files) if prefix is None else set(self._below(prefix, case_insensitive))
+        found = sorted({row for (row, _), entry in self.ocr.items() if entry["state"] == "failed" and row in ids})
+        for (row, _), entry in self.ocr.items():
+            if row in found and entry["state"] == "failed":
+                entry.update(state="", reason="")
+        return found
+
+    def ocr_status(self, row_id):
+        out = []
+        for info in self.pages.get(row_id, []):
+            entry = self.ocr.get((row_id, info.page), {})
+            state = entry.get("state", "")
+            if info.needs_ocr or state:
+                out.append((info.page, {"": OCR_WAITING, "done": OCR_DONE, "failed": OCR_FAILED}[state], entry.get("reason", "")))
+        return out
+
+    def _line_box(self, handle, start):
+        at = 0
+        for text, box in self.lines.get(handle, ()):
+            at += len(text) + 1
+            if start < at:
+                return box
+        return None
 
     def state_counts(self, prefix=None, case_insensitive=None):
         ids = sorted(self.files) if prefix is None else self._below(prefix, case_insensitive)
@@ -238,6 +329,8 @@ class FakeStore:
             raise StoreError(f"no file with id {row_id}")
         if any(s.kind is SegmentKind.NAME for s in segments):
             raise ValueError("name segments are managed by the store")
+        for seg_id in self.segment_ids.get(row_id, []):
+            self.lines.pop(seg_id, None)
         self.segments[row_id] = list(segments)
         self.segment_ids[row_id] = list(range(self.next_segment, self.next_segment + len(segments)))
         self.next_segment += len(segments)
@@ -334,7 +427,8 @@ class FakeStore:
             folder, name = _split(rec.path)
             ordered = sorted((h for h in hits if h[1] is not None),
                              key=lambda h: (h[2] is not None and h[2] < 0, h[0]))   # text before the name
-            evidence = tuple(Evidence(row_id, page, span[0], span[1], None, handle) for page, span, handle in ordered)
+            evidence = tuple(Evidence(row_id, page, span[0], span[1], self._line_box(handle, span[0]), handle)
+                             for page, span, handle in ordered)
             if not evidence:
                 evidence = (Evidence(row_id, hits[0][0], 0, 0, None, hits[0][2]),)
             rows.append(FakeSearchRow(row_id, rec.path, name, folder, rec.size, rec.modified, rec.kind.value,
@@ -592,6 +686,43 @@ class PagesAppend(FakeStore):
         if row_id not in self.files:
             raise StoreError(f"no file with id {row_id}")
         self.pages[row_id] = self.pages.get(row_id, []) + list(pages)
+
+
+class OcrTextNotSearchable(FakeStore):
+    def save_ocr(self, row_id, page, result):
+        self._mark_read(row_id, page, self._page_index(row_id, page))
+
+
+class OcrSaveAppends(FakeStore):
+    def _drop_ocr_text(self, row_id, page):
+        pass
+
+
+class OcrFailureStaysQueued(FakeStore):
+    def fail_ocr(self, row_id, page, reason):
+        self._page_index(row_id, page)
+
+
+class OcrWithoutBoxes(FakeStore):
+    def _line_box(self, handle, start):
+        return None
+
+
+class OcrQueueIncludesMissing(FakeStore):
+    def ocr_queue(self, prefix=None, case_insensitive=None):
+        hidden = {i: r.missing_since for i, r in self.files.items()}
+        for rec in self.files.values():
+            rec.missing_since = None
+        try:
+            return super().ocr_queue(prefix, case_insensitive)
+        finally:
+            for i, since in hidden.items():
+                self.files[i].missing_since = since
+
+
+class RereadKeepsOcrState(FakeStore):
+    def _forget_ocr(self, row_id):
+        pass
 
 
 class EvidenceAtTheStart(FakeStore):
