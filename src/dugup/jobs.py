@@ -120,6 +120,30 @@ def _page_picture(path: str, page: int, dpi: int):
         document.close()
 
 
+GPU_NAMES = {"DmlExecutionProvider": "graphics card (DirectML)", "CUDAExecutionProvider": "graphics card (CUDA)"}
+
+
+def gpu_provider() -> str:
+    """The way this machine's OCR runtime can use a graphics card, or "" when it cannot.
+    The runtime decides: the plain package has no such way, the DirectML one (Windows) and the CUDA one do."""
+    try:
+        import onnxruntime
+        have = set(onnxruntime.get_available_providers())
+    except Exception:
+        return ""
+    for name in ("CUDAExecutionProvider", "DmlExecutionProvider"):
+        if name in have:
+            return name
+    return ""
+
+
+def ocr_device(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """What OCR would run on if a graphics card were asked for (asked in a worker, so the main program
+    never loads the runtime)."""
+    card = gpu_provider()
+    return {"card": GPU_NAMES.get(card, ""), "provider": card}
+
+
 def ocr(payload: Mapping[str, Any]) -> Dict[str, Any]:
     """Read one picture, or one page of a PDF (page 1 or more), with the OCR engine."""
     try:
@@ -161,9 +185,14 @@ def ocr(payload: Mapping[str, Any]) -> Dict[str, Any]:
         shrink = limit / float(longest)
         picture = picture.resize((max(1, round(picture.width * shrink)), max(1, round(picture.height * shrink))))
     threads = int(payload.get("threads") or 0)       # 0: the engine decides (it takes every core it finds)
-    key = f"rapidocr:{threads}"
+    card = gpu_provider() if payload.get("gpu") else ""     # asked for, and there: else the processor, and said so
+    key = f"rapidocr:{threads}:{card}"
     if key not in _engines:
         params: Dict[str, Any] = {"Global.log_level": "error"}
+        if card == "DmlExecutionProvider":
+            params["EngineConfig.onnxruntime.use_dml"] = True
+        elif card == "CUDAExecutionProvider":
+            params["EngineConfig.onnxruntime.use_cuda"] = True
         if threads > 0:              # readers working side by side must each keep to a few cores
             params["EngineConfig.onnxruntime.intra_op_num_threads"] = threads
             params["EngineConfig.onnxruntime.inter_op_num_threads"] = 1
@@ -180,4 +209,5 @@ def ocr(payload: Mapping[str, Any]) -> Dict[str, Any]:
         engine_version = version("rapidocr")
     except Exception:
         engine_version = "unknown"
-    return {"width": width, "height": height, "items": items, "engine": "rapidocr", "version": engine_version}
+    return {"width": width, "height": height, "items": items, "engine": "rapidocr", "version": engine_version,
+            "device": GPU_NAMES.get(card, "processor")}

@@ -223,6 +223,9 @@ def build_parser() -> argparse.ArgumentParser:
     ocr.add_argument("--fast", action="store_true",
                      help="several readers side by side; the computer is busier while it runs")
     ocr.add_argument("--readers", type=int, default=0, metavar="N", help="fast, with exactly N readers")
+    ocr.add_argument("--gpu", action="store_true", default=None,
+                     help="read on the graphics card, when the OCR runtime can use one (see dugup doctor)")
+    ocr.add_argument("--no-gpu", dest="gpu", action="store_false", help="read on the processor even if config.toml says ocr_gpu = true")
     ocr.add_argument("--again", action="store_true",
                      help="with --folder: read its pictures and scans afresh, even where that was done before")
     ocr.add_argument("--reread-old", action="store_true",
@@ -690,6 +693,12 @@ def print_ocr_report(report, out: TextIO) -> None:
                + (f" [{report.readers} readers side by side]" if getattr(report, "readers", 1) > 1 else ""), out)
     if report.second_tries:
         safe_write(f"{report.second_tries:,} page(s) ran out of time and were read again, last, with more time.", out)
+    device = getattr(report, "device", "")
+    if getattr(report, "gpu_asked", False) and device and not device.startswith("graphics card"):
+        safe_write("A graphics card was asked for, but the OCR runtime installed here cannot use one, so the processor "
+                   "was used. `dugup doctor` says what to install.", out)
+    elif device.startswith("graphics card"):
+        safe_write(f"Read on the {device}.", out)
     if report.left:
         safe_write(f"{report.left:,} page(s) belong to files that could not be reached; they stay queued.", out)
     if report.held_back:
@@ -742,7 +751,8 @@ def cmd_ocr(args, env, out, environ, stop: Optional[threading.Event] = None, ins
                     service.settings = replace(service.settings, ocr_fast_readers=max(1, args.readers))
                 safe_write(f"Fast: {service.fast_readers()} reader(s) side by side. The computer will be busier until this ends.", out)
             report = service.run_ocr(stop, printer, roots, budget, args.retry_failed, args.reread_old,
-                                     folder=args.folder, fast=bool(args.fast or args.readers), again=args.again)
+                                     folder=args.folder, fast=bool(args.fast or args.readers), again=args.again,
+                                     gpu=args.gpu)
             printer.finish()
             if isinstance(report, Failure):
                 return _fail(report, out)

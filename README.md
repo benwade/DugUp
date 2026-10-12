@@ -128,6 +128,12 @@ number), and `--folder "D:\Some Folder\Scans"` reads just one folder. `--again` 
 folder afresh. In the window, "Read a folder now, fast..." does the same and takes over from a run that is
 going on: that run stops cleanly, and what it had not finished stays queued.
 
+OCR runs on the processor by default. A graphics card is an option: `dugup ocr --gpu`, or `ocr_gpu = true`
+in `config.toml`. It needs an OCR runtime that can use the card; on Windows that is `onnxruntime-directml`
+in place of `onnxruntime` (`pip uninstall onnxruntime`, then `pip install onnxruntime-directml`), which
+works with NVIDIA, AMD and Intel cards. `dugup doctor` says whether a card can be used. Where it cannot,
+the processor is used and the report says so.
+
 Levels let one folder be treated differently from the rest: `names` keeps file names only, `words` also
 reads the text of readable files, `ocr` also reads pictures and scans, `meaning` is everything (the default).
 A folder's level applies to everything below it until a folder further down has its own; `inherit` takes a

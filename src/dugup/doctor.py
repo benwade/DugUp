@@ -46,10 +46,24 @@ def _probe_fts5() -> bool:
         conn.close()
 
 
+def find_ocr_card() -> str:
+    """The graphics card route the OCR runtime here has, in words, or "". Asked in a short-lived process of
+    its own, so looking does not load the runtime into this one; any trouble counts as "none"."""
+    import subprocess
+    import sys
+    code = "from dugup.jobs import GPU_NAMES, gpu_provider; print(GPU_NAMES.get(gpu_provider(), ''))"
+    try:
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+        return done.stdout.strip().splitlines()[-1] if done.returncode == 0 and done.stdout.strip() else ""
+    except Exception:
+        return ""
+
+
 @dataclass
 class Environment:
     which: Callable[[str], Optional[str]] = shutil.which
     can_import: Callable[[str], bool] = lambda name: importlib.util.find_spec(name) is not None
+    ocr_card: Callable[[], str] = lambda: find_ocr_card()
     exists: Callable[[str], bool] = os.path.exists
     platform: str = sys.platform
     python_version: Tuple[int, int] = field(default_factory=lambda: sys.version_info[:2])
@@ -120,6 +134,11 @@ def run_checks(env: Optional[Environment] = None, data_dir: Optional[os.PathLike
     rapid = env.can_import("rapidocr")
     tess = find_tesseract(env)
     add("ocr: rapidocr", OK if rapid else WARN, "" if rapid else "not installed (pip install rapidocr onnxruntime)")
+    if rapid:
+        card = env.ocr_card()
+        add("ocr: graphics card", INFO, f"can be used: {card} (turn on with ocr_gpu = true, or dugup ocr --gpu)" if card else
+            "not usable with the OCR runtime installed (optional; on Windows: pip uninstall onnxruntime, "
+            "then pip install onnxruntime-directml)")
     add("ocr: tesseract", OK if tess else WARN, tess or "not found")
     if not rapid and not tess:
         add("ocr engine", FAIL, "no OCR engine available; scans and photos cannot be read")

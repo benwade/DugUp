@@ -72,7 +72,9 @@ def result_from_data(data: Any) -> "OcrResult | Failure":
 
 class SandboxOcrBackend:
     def __init__(self, sandbox: Sandbox, settings: Optional[Settings] = None, job: str = OCR,
-                 probe_job: str = PROBE, threads: int = 0) -> None:
+                 probe_job: str = PROBE, threads: int = 0, gpu: bool = False) -> None:
+        self.gpu = gpu              # ask the worker to use a graphics card; it uses the processor when it cannot
+        self.last_device = ""       # what the last page was read on, in words ("processor", "graphics card (...)")
         self.threads = threads      # processor threads this reader's engine may use; 0 leaves it to the engine
         self.sandbox = sandbox
         self.settings = settings or Settings()
@@ -109,12 +111,20 @@ class SandboxOcrBackend:
             return Failure(FailureReason.UNSUPPORTED,
                            f"OCR in language {language!r} is not set up (available: {', '.join(LANGUAGES)})")
         payload = {"path": path_to_data(path), "page": page, "dpi": self.settings.ocr_dpi,
-                   "max_pixels": self.settings.ocr_max_pixels, "threads": self.threads,
+                   "max_pixels": self.settings.ocr_max_pixels, "threads": self.threads, "gpu": self.gpu,
                    "region": None if region is None else [region.x0, region.y0, region.x1, region.y1]}
         answer = self.sandbox.run(self.job, payload, self._limits(time_limit), stop)
         if isinstance(answer, Failure):
             return answer
+        if isinstance(answer, dict) and answer.get("device"):
+            self.last_device = str(answer["device"])
         return result_from_data(answer)
+
+    def card(self, stop: Optional[StopSignal] = None) -> str:
+        """The graphics card route this machine's OCR runtime has, in words, or "" when it has none.
+        Asked of a worker, so the main program never loads the runtime."""
+        answer = self.sandbox.run("dugup.jobs:ocr_device", {}, self._limits(None), stop)
+        return str(answer.get("card") or "") if isinstance(answer, dict) else ""
 
     def probe(self, paths: Sequence[str], stop: Optional[StopSignal] = None) -> "List[Shape] | Failure":
         """The size of each picture and whether it names a camera. Used to order the queue; nothing is decoded."""

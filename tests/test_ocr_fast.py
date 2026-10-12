@@ -146,11 +146,16 @@ def sh(tmp_path, monkeypatch):
         (made.docs / "Sub" / name).write_bytes((made.docs / "a.png").read_bytes())
     made.extra = []
 
-    def more(self, count):
+    def more(self, count, gpu=False):
         made.extra = [ScriptedOcr(shapes={}) for _ in range(count)]
+        made.asked_gpu = gpu
         for reader in made.extra:
             reader.close = lambda: made.closed.append(1)
+            reader.last_device = made.device if gpu else "processor"
         return list(made.extra)
+
+    made.device = "processor"          # what a reader asked for the card says it read on
+    made.asked_gpu = None
 
     made.closed = []
     monkeypatch.setattr(service_module.LocalService, "_more_readers", more)
@@ -190,3 +195,67 @@ def test_requests_that_cannot_be_met_are_said(sh, tmp_path):
     code, text = sh.run("ocr", "--folder", str(tmp_path / "elsewhere"))
     assert code == 1 and "not inside an indexed folder" in text
     assert sh.ocr.calls == []
+
+
+# ---- the graphics card is an option ----------------------------------------------------------------------------
+
+def test_the_processor_is_the_default_and_the_card_is_asked_for(sh):
+    sh.ready()
+    code, text = sh.run("ocr")
+    assert code == 0 and "graphics card" not in text and sh.asked_gpu is None, "nothing about a card unless it is asked for"
+    sh.device = "graphics card (DirectML)"
+    code, text = sh.run("ocr", "--folder", str(sh.docs), "--again", "--gpu")
+    assert code == 0 and "Read on the graphics card (DirectML)." in text and sh.asked_gpu is True
+    assert len(sh.extra) == 1 and len(sh.closed) >= 1, "one reader on the card for an ordinary run, closed afterwards"
+
+
+def test_fast_on_the_card_uses_a_few_readers_and_the_setting_turns_it_on(sh):
+    sh.ready()
+    (sh.data / "config.toml").write_text("ocr_gpu = true\nocr_gpu_readers = 3\n", encoding="utf-8")
+    sh.device = "graphics card (CUDA)"
+    code, text = sh.run("ocr", "--fast")
+    assert code == 0 and sh.asked_gpu is True and len(sh.extra) == 3, "the setting asks for the card; fast uses ocr_gpu_readers"
+    assert "Read on the graphics card (CUDA)." in text
+    code, text = sh.run("ocr", "--folder", str(sh.docs), "--again", "--no-gpu")
+    assert code == 0 and "graphics card" not in text, "--no-gpu wins over the setting"
+
+
+def test_a_card_that_is_asked_for_but_cannot_be_used_is_said_and_the_work_is_done_all_the_same(sh):
+    sh.ready()
+    code, text = sh.run("ocr", "--gpu")           # the fake readers answer "processor": the runtime has no card route
+    assert code == 0 and "OCR read 5 of 5 waiting page(s)" in text
+    assert "A graphics card was asked for, but the OCR runtime installed here cannot use one" in text and "dugup doctor" in text
+
+
+def test_the_worker_picks_the_card_route_the_runtime_has(monkeypatch):
+    import sys
+    import types
+    from dugup import jobs
+
+    def runtime(*providers):
+        module = types.ModuleType("onnxruntime")
+        module.get_available_providers = lambda: list(providers)
+        monkeypatch.setitem(sys.modules, "onnxruntime", module)
+
+    runtime("CPUExecutionProvider")
+    assert jobs.gpu_provider() == "" and jobs.ocr_device({}) == {"card": "", "provider": ""}
+    runtime("DmlExecutionProvider", "CPUExecutionProvider")
+    assert jobs.gpu_provider() == "DmlExecutionProvider" and "DirectML" in jobs.ocr_device({})["card"]
+    runtime("CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider")
+    assert jobs.gpu_provider() == "CUDAExecutionProvider"
+    broken = types.ModuleType("onnxruntime")
+    monkeypatch.setitem(sys.modules, "onnxruntime", broken)
+    assert jobs.gpu_provider() == "", "a runtime that cannot answer counts as no card"
+
+
+def test_the_doctor_says_whether_a_card_can_be_used():
+    from dugup.doctor import Environment
+    lines = {name: detail for name, _, detail in _doctor(Environment(ocr_card=lambda: "graphics card (DirectML)"))}
+    assert "can be used: graphics card (DirectML)" in lines["ocr: graphics card"] and "ocr_gpu = true" in lines["ocr: graphics card"]
+    lines = {name: detail for name, _, detail in _doctor(Environment(ocr_card=lambda: ""))}
+    assert "optional" in lines["ocr: graphics card"] and "onnxruntime-directml" in lines["ocr: graphics card"]
+
+
+def _doctor(env):
+    from dugup import doctor
+    return [(check.name, check.status, check.detail) for check in doctor.run_checks(env)]

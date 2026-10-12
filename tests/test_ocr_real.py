@@ -234,3 +234,15 @@ def test_a_reader_kept_to_a_few_threads_reads_the_same_words(tmp_path, sandbox):
     free = SandboxOcrBackend(sandbox).read(path)
     assert not isinstance(limited, Failure), limited
     assert texts(limited) == texts(free) and "harbour" in texts(limited)
+
+
+def test_asking_for_a_card_this_runtime_does_not_have_reads_on_the_processor_and_says_so(tmp_path, sandbox):
+    from dugup.jobs import gpu_provider
+    if gpu_provider():
+        pytest.skip("this machine's OCR runtime can use a graphics card; the fallback cannot be shown here")
+    path = tmp_path / "sign.png"
+    save(sign(["Harbour Bakery", "open daily"]), path)
+    backend = SandboxOcrBackend(sandbox, gpu=True)
+    result = backend.read(path)
+    assert not isinstance(result, Failure) and "harbour" in texts(result)
+    assert backend.last_device == "processor" and backend.card() == ""

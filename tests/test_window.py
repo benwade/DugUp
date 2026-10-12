@@ -683,7 +683,7 @@ def fast_bench(tmp_path, monkeypatch):
     from dugup import service as service_module
     made = []
 
-    def more(self, count):
+    def more(self, count, gpu=False):
         made.extend(ScriptedOcr(shapes={}) for _ in range(count))
         return made[-count:] if count else []
 

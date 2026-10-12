@@ -71,6 +71,8 @@ class OcrReport:
     left: int = 0                  # pages whose file could not be reached; they stay queued
     held_back: int = 0             # pages in folders whose level stops short of OCR; not looked at
     readers: int = 1               # how many readers worked side by side
+    device: str = ""               # what the pages were read on, when the reader says ("processor", "graphics card (...)")
+    gpu_asked: bool = False        # a graphics card was asked for (it may not have been there to use)
     stopped: bool = False
     out_of_time: bool = False
     paused: str = ""               # why the run paused itself (a run of failures)
