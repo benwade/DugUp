@@ -266,7 +266,7 @@ class ChatServer:
             with self.opener(request, timeout=self.seconds) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
-            return Failure(FailureReason.OTHER, f"the model server refused the request (HTTP {exc.code})")
+            return Failure(FailureReason.OTHER, f"the model server refused the request (HTTP {exc.code})" + _server_said(exc))
         except (socket.timeout, TimeoutError):
             return Failure(FailureReason.TIMED_OUT, f"the model did not answer within {self.seconds:g} s")
         except (urllib.error.URLError, OSError) as exc:
@@ -284,6 +284,16 @@ class ChatServer:
 
     def close(self) -> None:
         pass
+
+
+def _server_said(exc) -> str:
+    """The server's own one-line reason, when it gave one. It describes the request, never a document."""
+    try:
+        error = json.loads(exc.read(4000).decode("utf-8", "replace")).get("error")
+        said = error.get("message") if isinstance(error, dict) else error
+        return f": {str(said)[:200]}" if said else ""
+    except Exception:
+        return ""
 
 
 def free_port() -> int:
@@ -315,7 +325,10 @@ class LocalRuntime:
 
     def arguments(self, port: int) -> List[str]:
         return [self.program, "--model", self.model_file, "--host", "127.0.0.1", "--port", str(port),
-                "--ctx-size", "2048", "--n-gpu-layers", str(self.gpu_layers)] + self.extra_args
+                "--ctx-size", "2048", "--n-gpu-layers", str(self.gpu_layers),
+                # the model's built-in prompt form, not the template engine: with the larger model the engine built a
+                # broken answer grammar and every request was refused (HTTP 400; found on Windows, 2026-10-12)
+                "--no-jinja"] + self.extra_args
 
     def _healthy(self, base: str) -> bool:
         try:

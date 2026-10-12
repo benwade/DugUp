@@ -269,6 +269,15 @@ def test_the_arguments_keep_the_server_on_this_machine():
     assert args[:3] == ["C:\\Tools\\llama-server.exe", "--model", "D:\\models\\small.gguf"]
     assert args[args.index("--host") + 1] == "127.0.0.1" and args[args.index("--port") + 1] == "5123"
     assert args[args.index("--n-gpu-layers") + 1] == "7" and args[-2:] == ["--threads", "4"]
+    assert "--no-jinja" in args, "without it the larger model's every request was refused (seen on Windows and Linux)"
+
+
+def test_a_refusal_carries_the_servers_own_reason(model):
+    model.reply = lambda body: (400, {"error": {"code": 400, "message": "Failed to initialize samplers"}})
+    answer = ChatServer(model.url).complete([], SCHEMA)
+    assert answer.reason is FailureReason.OTHER and "HTTP 400" in answer.detail and "Failed to initialize samplers" in answer.detail
+    model.reply = lambda body: (500, b"not json at all")
+    assert ChatServer(model.url).complete([], SCHEMA).detail.endswith("(HTTP 500)"), "no reason given: none invented"
 
 
 def test_a_server_that_cannot_load_its_model_is_a_stated_failure(tmp_path):
