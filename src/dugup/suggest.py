@@ -195,6 +195,14 @@ def _walk(folders: Dict[str, _Folder], judge, skip: Sequence[str] = ()) -> List[
     return out
 
 
+def safe_folders(root: str, files: Iterable[Tuple[str, int]],
+                 extensions: Optional[Mapping[str, FileKind]] = None) -> List[str]:
+    """The folders below root that are safe to skip, as paths below the root with "/" (the first pass of
+    suggest_excludes on its own)."""
+    everything = _tree(root, list(files), extensions)
+    return [key for key, _ in _walk(everything, lambda key: _judge_safe(key, everything[key]))]
+
+
 def suggest_excludes(root: str, files: Iterable[Tuple[str, int]],
                      extensions: Optional[Mapping[str, FileKind]] = None) -> List[Suggestion]:
     """Candidates for --exclude, the safest and largest first. `files` is (path, size) for every file below root.

@@ -88,6 +88,11 @@ def progress_text(p: Progress) -> str:
         return f"[scan] looking through {p.root}"
     if p.phase == "record":
         return f"[scan] recording changes: {p.done:,} of {p.total:,}"
+    if p.phase == "estimate":
+        left = p.remaining_seconds
+        left_text = "" if left is None else f" and take about {format_seconds(left)} more"
+        return (f"[estimate] after {p.done:,} of {p.total:,} files: at this rate the index would end near "
+                f"{p.projected_bytes / 1048576:,.0f} MB{left_text}. Ctrl+C stops; what is done is kept.")
     if p.phase == "download":
         left = p.remaining_seconds
         left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
@@ -126,6 +131,10 @@ class ProgressPrinter:
         now = self.timer()
         fresh = p.phase != self._last_phase or p.done >= p.total > 0
         if not fresh and self._last_time is not None and now - self._last_time < self.interval:
+            return
+        if p.phase == "estimate":       # a line of its own that stays on the screen
+            self.finish()
+            safe_write(progress_text(p), self.stream)
             return
         self._last_time, self._last_phase = now, p.phase
         line = progress_text(p)
@@ -172,6 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
     suggest = roots_sub.add_parser("suggest", parents=[common],
                                    help="look through a folder and list what may not be worth indexing (changes nothing)")
     suggest.add_argument("path")
+    look = roots_sub.add_parser("survey", parents=[common],
+                                help="what a folder holds and what indexing it would cost, folder by folder (opens no file, changes nothing)")
+    look.add_argument("path")
+    look.add_argument("--rows", type=int, default=30, help="how many folders to list, largest first (default 30)")
     suggest.add_argument("--apply-safe", action="store_true",
                          help="skip everything in the 'safe to skip' list (downloaded requirements, tool data)")
     exclude = roots_sub.add_parser("exclude", parents=[common], help="skip more files or folders in an indexed folder")
@@ -332,6 +345,57 @@ def _change_excludes(service: LocalService, root: Root, patterns: List[str], und
     return 0
 
 
+def _size_text(count: float) -> str:
+    """A size a person can compare at a glance: MB below 1,000 MB, GB above."""
+    mb = count / 1048576
+    if mb >= 1000:
+        return f"{mb / 1024:,.1f} GB"
+    return f"{mb:,.0f} MB" if mb >= 10 else f"{mb:,.1f} MB"
+
+
+def print_survey(found, rows: int, out: TextIO) -> None:
+    from .survey import CODE, DOCUMENTS, LEVELS, MEDIA, OTHER, PICTURES, TEXT
+    shown = list(found.rows[:rows])
+    rest = found.rows[rows:]
+    name_width = min(38, max([10] + [len(r.folder) for r in shown]))
+
+    def what(row, label):
+        g = row.groups
+        return (f"{shorten(label, name_width):<{name_width}} {row.files:>9,} {_size_text(row.bytes):>9} "
+                f"{g[DOCUMENTS]:>8,} {g[TEXT]:>8,} {g[PICTURES]:>8,} {g[CODE]:>8,} {g[MEDIA]:>7,} {g[OTHER]:>8,} "
+                f"{row.cloud_only:>8,} {row.not_worth:>9,}")
+
+    def cost(row, label):
+        return f"{shorten(label, name_width):<{name_width}} " + " ".join(f"{_size_text(c):>15}" for c in row.cost(found.rates))
+
+    safe_write("", out)
+    safe_write(f"What is in {found.root}", out)
+    safe_write(f"{'folder':<{name_width}} {'files':>9} {'size':>9} {'docs':>8} {'text':>8} {'pictures':>8} {'code':>8} "
+               f"{'media':>7} {'other':>8} {'cloud':>8} {'not worth':>9}", out)
+    for row in shown:
+        safe_write(what(row, row.folder), out)
+    if rest:
+        safe_write(f"  ... and {len(rest):,} smaller folder(s), included in the total. --rows {len(found.rows)} lists them all.", out)
+    safe_write(what(found.total, "TOTAL"), out)
+    safe_write("  docs: PDF and office files. cloud: files kept in the cloud, not on this machine; they are listed by "
+               "name and never opened.", out)
+    safe_write("  not worth: inside downloaded requirements and tool data (dugup roots suggest names them). "
+               "Code and media are counted; DugUp does not read them yet.", out)
+    safe_write("", out)
+    safe_write("What the index would grow by, at each level (each includes the one before)", out)
+    safe_write(f"{'folder':<{name_width}} " + " ".join(f"{level:>15}" for level in LEVELS), out)
+    for row in shown:
+        safe_write(cost(row, row.folder), out)
+    safe_write(cost(found.total, "TOTAL"), out)
+    basis = ("worked out from what your own index weighs for each file it has read" if found.rates.learned
+             else "starting guesses (there is not enough of an index yet to learn from)")
+    safe_write(f"  These are rough estimates, {basis}. Meaning search is not built yet; its column is for planning.", out)
+    from .survey import HERE
+    closer = next((r.folder for r in shown if r.folder != HERE), None)
+    if closer is not None:
+        safe_write(f"  To look closer at one folder: dugup roots survey {quote(os.path.join(found.root, closer))}", out)
+
+
 def print_suggestions(found: List[Suggestion], path: str, is_root: bool, out: TextIO) -> None:
     if not found:
         safe_write("Nothing stands out as not worth indexing.", out)
@@ -362,7 +426,7 @@ def print_suggestions(found: List[Suggestion], path: str, is_root: bool, out: Te
 
 
 def cmd_roots(args, env, out, environ) -> int:
-    service = _service(args, environ, out, create=args.roots_command in ("add", "suggest"))
+    service = _service(args, environ, out, create=args.roots_command in ("add", "suggest", "survey"))
     if service is None:
         return 1
     with service:
@@ -382,6 +446,13 @@ def cmd_roots(args, env, out, environ) -> int:
             if len(service.list_roots()) == 1:
                 space_hint(service.layout, service.settings, out)
             safe_write("Next: dugup index", out)
+            return 0
+        if args.roots_command == "survey":
+            safe_write(f"Looking through {args.path} (no file is opened, nothing is changed) ...", out)
+            found = service.survey(args.path)
+            if isinstance(found, Failure):
+                return _fail(found, out)
+            print_survey(found, max(1, args.rows), out)
             return 0
         if args.roots_command == "suggest":
             safe_write(f"Looking through {args.path}" + ("" if args.apply_safe else " (nothing is changed)") + " ...", out)

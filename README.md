@@ -92,6 +92,7 @@ The command line:
 
     dugup doctor
     dugup roots add "D:\Some Folder"
+    dugup roots survey "D:\Some Folder"               (what is in it and what indexing would cost; opens no file)
     dugup roots suggest "D:\Some Folder"              (what may not be worth indexing; changes nothing)
     dugup roots suggest "D:\Some Folder" --apply-safe (skip downloaded requirements and tool data)
     dugup roots exclude "D:\Some Folder" /Trash Temp  (skip anything else; --undo takes it back)

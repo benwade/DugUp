@@ -32,6 +32,8 @@ from .shapes import (POLICY_NAMES_ONLY, Failure, FailureReason, FileRecord, File
 
 log = logging.getLogger("dugup.indexer")
 
+ESTIMATE_FIRST = 2000    # after this many files of a large run, say where the index is heading ...
+ESTIMATE_STEP = 5        # ... and again at 5 times as many, and so on
 OFFLINE_NOTE = "cloud placeholder: the content is not on this machine, so it was not read"
 POLICY_NOTE = "names only: this folder's policy keeps file names and no text"
 READERS_GENERATION = 2   # raise when the extractors change what they produce, so old text is offered a re-read
@@ -89,6 +91,7 @@ class Progress:
     failed: int = 0
     elapsed: float = 0.0
     current: str = ""     # the file being read; for display only, never logged
+    projected_bytes: float = 0.0   # phase "estimate": where the index would end up if the rest is like the start
 
     @property
     def percent(self) -> float:
@@ -169,7 +172,9 @@ class Indexer:
     def __init__(self, store: Store, source: FileSource, extractor: Extractor, settings: Optional[Settings] = None,
                  progress: Optional[Callable[[Progress], None]] = None, clock: Callable[[], float] = time.time,
                  timer: Callable[[], float] = time.monotonic, extra_excludes: Sequence[str] = (),
-                 room: Optional[Callable[[], str]] = None) -> None:
+                 room: Optional[Callable[[], str]] = None,
+                 size_now: Optional[Callable[[], int]] = None) -> None:
+        self.size_now = size_now   # the index's size on disk in bytes, for the early estimate; None: no estimate
         self.room = room         # says why nothing more may be written (the drive is nearly full, or the
                                  # index reached its spending limit); "" when there is room
         self.store = store
@@ -379,6 +384,15 @@ class Indexer:
         row_id = self.store.upsert_file(self._record_for(root, entry))
         self.store.set_pages(row_id, ())
 
+    def _size(self) -> int:
+        """The index's size now, or -1 when it cannot be told."""
+        if self.size_now is None:
+            return -1
+        try:
+            return int(self.size_now())
+        except OSError:
+            return -1
+
     def _room(self) -> str:
         return "" if self.room is None else str(self.room() or "")
 
@@ -397,13 +411,15 @@ class Indexer:
         """
         total = int(dict(self.store.state_counts(root.path)).get(FileState.PENDING.value, 0))
         started = self.timer()
+        size_at_start = self._size()
+        estimate_at = ESTIMATE_FIRST if total >= ESTIMATE_FIRST * 2 else 0
         done = failed = in_a_row = 0
         later: List[FileRecord] = []
         cursor = 0
 
         def one(record: FileRecord, patient: bool) -> Optional[bool]:
             """None to carry on, else what read_pending returns."""
-            nonlocal done, failed, in_a_row
+            nonlocal done, failed, in_a_row, estimate_at
             if _stopped(stop):
                 return False
             if (done + len(later)) % ROOM_EVERY == 0:
@@ -418,6 +434,13 @@ class Indexer:
                 later.append(record)
             else:
                 done += 1
+                if estimate_at and done >= estimate_at:
+                    grown = self._size() - size_at_start
+                    if size_at_start >= 0 and grown > 0:
+                        projected = self._size() + grown / done * (total - done)
+                        self._tell(Progress("estimate", root.path, done, total, failed, self.timer() - started,
+                                            projected_bytes=projected))
+                    estimate_at = estimate_at * ESTIMATE_STEP if estimate_at * ESTIMATE_STEP < total else 0
                 failed += state is FileState.FAILED
             in_a_row = in_a_row + 1 if self._last_reason in SUSPECT else 0
             limit = self.settings.reader_failures_in_a_row

@@ -295,6 +295,21 @@ class LocalService:
             return listing
         return suggest_excludes(target, ((e.path, e.size) for e in listing.entries), self.settings.extensions)
 
+    def survey(self, path: str, stop: Optional[StopSignal] = None):
+        """What a folder holds, one row for each folder directly below it, and what indexing it would cost
+        (survey.Survey, or a Failure). Nothing is opened, indexed or changed. Rules of a folder that is
+        already indexed are NOT applied: the point is to see everything, skipped or not."""
+        from . import survey as surveying
+        target = os.path.abspath(os.path.expanduser(path))
+        listing = self.source.scan(target, ScanRules(), stop)
+        if isinstance(listing, Failure):
+            return listing
+        counts = dict(self.store.state_counts())
+        rates = surveying.learn_rates(self.layout.index_bytes(), self.store.file_count(),
+                                      int(counts.get(FileState.DONE.value, 0)), self.store.segment_count())
+        return surveying.survey(target, ((e.path, e.size, e.offline) for e in listing.entries),
+                                self.settings.extensions, rates)
+
     def _apply_policy(self, root: Root) -> None:
         """Make what is stored fit the root's policy. Tightening purges; loosening queues the files for reading."""
         if root.policy == POLICY_NAMES_ONLY:
@@ -382,7 +397,8 @@ class LocalService:
                             progress(p)
 
                     indexer = Indexer(store, self.source, self.extractor, self.settings, tell, self.clock,
-                                      extra_excludes=(str(self.layout.root),), room=self.room)
+                                      extra_excludes=(str(self.layout.root),), room=self.room,
+                                      size_now=self.layout.index_bytes)
                     report = indexer.run(stop, roots, on_settings_change, retry_failed)
                     self.last_report = report
                     return report
