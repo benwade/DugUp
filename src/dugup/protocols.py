@@ -315,6 +315,9 @@ class Store(Protocol):
 
     def purge_folder(self, prefix: str, case_insensitive: Optional[bool] = None, thorough: bool = False) -> int: ...
 
+    def compact(self) -> None:
+        """Give back the disk space that removed and rewritten text left behind. Changes nothing that is stored."""
+
     def close(self) -> None: ...
 
 

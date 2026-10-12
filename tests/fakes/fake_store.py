@@ -502,6 +502,9 @@ class FakeStore:
             i = j
         return out
 
+    def compact(self) -> None:
+        pass
+
     # -- purge
     def _under(self, path: str, base: str, fold) -> bool:
         path, base = fold(path), fold(base)

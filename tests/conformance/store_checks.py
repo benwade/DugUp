@@ -653,6 +653,21 @@ def check_pages_read_by_another_engine_can_be_requeued(s):
     require(dict(s.ocr_engines()) == {"fake-ocr 2.0": 1}, "pages of a missing file are not counted")
 
 
+def check_compacting_changes_nothing_that_is_stored(s):
+    row = _scan(s)
+    s.replace_segments(row, [SegmentIn(1, 0, SegmentKind.TEXT, "typed needle")])
+    s.save_ocr(row, 2, _read(("scanned haystack", (10, 10, 90, 20))))
+    add(s, "/d/gone.txt", "soon removed")
+    s.purge_folder("/d/gone.txt")
+    s.compact()
+    require(s.search_words("needle").total == 1 and s.search_words("removed").total == 0, "compacting must keep what is stored, and only that")
+    ev = s.search_words("haystack").rows[0].evidence[0]
+    require(ev.box == Box(10, 10, 90, 20) and s.get_passage(ev) is not None, "evidence must still work after compacting")
+    require([t.page for t in s.ocr_queue()] == [3], "the OCR queue is untouched")
+    add(s, "/d/later.txt", "written afterwards")
+    require(s.search_words("afterwards").total == 1, "the store must keep working after compacting")
+
+
 # ---- roots ---------------------------------------------------------------------------------------------
 
 def check_roots_round_trip_and_keep_their_status(s):
@@ -716,6 +731,7 @@ CHECKS = {
     "ocr_text_is_searchable_with_a_box": check_ocr_text_is_searchable_with_a_box,
     "ocr_blank_and_failed_pages_leave_the_queue": check_ocr_blank_and_failed_pages_leave_the_queue,
     "reread_clears_ocr": check_reread_clears_ocr,
+    "compacting_changes_nothing_that_is_stored": check_compacting_changes_nothing_that_is_stored,
     "a_deferred_page_stays_queued_and_is_marked": check_a_deferred_page_stays_queued_and_is_marked,
     "replace_text_keeps_what_ocr_read": check_replace_text_keeps_what_ocr_read,
     "pages_read_by_another_engine_can_be_requeued": check_pages_read_by_another_engine_can_be_requeued,

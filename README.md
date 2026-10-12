@@ -62,6 +62,7 @@ It reads printed words well. Drawn or handwritten lettering and blurred photos a
     dugup search invoice 2024
     dugup status --attention
     dugup space                                       (what the index uses; --limit MB sets a spending limit)
+    dugup space --compact                             (give back space left by removed and re-read text)
 
 `python -m dugup ...` does the same. The index lives in one per-user data folder (`%LOCALAPPDATA%\DugUp`
 on Windows, `~/.local/share/DugUp` on Linux); add `--data-dir FOLDER` to any command to keep it somewhere

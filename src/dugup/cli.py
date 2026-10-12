@@ -191,6 +191,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="read again the pages that an older version of the OCR engine read")
 
     space = sub.add_parser("space", parents=[common], help="how much disk the index uses, and its spending limit")
+    space.add_argument("--compact", action="store_true",
+                       help="give back the disk space that removed and re-read text left in the index")
     space.add_argument("--limit", type=int, default=None, metavar="MB",
                        help="stop indexing and OCR when the index is larger than this many megabytes (0: no limit)")
 
@@ -491,6 +493,9 @@ def cmd_index(args, env, out, environ, stop: Optional[threading.Event] = None, i
                 safe_write("  dugup index --keep     keep what is stored; only new and changed files use the new settings", out)
                 return 1
             print_report(report, out, service.settings.missing_retention_days)
+            if args.reread and not report.stopped and not report.paused:
+                safe_write("Reading everything again leaves unused space inside the index. To give it back: "
+                           "dugup space --compact", out)
             if report.paused:
                 safe_write(f"Indexing paused itself: {report.paused}.", out)
                 safe_write("Run `dugup index` again to go on; `dugup index --retry-failed` also retries what failed.", out)
@@ -760,6 +765,14 @@ def cmd_space(args, env, out, environ) -> int:
             set_config_value(layout.config, "max_index_mb", args.limit)
             limit = args.limit
             safe_write(f"Saved in {layout.config}", out)
+        if args.compact:
+            safe_write("Compacting the index (this rewrites the whole file; it can take a minute) ...", out)
+            result = service.compact()
+            if isinstance(result, Failure):
+                return _fail(result, out)
+            saved = result["before"] - result["after"]
+            safe_write(f"Compacted: {megabytes(result['before'])} before, {megabytes(result['after'])} after"
+                       + (f" ({megabytes(saved)} given back)." if saved > 0 else " (there was nothing to give back)."), out)
         used = layout.index_bytes()
         free = layout.free_bytes()
         safe_write(f"Data folder: {layout.root}", out)

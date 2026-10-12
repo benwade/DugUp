@@ -559,3 +559,48 @@ def test_a_paused_index_run_says_so(sh, monkeypatch):
     sh.run("roots", "add", str(sh.docs))
     code, text = sh.run("index")
     assert code == 1 and "Indexing paused itself: 2 files in a row" in text and "dugup index --retry-failed" in text
+
+
+# ---- compacting ----------------------------------------------------------------------------------------------
+
+def test_compacting_gives_space_back_and_keeps_the_index(sh):
+    for n in range(40):
+        (sh.docs / f"big{n}.txt").write_text(f"file {n} " + " ".join(f"word{n}x{i}" for i in range(4000)), encoding="utf-8")
+    sh.run("roots", "add", str(sh.docs))
+    assert sh.run("index")[0] == 0
+    assert sh.run("roots", "exclude", str(sh.docs), "big*.txt")[0] == 0     # skipped by choice: their text is deleted
+    before = DataLayout(sh.data).index_bytes()
+    code, text = sh.run("space", "--compact")
+    after = DataLayout(sh.data).index_bytes()
+    assert code == 0 and "Compacted: " in text and "given back" in text
+    assert after < before / 2, "most of the file was free space"
+    assert "notes.txt" in sh.run("search", "needle")[1]
+    code, text = sh.run("space", "--compact")
+    assert code == 0 and "nothing to give back" in text, "doing it again is harmless"
+
+
+def test_compacting_needs_room_for_a_copy_and_respects_the_lock(tmp_path, monkeypatch):
+    layout = DataLayout(tmp_path / "data").ensure()
+    with LocalService(layout, Settings(min_free_mb=10)) as service:
+        service.store.file_count()
+        monkeypatch.setattr(DataLayout, "free_bytes", lambda self: 5 * 1024 * 1024)
+        refused = service.compact()
+        assert isinstance(refused, Failure) and "room for a full copy" in refused.detail
+        monkeypatch.setattr(DataLayout, "free_bytes", lambda self: None)
+        assert not isinstance(service.compact(), Failure), "a drive that cannot be measured does not block it"
+        with LocalService(layout) as other:
+            assert other._lock.acquire()
+            try:
+                busy = service.compact()
+                assert isinstance(busy, Failure) and busy.reason is FailureReason.BUSY
+            finally:
+                other._lock.release()
+        assert service.search("anything").total == 0, "the service still reads afterwards"
+
+
+def test_a_full_reread_points_at_compacting(sh):
+    sh.run("roots", "add", str(sh.docs))
+    assert "space --compact" not in sh.run("index")[1]
+    (sh.data / "config.toml").write_text("chunk_chars = 900\n", encoding="utf-8")
+    code, text = sh.run("index", "--reread")
+    assert code == 0 and "dugup space --compact" in text

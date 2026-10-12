@@ -340,6 +340,36 @@ class LocalService:
         finally:
             self._run_guard.release()
 
+    def compact(self) -> "Mapping[str, int] | Failure":
+        """Give back the space that removed and rewritten text left in the index. Returns its size before
+        and after. It writes, so it takes the run lock; it needs room for a full copy while it works."""
+        if not self._run_guard.acquire(blocking=False):
+            return Failure(FailureReason.BUSY, "indexing or OCR is going on in this program")
+        try:
+            if not self._lock.acquire():
+                return Failure(FailureReason.BUSY, "another program is writing to this data folder right now")
+            try:
+                before = self.layout.index_bytes()
+                free = self.layout.free_bytes()
+                floor = self.settings.min_free_mb * 1024 * 1024
+                if free is not None and free < before + floor:
+                    return Failure(FailureReason.OTHER,
+                                   f"compacting needs room for a full copy of the index while it works "
+                                   f"(about {before / 1048576:,.0f} MB) and the drive has {free / 1048576:,.0f} MB free")
+                if self._store is not None:      # one connection only while the file is rebuilt
+                    self._store.close()
+                    self._store = None
+                store = self._open_store()
+                try:
+                    store.compact()
+                finally:
+                    store.close()
+                return {"before": before, "after": self.layout.index_bytes()}
+            finally:
+                self._lock.release()
+        finally:
+            self._run_guard.release()
+
     def is_indexing(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
