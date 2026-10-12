@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import time
+import os
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -28,7 +29,7 @@ from .kinds import classify
 from .protocols import (OCR_FAILED, OCR_WAITING, Extraction, Extractor, FileEntry, FileSource, ScanRules, Skipped,
                         StopSignal, Store)
 from .settings import Settings
-from .shapes import (POLICY_NAMES_ONLY, Failure, FailureReason, FileRecord, FileState, Root)
+from .shapes import (LEVEL_NAMES, POLICY_NAMES_ONLY, level_for, Failure, FailureReason, FileRecord, FileState, Root)
 
 log = logging.getLogger("dugup.indexer")
 
@@ -173,7 +174,8 @@ class Indexer:
                  progress: Optional[Callable[[Progress], None]] = None, clock: Callable[[], float] = time.time,
                  timer: Callable[[], float] = time.monotonic, extra_excludes: Sequence[str] = (),
                  room: Optional[Callable[[], str]] = None,
-                 size_now: Optional[Callable[[], int]] = None) -> None:
+                 size_now: Optional[Callable[[], int]] = None, case_insensitive: Optional[bool] = None) -> None:
+        self.case_insensitive = (os.name == "nt") if case_insensitive is None else case_insensitive
         self.size_now = size_now   # the index's size on disk in bytes, for the early estimate; None: no estimate
         self.room = room         # says why nothing more may be written (the drive is nearly full, or the
                                  # index reached its spending limit); "" when there is room
@@ -277,7 +279,7 @@ class Indexer:
         return ScanRules(tuple(root.include), tuple(root.exclude) + tuple(extra))
 
     def _fresh(self, root: Root, entry: FileEntry) -> Tuple[FileState, str]:
-        if root.policy == POLICY_NAMES_ONLY:
+        if level_for(root, entry.path, self.case_insensitive) == LEVEL_NAMES:
             return FileState.SKIPPED, POLICY_NOTE
         if entry.offline:
             return FileState.SKIPPED, OFFLINE_NOTE

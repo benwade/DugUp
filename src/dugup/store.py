@@ -211,8 +211,13 @@ def _migration_5(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO fts(fts) VALUES('rebuild')")
 
 
+def _migration_6(conn: sqlite3.Connection) -> None:
+    """A level for folders inside a root: [[folder below the root, level], ...] as JSON."""
+    conn.execute("ALTER TABLE roots ADD COLUMN levels TEXT NOT NULL DEFAULT '[]'")
+
+
 MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3, _migration_4,
-                                                          _migration_5]
+                                                          _migration_5, _migration_6]
 OCR_ORDER = 1_000_000   # the order number of a page's OCR text, after anything a text layer gave
 SCHEMA_VERSION = len(MIGRATIONS)  # informational; the live value is len(MIGRATIONS)
 
@@ -1085,7 +1090,7 @@ class SqliteStore:
     def _root(row: sqlite3.Row) -> Root:
         return Root(decode_path(row["path"], row["path_raw"]), row["policy"], tuple(json.loads(row["include"])),
                     tuple(json.loads(row["exclude"])), bool(row["reachable"]), row["last_scan"],
-                    tuple(json.loads(row["warnings"])))
+                    tuple(json.loads(row["warnings"])), tuple((str(f), str(l)) for f, l in json.loads(row["levels"])))
 
     def list_roots(self) -> List[Root]:
         return [self._root(r) for r in self.conn.execute("SELECT * FROM roots ORDER BY path")]
@@ -1096,10 +1101,10 @@ class SqliteStore:
         dump = lambda items: json.dumps(list(items), ensure_ascii=False)
         with self.transaction():
             self.conn.execute(
-                "INSERT INTO roots(path, path_raw, policy, include, exclude) VALUES(?,?,?,?,?) "
+                "INSERT INTO roots(path, path_raw, policy, include, exclude, levels) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(path) DO UPDATE SET policy=excluded.policy, include=excluded.include, "
-                "exclude=excluded.exclude",
-                (text, raw, root.policy, dump(root.include), dump(root.exclude)))
+                "exclude=excluded.exclude, levels=excluded.levels",
+                (text, raw, root.policy, dump(root.include), dump(root.exclude), dump(list(pair) for pair in root.levels)))
 
     def note_scan(self, path: str, reachable: bool, when: float, warnings: Sequence[str] = ()) -> None:
         text, _ = encode_path(path)

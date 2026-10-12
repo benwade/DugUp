@@ -357,15 +357,16 @@ class FakeStore:
 
     def _merged(self, old, root: Root) -> Root:
         if old is None:
-            return Root(root.path, root.policy, tuple(root.include), tuple(root.exclude))
+            return Root(root.path, root.policy, tuple(root.include), tuple(root.exclude), levels=tuple(root.levels))
         return Root(root.path, root.policy, tuple(root.include), tuple(root.exclude), old.reachable, old.last_scan,
-                    old.warnings)
+                    old.warnings, tuple(root.levels))
 
     def note_scan(self, path: str, reachable: bool, when: float, warnings=()) -> None:
         if path not in self.roots:
             raise StoreError("that folder is not one of the roots")
         old = self.roots[path]
-        self.roots[path] = Root(old.path, old.policy, old.include, old.exclude, bool(reachable), when, tuple(warnings))
+        self.roots[path] = Root(old.path, old.policy, old.include, old.exclude, bool(reachable), when, tuple(warnings),
+                                old.levels)
 
     def remove_root(self, path: str) -> bool:
         return self.roots.pop(path, None) is not None

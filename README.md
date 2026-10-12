@@ -94,6 +94,7 @@ The command line:
     dugup roots add "D:\Some Folder"
     dugup roots survey "D:\Some Folder"               (what is in it and what indexing would cost; opens no file)
     dugup roots suggest "D:\Some Folder"              (what may not be worth indexing; changes nothing)
+    dugup roots level "D:\Some Folder\Books" names    (how far indexing goes there: names, words, ocr or meaning)
     dugup roots suggest "D:\Some Folder" --apply-safe (skip downloaded requirements and tool data)
     dugup roots exclude "D:\Some Folder" /Trash Temp  (skip anything else; --undo takes it back)
     dugup index
@@ -108,6 +109,12 @@ The index keeps each piece of text once, compressed (`text_compression = "zlib"`
 turns it off for new text). Searching is unaffected: the word index is built from the text as written. An
 index from an earlier version is converted the first time it is opened, which can take a minute on a
 large one; run `dugup space --compact` afterwards to hand the freed space back to the disk.
+
+Levels let one folder be treated differently from the rest: `names` keeps file names only, `words` also
+reads the text of readable files, `ocr` also reads pictures and scans, `meaning` is everything (the default).
+A folder's level applies to everything below it until a folder further down has its own; `inherit` takes a
+level away again. Lowering a folder to `names` removes the text kept for it at once. To leave a folder out
+completely, use `dugup roots exclude`.
 
 `python -m dugup ...` does the same. The index lives in one per-user data folder (`%LOCALAPPDATA%\DugUp`
 on Windows, `~/.local/share/DugUp` on Linux); add `--data-dir FOLDER` to any command to keep it somewhere

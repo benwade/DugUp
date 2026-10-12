@@ -26,7 +26,7 @@ from .filesource import SUGGESTED_EXCLUDES
 from .indexer import KEEP, REFUSE, REREAD, IndexReport, Progress
 from .protocols import WARN_MASS_LOSS, WARN_ROOT_EMPTY
 from .service import LocalService
-from .shapes import POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow
+from .shapes import LEVEL_WORDS, LEVELS, POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow
 from .store import SORT_COLUMNS, StoreError
 from .suggest import SAFE, Suggestion
 
@@ -181,6 +181,12 @@ def build_parser() -> argparse.ArgumentParser:
     suggest = roots_sub.add_parser("suggest", parents=[common],
                                    help="look through a folder and list what may not be worth indexing (changes nothing)")
     suggest.add_argument("path")
+    level = roots_sub.add_parser("level", parents=[common],
+                                 help="how far indexing goes in one folder (a subfolder's level wins over the folder above it)")
+    level.add_argument("path", help="an indexed folder, or any folder inside one")
+    level.add_argument("level", choices=list(LEVELS) + ["inherit"],
+                       help="names: file names only. words: also the text of readable files. ocr: also the words in "
+                            "pictures and scans. meaning: everything (the default). inherit: follow the folder above again")
     look = roots_sub.add_parser("survey", parents=[common],
                                 help="what a folder holds and what indexing it would cost, folder by folder (opens no file, changes nothing)")
     look.add_argument("path")
@@ -447,6 +453,19 @@ def cmd_roots(args, env, out, environ) -> int:
                 space_hint(service.layout, service.settings, out)
             safe_write("Next: dugup index", out)
             return 0
+        if args.roots_command == "level":
+            result = service.set_level(args.path, None if args.level == "inherit" else args.level)
+            if isinstance(result, Failure):
+                return _fail(result, out)
+            where = os.path.join(str(result["root"]), *str(result["folder"]).split("/")) if result["folder"] else result["root"]
+            safe_write(f"{where}: level {result['level']}" + (" (follows the folder above)" if args.level == "inherit" else ""), out)
+            if result["purged"]:
+                safe_write(f"  The text kept for {result['purged']:,} file(s) was removed; their names stay searchable.", out)
+            if result["queued"]:
+                safe_write(f"  {result['queued']:,} file(s) now wait to be read. Next: dugup index", out)
+            if result["level"] == LEVEL_WORDS:
+                safe_write("  Pictures and scanned pages here are no longer read (text already read from them is kept).", out)
+            return 0
         if args.roots_command == "survey":
             safe_write(f"Looking through {args.path} (no file is opened, nothing is changed) ...", out)
             found = service.survey(args.path)
@@ -498,6 +517,8 @@ def _print_root(root: Root, status, out: TextIO) -> None:
     state = "" if root.reachable else "  [NOT AVAILABLE at the last scan; its files are kept]"
     safe_write(f"{root.path}{state}", out)
     safe_write(f"  policy {root.policy}; {total:,} file(s); last scan {format_date(root.last_scan)}", out)
+    for folder, level in root.levels:
+        safe_write(f"  level {level}: {folder or '(the whole folder)'}", out)
     if root.exclude:
         safe_write(f"  skipping: {', '.join(root.exclude)}", out)
     if root.include:
@@ -643,6 +664,9 @@ def print_ocr_report(report, out: TextIO) -> None:
         safe_write(f"{report.second_tries:,} page(s) ran out of time and were read again, last, with more time.", out)
     if report.left:
         safe_write(f"{report.left:,} page(s) belong to files that could not be reached; they stay queued.", out)
+    if report.held_back:
+        safe_write(f"{report.held_back:,} page(s) are in folders whose level stops at words; they were left alone "
+                   "(dugup roots level <folder> ocr changes that).", out)
     if report.failed:
         safe_write("See what failed: dugup status --attention    Try those again: dugup ocr --retry-failed", out)
     if report.not_ready is not None:

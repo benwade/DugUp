@@ -17,7 +17,7 @@ import logging
 import os
 import threading
 import time
-from typing import Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import doctor as doctor_module
 from . import models
@@ -35,7 +35,7 @@ from .sandbox import SubprocessSandbox
 from .settings import Settings
 from dataclasses import replace
 
-from .shapes import (SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
+from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, level_for, level_reaches, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
                      Passage, Root, SearchPage)
 from .store import SqliteStore
 from .suggest import Suggestion, suggest_excludes
@@ -264,7 +264,8 @@ class LocalService:
                                    "one file must belong to one root")
         else:
             path = old.path   # keep the spelling the files were stored under
-        wanted = Root(path, root.policy, tuple(root.include), tuple(root.exclude))
+        levels = tuple(root.levels) if root.levels or old is None else old.levels   # rules and policy changes keep them
+        wanted = Root(path, root.policy, tuple(root.include), tuple(root.exclude), levels=levels)
         with self.store.transaction():
             self.store.set_root(wanted)
             if old is not None and old.policy != wanted.policy:
@@ -310,18 +311,48 @@ class LocalService:
         return surveying.survey(target, ((e.path, e.size, e.offline) for e in listing.entries),
                                 self.settings.extensions, rates)
 
-    def _apply_policy(self, root: Root) -> None:
-        """Make what is stored fit the root's policy. Tightening purges; loosening queues the files for reading."""
-        if root.policy == POLICY_NAMES_ONLY:
-            for record in self.store.list_files(prefix=root.path, case_insensitive=self.case_insensitive):
+    def _apply_policy(self, root: Root, below: Optional[str] = None) -> Tuple[int, int]:
+        """Make what is stored fit the level of every file below a folder (the whole root when `below` is None).
+        Where the level is now "names", the text is removed; where it is no longer, the files wait to be read.
+        Returns (files whose text was removed, files put in the queue)."""
+        purged = queued = 0
+        for record in self.store.list_files(prefix=below or root.path, case_insensitive=self.case_insensitive):
+            names_only = level_for(root, record.path, self.case_insensitive) == LEVEL_NAMES
+            held = record.state is FileState.SKIPPED and record.error == POLICY_NOTE
+            if names_only and not held:
                 self.store.replace_segments(record.row_id, ())
                 self.store.set_pages(record.row_id, ())
                 self.store.set_state(record.row_id, FileState.SKIPPED, POLICY_NOTE)
-        else:
-            for record in self.store.list_files(prefix=root.path, state=FileState.SKIPPED,
-                                                case_insensitive=self.case_insensitive):
-                if record.error == POLICY_NOTE:
-                    self.store.set_state(record.row_id, FileState.PENDING)
+                purged += 1
+            elif held and not names_only:
+                self.store.set_state(record.row_id, FileState.PENDING)
+                queued += 1
+        return purged, queued
+
+    def set_level(self, path: str, level: Optional[str]) -> "Mapping[str, object] | Failure":
+        """Say how far indexing goes in one folder: a root or any folder inside one (shapes.LEVELS).
+        None takes the folder's own level away, so it follows the folder above it again.
+        Lowering to "names" removes the text kept for that folder now; raising from it queues the files
+        for the next `index` run. "words" keeps OCR text that was already read and reads no more.
+        Returns {"root", "folder", "level", "purged", "queued"}."""
+        if level is not None and level not in LEVELS:
+            return Failure(FailureReason.UNSUPPORTED, f"unknown level {level!r}; choose one of {', '.join(LEVELS)}")
+        wanted = os.path.abspath(os.path.expanduser(path))
+        root = next((r for r in self.store.list_roots()
+                     if self._fold(r.path) == self._fold(wanted) or _under(wanted, r.path, self._fold)), None)
+        if root is None:
+            return Failure(FailureReason.OTHER, f"that folder is not inside an indexed folder: {wanted}. "
+                                                "Add it (or a folder above it) first: dugup roots add")
+        folder = wanted[len(root.path.rstrip("/\\")) + 1:].replace("\\", "/").strip("/")
+        kept = [(f, l) for f, l in root.levels if self._fold(f) != self._fold(folder)]
+        if level is not None:
+            kept.append((folder, level))
+        changed = replace(root, levels=tuple(sorted(kept)))
+        with self.store.transaction():
+            self.store.set_root(changed)
+            purged, queued = self._apply_policy(changed, wanted)
+        return {"root": root.path, "folder": folder, "level": level_for(changed, os.path.join(wanted, "x"), self.case_insensitive),
+                "purged": purged, "queued": queued}
 
     def remove_root(self, path: str, purge: bool = True) -> "int | Failure":
         wanted = self._fold(os.path.abspath(os.path.expanduser(path)))
@@ -342,6 +373,7 @@ class LocalService:
             roots.append({"path": root.path, "policy": root.policy, "reachable": root.reachable,
                           "last_scan": root.last_scan, "warnings": list(root.warnings),
                           "include": list(root.include), "exclude": list(root.exclude),
+                          "levels": [list(pair) for pair in root.levels], "base_level": root.base_level,
                           "counts": dict(self.store.state_counts(root.path, self.case_insensitive))})
         progress = self._progress
         return {
@@ -398,7 +430,7 @@ class LocalService:
 
                     indexer = Indexer(store, self.source, self.extractor, self.settings, tell, self.clock,
                                       extra_excludes=(str(self.layout.root),), room=self.room,
-                                      size_now=self.layout.index_bytes)
+                                      size_now=self.layout.index_bytes, case_insensitive=self.case_insensitive)
                     report = indexer.run(stop, roots, on_settings_change, retry_failed)
                     self.last_report = report
                     return report
@@ -434,8 +466,14 @@ class LocalService:
                         if progress is not None:
                             progress(p)
 
+                    all_roots = list(store.list_roots())
+
+                    def asks_for_ocr(file_path: str) -> bool:
+                        owner = next((r for r in all_roots if _under(file_path, r.path, self._fold)), None)
+                        return owner is None or level_reaches(level_for(owner, file_path, self.case_insensitive), LEVEL_OCR)
+
                     runner = OcrRunner(store, self.ocr_backend, self.settings, tell,
-                                       case_insensitive=self.case_insensitive, room=self.room)
+                                       case_insensitive=self.case_insensitive, room=self.room, wanted=asks_for_ocr)
                     report = runner.run(stop, here, budget_seconds, retry_failed, reread_old)
                     report.away = tuple(r for r in wanted if r not in here)
                     return report

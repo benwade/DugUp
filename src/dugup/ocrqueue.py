@@ -67,6 +67,7 @@ class OcrReport:
     second_tries: int = 0          # pages that ran out of time and were given a second, longer try
     requeued: int = 0              # files with pages put back because another engine version read them
     left: int = 0                  # pages whose file could not be reached; they stay queued
+    held_back: int = 0             # pages in folders whose level stops short of OCR; not looked at
     stopped: bool = False
     out_of_time: bool = False
     paused: str = ""               # why the run paused itself (a run of failures)
@@ -91,7 +92,9 @@ class OcrRunner:
     def __init__(self, store: Store, backend, settings: Optional[Settings] = None,
                  progress: Optional[Callable[[Progress], None]] = None,
                  timer: Optional[Callable[[], float]] = None, case_insensitive: Optional[bool] = None,
-                 room: Optional[Callable[[], str]] = None) -> None:
+                 room: Optional[Callable[[], str]] = None,
+                 wanted: Optional[Callable[[str], bool]] = None) -> None:
+        self.wanted = wanted        # says whether a file's folder asks for OCR at all; None: every folder does
         self.room = room            # says why nothing more may be written; "" when there is room
         self.store = store
         self.backend = backend
@@ -172,7 +175,12 @@ class OcrRunner:
             self._retry(roots)
         if reread_old:
             report.requeued = self._requeue_old(roots)
-        tasks = self._measure(self._queue(roots), stop)
+        waiting = self._queue(roots)
+        if self.wanted is not None:
+            asked = [task for task in waiting if self.wanted(task.path)]
+            report.held_back = len(waiting) - len(asked)
+            waiting = asked
+        tasks = self._measure(waiting, stop)
         if isinstance(tasks, Failure):
             report.stopped = True
             report.seconds = self.timer() - started

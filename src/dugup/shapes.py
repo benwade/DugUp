@@ -243,6 +243,15 @@ POLICY_NAMES_ONLY = "names_only"  # file names only; no text is read or kept
 POLICIES = (POLICY_OPEN, POLICY_NAMES_ONLY)
 
 
+# How far indexing goes in a folder. Each level includes the ones before it. A folder that should not be
+# indexed at all is not a level: that is a skip rule (`exclude`).
+LEVEL_NAMES = "names"      # file names and paths; no file is opened
+LEVEL_WORDS = "words"      # also the text of readable files
+LEVEL_OCR = "ocr"          # also the words in pictures and scanned pages
+LEVEL_MEANING = "meaning"  # also search by meaning (when that is set up); the default
+LEVELS = (LEVEL_NAMES, LEVEL_WORDS, LEVEL_OCR, LEVEL_MEANING)
+
+
 @dataclass(frozen=True)
 class Root:
     path: str
@@ -252,6 +261,33 @@ class Root:
     reachable: bool = True                 # as of the last scan
     last_scan: Optional[float] = None      # when a scan last finished (reachable or not)
     warnings: Tuple[str, ...] = ()         # warning codes from the last scan (root_empty, mass_loss)
+    levels: Tuple[Tuple[str, str], ...] = ()   # (folder below the root, written with "/"; "" is the root itself, level)
+
+    @property
+    def base_level(self) -> str:
+        """The level of the root where no folder's own level says otherwise."""
+        return LEVEL_NAMES if self.policy == POLICY_NAMES_ONLY else LEVEL_MEANING
+
+
+def level_for(root: Root, path: str, case_insensitive: bool = False) -> str:
+    """The level of one file: that of the deepest folder above it that was given one, else the root's."""
+    if not root.levels:
+        return root.base_level
+    base = root.path.rstrip("/\\")
+    relative = path[len(base) + 1:].replace("\\", "/")
+    if case_insensitive:
+        relative = relative.casefold()
+    best, best_length = root.base_level, -1
+    for folder, level in root.levels:
+        key = folder.casefold() if case_insensitive else folder
+        if len(key) > best_length and (key == "" or relative.startswith(key + "/")):
+            best, best_length = level, len(key)
+    return best
+
+
+def level_reaches(level: str, wanted: str) -> bool:
+    """True when `level` goes at least as far as `wanted`."""
+    return LEVELS.index(level) >= LEVELS.index(wanted)
 
 
 # ---- the common promise: a result or a stated reason ----------------------------------------------------
