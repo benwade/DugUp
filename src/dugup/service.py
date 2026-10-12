@@ -553,14 +553,17 @@ class LocalService:
                         owner = next((r for r in all_roots if _under(file_path, r.path, self._fold)), None)
                         return owner is None or level_reaches(level_for(owner, file_path, self.case_insensitive), LEVEL_OCR)
 
-                    extra = self._more_readers(self.fast_readers() - 1) if fast else []
+                    # in fast mode every reader is one of the limited ones: the usual reader lets its engine take
+                    # every core, and one such reader beside the others would crowd them all (seen on Windows)
+                    extra = self._more_readers(self.fast_readers()) if fast else []
+                    lead = extra.pop(0) if extra else self.ocr_backend
                     try:
-                        runner = OcrRunner(store, self.ocr_backend, self.settings, tell,
+                        runner = OcrRunner(store, lead, self.settings, tell,
                                            case_insensitive=self.case_insensitive, room=self.room, wanted=asks_for_ocr,
                                            extra_backends=extra)
                         report = runner.run(stop, here, budget_seconds, retry_failed, reread_old)
                     finally:
-                        for reader in extra:
+                        for reader in extra + ([lead] if lead is not self.ocr_backend else []):
                             close = getattr(reader, "close", None)
                             if close is not None:
                                 close()

@@ -696,8 +696,8 @@ def test_read_a_folder_now_reads_just_that_folder_with_several_readers(tmp_path,
         bench.finish_run()
         status = bench.text(bench.app.status)
         assert "OCR read 3 of 3 waiting page(s)" in status and "[3 readers side by side]" in status
-        assert len(bench.extra) == 2
-        read = [path for path, _ in bench.ocr.calls] + [path for reader in bench.extra for path, _ in reader.calls]
+        assert len(bench.extra) == 3
+        read = [path for reader in bench.extra for path, _ in reader.calls]
         assert len(read) == 3 and all(os.sep + "sub" + os.sep in path for path in read), "only that folder"
         assert bench.service.ocr_waiting() == 1, "the picture outside it still waits"
         bench.folder_to_add = str(tmp_path)

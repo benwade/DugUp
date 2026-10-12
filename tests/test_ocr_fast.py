@@ -150,7 +150,7 @@ def sh(tmp_path, monkeypatch):
         made.extra = [ScriptedOcr(shapes={}) for _ in range(count)]
         for reader in made.extra:
             reader.close = lambda: made.closed.append(1)
-        return made.extra
+        return list(made.extra)
 
     made.closed = []
     monkeypatch.setattr(service_module.LocalService, "_more_readers", more)
@@ -163,8 +163,8 @@ def test_fast_uses_the_readers_asked_for_and_closes_them(sh):
     assert code == 0, text
     assert "Fast: 3 reader(s) side by side" in text and "busier" in text and "[3 readers side by side]" in text
     assert "OCR read 5 of 5 waiting page(s)" in text
-    assert len(sh.extra) == 2 and len(sh.closed) == 2, "two more readers beside the usual one, and both were closed"
-    assert len(sh.ocr.calls) + sum(len(r.calls) for r in sh.extra) == 5
+    assert len(sh.extra) == 3 and len(sh.closed) == 3, "three readers of the limited kind, and all were closed"
+    assert sh.ocr.calls == [] and sum(len(r.calls) for r in sh.extra) == 5, "the usual, unlimited reader takes no part"
     code, text = sh.run("ocr", "--fast")
     assert code == 0 and "Fast:" in text and "Nothing waits for OCR." in text
 
