@@ -493,9 +493,7 @@ def cmd_index(args, env, out, environ, stop: Optional[threading.Event] = None, i
                 safe_write("  dugup index --keep     keep what is stored; only new and changed files use the new settings", out)
                 return 1
             print_report(report, out, service.settings.missing_retention_days)
-            if args.reread and not report.stopped and not report.paused:
-                safe_write("Reading everything again leaves unused space inside the index. To give it back: "
-                           "dugup space --compact", out)
+            print_compacted(report.compacted, out)
             if report.paused:
                 safe_write(f"Indexing paused itself: {report.paused}.", out)
                 safe_write("Run `dugup index` again to go on; `dugup index --retry-failed` also retries what failed.", out)
@@ -521,6 +519,12 @@ def _chosen_roots(service: LocalService, asked: Optional[List[str]], out: TextIO
         safe_write("One of the --root folders is not an indexed folder. See: dugup roots list", out)
         return 1
     return roots
+
+
+def print_compacted(result, out: TextIO) -> None:
+    if result:
+        safe_write(f"The index was compacted: {result['before'] / 1048576:,.0f} MB before, "
+                   f"{result['after'] / 1048576:,.0f} MB after.", out)
 
 
 def print_ocr_report(report, out: TextIO) -> None:
@@ -582,6 +586,7 @@ def cmd_ocr(args, env, out, environ, stop: Optional[threading.Event] = None, ins
             if isinstance(report, Failure):
                 return _fail(report, out)
             print_ocr_report(report, out)
+            print_compacted(report.compacted, out)
             if report.stopped:
                 safe_write("[Interrupted] Stopped cleanly. Run `dugup ocr` again to continue where it stopped.", out)
                 return 130
@@ -719,6 +724,7 @@ def space_hint(layout: DataLayout, settings, out: TextIO) -> None:
     safe_write(line + ".", out)
     if suggestion is not None:
         safe_write(f"To cap what the index may use, for example at a tenth of the free space: dugup space --limit {suggestion}", out)
+        safe_write("(Tidying the index now and then needs as much space again for a moment, so leave twice the limit free.)", out)
 
 
 def set_config_value(config, key: str, value: int) -> None:
@@ -786,6 +792,8 @@ def cmd_space(args, env, out, environ) -> int:
             suggestion = suggested_limit_mb(free)
             if suggestion is not None:
                 safe_write(f"To set one, for example a tenth of the free space: dugup space --limit {suggestion}", out)
+        safe_write(f"Compacting writes a full copy first, so for a moment the index needs twice its size "
+                   f"(now about {megabytes(2 * used)}). When there is no room for that, compacting is skipped; nothing else is affected.", out)
         if service.settings.min_free_mb:
             safe_write(f"Whatever the limit, a run stops when less than {service.settings.min_free_mb:,} MB is free on the drive.", out)
         files = service.indexing_status()["files"]

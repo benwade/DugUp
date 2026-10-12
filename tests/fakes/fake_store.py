@@ -502,6 +502,9 @@ class FakeStore:
             i = j
         return out
 
+    def reclaimable_fraction(self) -> float:
+        return 0.0
+
     def compact(self) -> None:
         pass
 

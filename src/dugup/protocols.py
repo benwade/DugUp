@@ -315,6 +315,9 @@ class Store(Protocol):
 
     def purge_folder(self, prefix: str, case_insensitive: Optional[bool] = None, thorough: bool = False) -> int: ...
 
+    def reclaimable_fraction(self) -> float:
+        """The share of the index's size that compacting would give back, as far as the store can tell (0 to 1)."""
+
     def compact(self) -> None:
         """Give back the disk space that removed and rewritten text left behind. Changes nothing that is stored."""
 

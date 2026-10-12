@@ -598,9 +598,41 @@ def test_compacting_needs_room_for_a_copy_and_respects_the_lock(tmp_path, monkey
         assert service.search("anything").total == 0, "the service still reads afterwards"
 
 
-def test_a_full_reread_points_at_compacting(sh):
+def test_a_run_compacts_the_index_by_itself_when_enough_of_it_is_unused(sh):
+    for n in range(40):
+        (sh.docs / f"big{n}.txt").write_text(f"file {n} " + " ".join(f"word{n}x{i}" for i in range(4000)), encoding="utf-8")
     sh.run("roots", "add", str(sh.docs))
-    assert "space --compact" not in sh.run("index")[1]
-    (sh.data / "config.toml").write_text("chunk_chars = 900\n", encoding="utf-8")
-    code, text = sh.run("index", "--reread")
-    assert code == 0 and "dugup space --compact" in text
+    code, text = sh.run("index")
+    assert code == 0 and "compacted" not in text, "a first run leaves nothing to give back"
+    (sh.data / "config.toml").write_text("compact_min_mb = 1\n", encoding="utf-8")
+    sh.run("roots", "exclude", str(sh.docs), "big*.txt")
+    before = DataLayout(sh.data).index_bytes()
+    code, text = sh.run("index")
+    assert code == 0 and "The index was compacted: " in text
+    assert DataLayout(sh.data).index_bytes() < before / 2
+    assert "notes.txt" in sh.run("search", "needle")[1]
+    assert "compacted" not in sh.run("index")[1], "and not again when there is nothing to gain"
+
+
+def test_automatic_compacting_has_a_floor_can_be_turned_off_and_never_follows_a_stopped_run(sh, tmp_path, monkeypatch):
+    for n in range(40):
+        (sh.docs / f"big{n}.txt").write_text(" ".join(f"word{n}x{i}" for i in range(4000)), encoding="utf-8")
+    sh.run("roots", "add", str(sh.docs))
+    sh.run("index")
+    sh.run("roots", "exclude", str(sh.docs), "big*.txt")
+    assert "compacted" not in sh.run("index")[1], "a few megabytes are under the default floor of 10"
+    (sh.data / "config.toml").write_text("compact_min_mb = 1\ncompact_at_fraction = 0\n", encoding="utf-8")
+    assert "compacted" not in sh.run("index")[1], "0 turns it off"
+    layout = DataLayout(sh.data)
+    with LocalService(layout, Settings(compact_min_mb=1)) as service:
+        stop = threading.Event()
+        stop.set()
+        assert service.run_indexing(stop).compacted is None, "a stopped run is left alone"
+        monkeypatch.setattr(DataLayout, "free_bytes", lambda self: 1)
+        report = service.run_indexing()
+        assert report.paused and report.compacted is None, "a paused run too"
+        monkeypatch.setattr(service, "room", lambda: "")
+        assert service.run_indexing().compacted is None, "no room for the copy: skipped, and the run still succeeds"
+        monkeypatch.undo()
+        result = service.run_ocr()
+        assert result.compacted and result.compacted["after"] < result.compacted["before"], "an OCR run tidies up as well"

@@ -48,6 +48,9 @@ class Settings:
                                            # with its time limit multiplied by this; 1 or less means no second try
     reader_failures_in_a_row: int = 10     # this many crashes or timeouts one after another pause the run; 0: never
     min_free_mb: int = 200                 # a run stops when the drive that holds the index has less free; 0: no check
+    compact_at_fraction: float = 0.25      # after a run, the index is compacted by itself when at least this share of
+                                           # it is unused space; 0 means never by itself (dugup space --compact)
+    compact_min_mb: int = 10               # ... and when that unused space is at least this much
     max_index_mb: int = 0                  # a spending limit: a run stops when the index is larger than this; 0: none
     # -- OCR: pictures and scanned pages are read in a worker of their own
     ocr_seconds: float = 120.0             # time allowed for one page or picture
@@ -102,6 +105,8 @@ def validate(s: Settings) -> List[str]:
             problems.append(f"{name} must be above 0")
     if s.reader_seconds_per_mb < 0 or s.reader_memory_mb < 0:
         problems.append("reader_seconds_per_mb and reader_memory_mb must not be negative")
+    if not 0.0 <= s.compact_at_fraction <= 1.0 or s.compact_min_mb < 0:
+        problems.append("compact_at_fraction must be between 0 and 1, and compact_min_mb must not be negative")
     if s.ocr_seconds <= 0:
         problems.append("ocr_seconds must be above 0")
     for name in ("ocr_dpi", "ocr_max_pixels", "ocr_failures_in_a_row"):

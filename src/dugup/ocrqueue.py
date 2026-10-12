@@ -72,6 +72,7 @@ class OcrReport:
     paused: str = ""               # why the run paused itself (a run of failures)
     not_ready: Optional[Failure] = None    # the engine cannot be used at all (for example it is not installed)
     seconds: float = 0.0
+    compacted: Optional[Dict[str, int]] = None   # the index's size before and after, when it was compacted at the end
     away: Tuple[str, ...] = ()     # folders that could not be reached and were left alone
 
     @property

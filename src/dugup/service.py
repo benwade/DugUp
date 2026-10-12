@@ -280,7 +280,11 @@ class LocalService:
     def run_indexing(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
                      roots: Optional[Sequence[str]] = None, on_settings_change: str = REFUSE,
                      retry_failed: bool = False) -> "IndexReport | Failure":
-        """Index now, in the calling thread, until done or stopped. Only one run at a time, across programs."""
+        """Index now, in the calling thread, until done or stopped. Only one run at a time, across programs.
+        A run that finishes also compacts the index when enough of it is unused space."""
+        return self._tidy(self._run_indexing(stop, progress, roots, on_settings_change, retry_failed))
+
+    def _run_indexing(self, stop, progress, roots, on_settings_change, retry_failed) -> "IndexReport | Failure":
         if not self._run_guard.acquire(blocking=False):
             return Failure(FailureReason.BUSY, "an indexing run is already going on in this program")
         try:
@@ -311,6 +315,9 @@ class LocalService:
                 retry_failed: bool = False, reread_old: bool = False) -> "OcrReport | Failure":
         """Read the pages and pictures that wait for OCR, in the calling thread, until done or stopped.
         It writes to the index, so it takes the same lock as an indexing run: one or the other, never both."""
+        return self._tidy(self._run_ocr(stop, progress, roots, budget_seconds, retry_failed, reread_old))
+
+    def _run_ocr(self, stop, progress, roots, budget_seconds, retry_failed, reread_old) -> "OcrReport | Failure":
         if not self._run_guard.acquire(blocking=False):
             return Failure(FailureReason.BUSY, "indexing or OCR is already going on in this program")
         try:
@@ -339,6 +346,32 @@ class LocalService:
                 self._lock.release()
         finally:
             self._run_guard.release()
+
+    def compact_if_worthwhile(self) -> Optional[Mapping[str, int]]:
+        """Compact when enough of the index is unused space to be worth rewriting the file (two settings).
+        None when it was not worth it, is turned off, or could not be done (no room for the copy, or busy)."""
+        share = self.settings.compact_at_fraction
+        if share <= 0:
+            return None
+        try:
+            unused = self.store.reclaimable_fraction()
+        except Exception:
+            return None
+        megabytes = unused * self.layout.index_bytes() / (1024 * 1024)
+        if unused < share or megabytes < self.settings.compact_min_mb:
+            return None
+        result = self.compact()
+        if isinstance(result, Failure):
+            log.info("index not compacted: %s", result.reason.value)
+            return None
+        return dict(result)
+
+    def _tidy(self, report):
+        """After a run that finished: give back unused space when there is enough of it."""
+        if not isinstance(report, Failure) and not report.stopped and not report.paused \
+                and not getattr(report, "settings_changed", ()) and self._store_thread in (None, threading.get_ident()):
+            report.compacted = self.compact_if_worthwhile()
+        return report
 
     def compact(self) -> "Mapping[str, int] | Failure":
         """Give back the space that removed and rewritten text left in the index. Returns its size before

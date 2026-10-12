@@ -135,6 +135,7 @@ class IndexReport:
     vanished: int = 0                # gone between the scan and the read; left for the next scan
     second_tries: int = 0            # files that ran out of time and were read again, last, with more time
     paused: str = ""                 # why the run paused itself (a run of reader failures, or a full drive)
+    compacted: Optional[Dict[str, int]] = None   # the index's size before and after, when it was compacted at the end
     stopped: bool = False
     settings_changed: Tuple[str, ...] = ()   # set, with no work done, when the caller must decide first
     seconds: float = 0.0

@@ -866,6 +866,11 @@ class SqliteStore:
         with self.transaction():
             return self.conn.execute("DELETE FROM roots WHERE path=?", (text,)).rowcount > 0
 
+    def reclaimable_fraction(self) -> float:
+        pages = self.conn.execute("PRAGMA page_count").fetchone()[0]
+        free = self.conn.execute("PRAGMA freelist_count").fetchone()[0]
+        return free / pages if pages > 0 else 0.0
+
     def compact(self) -> None:
         """Rebuild the file without the free space that deleting and rewriting leave inside it. SQLite writes
         a full copy first, so this needs about as much free disk as the index is large."""
