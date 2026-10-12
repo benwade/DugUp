@@ -250,9 +250,9 @@ def test_the_worker_picks_the_card_route_the_runtime_has(monkeypatch):
 
 def test_the_doctor_says_whether_a_card_can_be_used():
     from dugup.doctor import Environment
-    lines = {name: detail for name, _, detail in _doctor(Environment(ocr_card=lambda: "graphics card (DirectML)"))}
+    lines = {name: detail for name, _, detail in _doctor(Environment(can_import=lambda name: True, ocr_card=lambda: "graphics card (DirectML)"))}
     assert "can be used: graphics card (DirectML)" in lines["ocr: graphics card"] and "ocr_gpu = true" in lines["ocr: graphics card"]
-    lines = {name: detail for name, _, detail in _doctor(Environment(ocr_card=lambda: ""))}
+    lines = {name: detail for name, _, detail in _doctor(Environment(can_import=lambda name: True, ocr_card=lambda: ""))}
     assert "optional" in lines["ocr: graphics card"] and "onnxruntime-directml" in lines["ocr: graphics card"]
 
 
