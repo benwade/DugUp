@@ -818,9 +818,13 @@ def cmd_window(args, env, out, environ) -> int:
         return 1
     from .window import App
     try:
-        root = tkinter.Tk()
+        try:
+            root = tkinter.Tk()
+        except tkinter.TclError:
+            root = tkinter.Tk()      # starting tkinter fails now and then on Windows while it reads its own files
     except tkinter.TclError as exc:
-        safe_write(f"A window cannot be opened here ({exc}). The other commands work without one.", out)
+        first_line = (str(exc).splitlines() or ["no reason given"])[0]
+        safe_write(f"A window cannot be opened here ({first_line}). The other commands work without one.", out)
         return 1
     try:
         service = _service(args, environ, out, create=True)

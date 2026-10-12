@@ -94,14 +94,29 @@ def test_rows_and_labels():
 
 # ---- the window ---------------------------------------------------------------------------------------------
 
+_tk = {}      # the one hidden tkinter root every window test shares
+
+
 def make_root():
+    """A fresh top-level window for one test, under one root that lives for the whole run.
+
+    tkinter is started once only. Starting it again for every test can fail now and then on Windows
+    ("Can't find a usable tk.tcl": it reads its script files afresh each time), which says nothing
+    about the program, whose window starts tkinter exactly once.
+    """
     tkinter = pytest.importorskip("tkinter", reason="this Python has no tkinter")
-    try:
-        root = tkinter.Tk()
-    except tkinter.TclError as exc:
-        pytest.skip(f"no display to open a window on ({exc}); on Linux run pytest under xvfb-run")
-    root.withdraw()
-    return root
+    if "root" not in _tk:
+        try:
+            _tk["root"] = tkinter.Tk()
+        except tkinter.TclError as exc:
+            _tk["root"] = exc
+        else:
+            _tk["root"].withdraw()
+    if isinstance(_tk["root"], Exception):
+        pytest.skip(f"no window can be opened here ({str(_tk['root']).splitlines()[0]}); on Linux run pytest under xvfb-run")
+    window = tkinter.Toplevel(_tk["root"])
+    window.withdraw()
+    return window
 
 
 class FakeDesktop:
