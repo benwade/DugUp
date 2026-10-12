@@ -17,6 +17,8 @@ photos, search by meaning, photo search and a window are planned and not built y
 - Every file ends in a stated state. A scan or photo is `partial` ("pages wait for OCR") until the OCR
   step exists; a file that cannot be read says why.
 - Stop with Ctrl+C and run again to continue. Deleted files stay findable, flagged, for 30 days.
+- Files are parsed in a separate worker process with a time and a memory limit, so a damaged or hostile file
+  can cost one worker and never the index. The worker has no network access.
 
 ## Set up
 
@@ -69,6 +71,8 @@ folder; see `src/dugup/settings.py` for the names and defaults.
 | `indexer.py` | Scan, record changes, read what is waiting. Talks only to the three contracts above. |
 | `service.py` | LocalService: what every client talks to. Policy and the single writer live here. |
 | `cli.py` | The command line, a client of the service. |
+| `launcher.py` | The one place outside programs and workers are started; ends a program with everything it started. |
+| `sandbox.py`, `worker.py`, `jobs.py` | The Sandbox: risky work in a worker process with limits, and what crosses the boundary. |
 | `suggest.py` | Suggestions for what to skip (a proposal for the user, never applied by itself). |
 | `settings.py`, `kinds.py`, `datadir.py`, `lockfile.py`, `doctor.py` | Settings, file kinds, the data folder, the run lock, the health report. |
 

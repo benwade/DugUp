@@ -23,10 +23,12 @@ from . import doctor as doctor_module
 from .datadir import DataLayout, is_within
 from .dirscan import DirectoryScan
 from .extractors import default_extractors
+from .extractors.sandboxed import SandboxedExtractor
 from .indexer import POLICY_NOTE, REFUSE, Indexer, IndexReport, Progress, only_waits_for_ocr
 from .lockfile import RunLock
 from .filesource import matches_rules
 from .protocols import Extractor, FileSource, ScanRules, StopSignal, Store
+from .sandbox import SubprocessSandbox
 from .settings import Settings
 from .shapes import (POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
                      Passage, Root, SearchPage)
@@ -51,7 +53,12 @@ class LocalService:
         self.layout = layout
         self.settings = settings or Settings()
         self.source = source or DirectoryScan()
-        self.extractor = extractor or default_extractors(self.settings)
+        if extractor is not None:
+            self.extractor = extractor
+        elif self.settings.isolate_readers:      # the default: files are parsed in a worker process
+            self.extractor = SandboxedExtractor(SubprocessSandbox(), self.settings)
+        else:
+            self.extractor = default_extractors(self.settings)
         self._open_store = open_store or (lambda: SqliteStore(layout.index))
         self.clock = clock
         self.case_insensitive = (os.name == "nt") if case_insensitive is None else case_insensitive
@@ -80,6 +87,9 @@ class LocalService:
         if self._store is not None:
             self._store.close()
             self._store = None
+        close_readers = getattr(self.extractor, "close", None)
+        if close_readers is not None:
+            close_readers()      # ends any worker process and everything it started
 
     def __enter__(self) -> "LocalService":
         return self

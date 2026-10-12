@@ -36,6 +36,12 @@ class Settings:
     garbled_fraction: float = 0.2      # share of unusable characters that marks a garbled layer [unverified]
     # -- Office (native readers)
     max_member_bytes: int = 64_000_000  # one part inside a docx/xlsx/pptx/odt is read up to here
+    # -- isolation: readers run in a worker process, so a bad file can hurt the worker and not the index
+    isolate_readers: bool = True
+    reader_seconds: float = 60.0           # time allowed for one file, before the allowance for its size
+    reader_seconds_per_mb: float = 2.0     # extra time for each megabyte of the file
+    reader_seconds_cap: float = 900.0      # never more than this for one file
+    reader_memory_mb: int = 4096           # memory a reader may use; 0 means no limit
     # -- indexing
     batch_files: int = 200             # files fetched per step of the work queue
     missing_retention_days: float = 30.0   # guide 5d item 10
@@ -46,6 +52,11 @@ class Settings:
         problems = validate(self)
         if problems:
             raise ValueError("; ".join(problems))
+
+    def reader_limit(self, size_bytes: int) -> float:
+        """Seconds a reader may spend on a file of this size: a base, plus an allowance for size, up to the cap."""
+        megabytes = max(0, size_bytes) / (1024.0 * 1024.0)
+        return min(self.reader_seconds_cap, self.reader_seconds + self.reader_seconds_per_mb * megabytes)
 
     def fingerprint(self) -> Dict[str, object]:
         """The settings that change what ends up in the index. A change here means stored text is stale."""
@@ -67,13 +78,18 @@ def validate(s: Settings) -> List[str]:
     for name in ("full_page_image_fraction", "garbled_fraction"):
         if not 0.0 < getattr(s, name) <= 1.0:
             problems.append(f"{name} must be above 0 and at most 1")
+    for name in ("reader_seconds", "reader_seconds_cap"):
+        if getattr(s, name) <= 0:
+            problems.append(f"{name} must be above 0")
+    if s.reader_seconds_per_mb < 0 or s.reader_memory_mb < 0:
+        problems.append("reader_seconds_per_mb and reader_memory_mb must not be negative")
     if s.missing_retention_days < 0:
         problems.append("missing_retention_days must not be negative")
     return problems
 
 
 _SIMPLE = {f.name: f.type for f in fields(Settings) if f.name != "extensions"}
-_TYPES = {"int": int, "float": (int, float), "str": str}
+_TYPES = {"int": int, "float": (int, float), "str": str, "bool": bool}
 
 
 def from_mapping(data: Mapping[str, object]) -> Tuple[Settings, List[str]]:
@@ -94,7 +110,7 @@ def from_mapping(data: Mapping[str, object]) -> Tuple[Settings, List[str]]:
             changes["extensions"] = table
         elif key in _SIMPLE:
             wanted = _TYPES[str(_SIMPLE[key])]
-            if isinstance(value, bool) or not isinstance(value, wanted):
+            if (isinstance(value, bool) and wanted is not bool) or not isinstance(value, wanted):
                 notes.append(f"{key}: expected {_SIMPLE[key]}, got {type(value).__name__}; the default is used")
             else:
                 changes[key] = value
