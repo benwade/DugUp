@@ -155,7 +155,10 @@ def where_label(kind: str, page: int, file_kind: str) -> str:
 class App:
     """`root` is a tkinter root (or Toplevel). `service` is a LocalService. The rest can be replaced in tests."""
 
-    def __init__(self, root, service, desktop: Optional[Desktop] = None, ask=None, choose_folder=None) -> None:
+    def __init__(self, root, service, desktop: Optional[Desktop] = None, ask=None, choose_folder=None,
+                 pick: bool = True) -> None:
+        self.pick = pick              # show the folder picker when a folder is added (False: add it whole, at once)
+        self.picker = None            # the picker's window while it is open
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
 
@@ -316,7 +319,8 @@ class App:
         buttons = ttk.Frame(index)
         buttons.grid(row=0, column=0, sticky="ew")
         self.run_buttons = []
-        for text, command in (("Add folder...", self.add_folder), ("Update the index", lambda: self.start("index")),
+        for text, command in (("Add folder...", self.add_folder), ("Choose what to index...", self.choose_what),
+                              ("Update the index", lambda: self.start("index")),
                               ("Read pictures and scans (OCR)", lambda: self.start("ocr"))):
             button = ttk.Button(buttons, text=text, command=command)
             button.pack(side="left", padx=2)
@@ -657,6 +661,9 @@ class App:
         chosen = self.choose_folder()
         if not chosen:
             return
+        if self.pick:
+            self.start("plan", path=os.path.normpath(chosen))
+            return
         result = self.service.set_root(Root(os.path.normpath(chosen)))
         if isinstance(result, Failure):
             self.say(f"That folder could not be added: {result.detail}")
@@ -664,6 +671,37 @@ class App:
         self.refresh_folders()
         self.refresh_status()
         self.say(f"Added {result.path}. Update the index to read it.")
+
+    def choose_what(self) -> None:
+        """Open the picker for a folder that is already indexed: the one in the Folder box, or the only one."""
+        roots = [r.path for r in self.service.list_roots()]
+        chosen = self.folder.get()
+        if chosen not in roots:
+            if len(roots) != 1:
+                self.say("Pick the folder in the Folder box at the top first." if roots else
+                         "There is no folder yet. Add one first.")
+                return
+            chosen = roots[0]
+        self.start("plan", path=chosen)
+
+    def _show_picker(self, material) -> None:
+        from .pickerwindow import PickerDialog
+        if self.picker is not None and not self.picker.closed:
+            self.picker.close()
+
+        def take(plan) -> str:
+            result = self.service.apply_plan(plan)
+            if isinstance(result, Failure):
+                return f"That could not be done: {result.detail}"
+            self.refresh_folders()
+            self.refresh_status()
+            still = plan.still_skipped()
+            self.say(f"Saved the choices for {result.path}. Update the index to read it."
+                     + (f" Still left out by an older skip rule: {', '.join(still[:3])}." if still else ""))
+            return ""
+
+        self.picker = PickerDialog(self.root, material["plan"], material["rates"], take, bool(material["known"]),
+                                   material["fresh"])
 
     def set_up_plain_words(self) -> None:
         """Show what would be downloaded and, on a yes, fetch it in the background."""
@@ -679,12 +717,13 @@ class App:
     def busy(self) -> bool:
         return self.worker is not None and self.worker.is_alive()
 
-    def start(self, what: str, on_settings_change: str = REFUSE) -> None:
-        """Start indexing ("index") or OCR ("ocr") in the background."""
+    def start(self, what: str, on_settings_change: str = REFUSE, path: str = "") -> None:
+        """Start indexing ("index"), OCR ("ocr"), a download ("models") or a look through a folder for the
+        picker ("plan") in the background."""
         if self.busy():
             self.say("Something is already running. Stop it first, or wait.")
             return
-        if what != "models" and not self.service.list_roots():
+        if what not in ("models", "plan") and not self.service.list_roots():
             self.say("There is no folder to index yet. Add one first.")
             return
         self.stop = threading.Event()
@@ -692,7 +731,9 @@ class App:
 
         def work() -> None:
             try:
-                if what == "models":
+                if what == "plan":
+                    report = service.plan_folder(path, stop)
+                elif what == "models":
                     report = service.install_models(stop, events.put)
                 elif what == "ocr":
                     report = service.run_ocr(stop, events.put)
@@ -706,7 +747,7 @@ class App:
         for button in self.run_buttons:
             button.configure(state="disabled")
         self.stop_button.configure(state="normal")
-        self.progress_text.set("Starting ...")
+        self.progress_text.set(f"Looking through {path} (no file is opened) ..." if what == "plan" else "Starting ...")
         self.bar.configure(value=0.0)
         self.tabs.select(1)
         self.worker.start()
@@ -753,6 +794,16 @@ class App:
         self.stop_button.configure(state="disabled")
         self.bar.configure(value=0.0)
         out = io.StringIO()
+        if what == "plan":
+            if isinstance(report, Failure):
+                stopped = report.reason is FailureReason.STOPPED
+                self.progress_text.set("Stopped." if stopped else "That folder could not be looked through.")
+                if not stopped:
+                    self.say(f"That folder could not be looked through: {report.detail}")
+                return
+            self.progress_text.set("Choose what to index in the window that opened.")
+            self._show_picker(report)
+            return
         if what == "models":
             if isinstance(report, Failure):
                 stopped = report.reason is FailureReason.STOPPED
@@ -805,6 +856,8 @@ class App:
             return
         self.closed = True
         self.stop.set()
+        if self.picker is not None:
+            self.picker.close()
         worker = self.worker
         if worker is not None:
             worker.join()        # a stop request ends a run promptly; nothing is lost

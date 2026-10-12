@@ -246,7 +246,47 @@ class LocalService:
     def list_roots(self) -> Sequence[Root]:
         return list(self.store.list_roots())
 
-    def set_root(self, root: Root) -> "Root | Failure":
+    def plan_folder(self, path: str, stop: Optional[StopSignal] = None) -> "Mapping[str, object] | Failure":
+        """Look through a folder (no file is opened, nothing is changed) and return the picker's material:
+        {"plan": picker.Plan, "rates": survey.Rates, "known": is it already indexed, "fresh": a function that
+        gives the starting guesses again}. For an indexed folder the plan shows its current choices.
+        Safe to call off the window's thread: it reads the index on a connection of its own."""
+        from . import picker, survey as surveying
+        target = os.path.abspath(os.path.expanduser(path))
+        store = self._open_store()
+        try:
+            roots = list(store.list_roots())
+            counts = dict(store.state_counts())
+            rates = surveying.learn_rates(self.layout.index_bytes(), store.file_count(),
+                                          int(counts.get(FileState.DONE.value, 0)), store.segment_count())
+        finally:
+            store.close()
+        known = next((r for r in roots if self._fold(r.path) == self._fold(target)), None)
+        if known is None:
+            for other in roots:
+                if _under(target, other.path, self._fold) or _under(other.path, target, self._fold):
+                    return Failure(FailureReason.UNSUPPORTED,
+                                   f"that folder overlaps a folder that is already indexed ({other.path}). "
+                                   "Choose what to index inside that one instead")
+        target = known.path if known else target
+        own_data = (str(self.layout.root),)
+        base = target.rstrip("/\\")
+        extra = tuple(f[len(base) + 1:].replace("\\", "/") for f in own_data if f.startswith(base + "/") or f.startswith(base + "\\"))
+        listing = self.source.scan(target, ScanRules((), extra), stop)
+        if isinstance(listing, Failure):
+            return listing
+        tree = picker.build(target, ((e.path, e.size, e.offline) for e in listing.entries), self.settings.extensions)
+        settings = self.settings
+        plan = picker.plan_from_root(tree, known) if known else picker.plan_from_guess(tree, settings)
+        return {"plan": plan, "rates": rates, "known": known is not None,
+                "fresh": lambda: picker.plan_from_guess(tree, settings)}
+
+    def apply_plan(self, plan) -> "Root | Failure":
+        """Take the picker's choices: add the folder or change it. What is now left out leaves the index at
+        once; what is now only listed by name loses its text at once; the rest is read by the next run."""
+        return self.set_root(plan.to_root(), keep_levels=False)
+
+    def set_root(self, root: Root, keep_levels: bool = True) -> "Root | Failure":
         if root.policy not in POLICIES:
             return Failure(FailureReason.UNSUPPORTED, f"unknown policy {root.policy!r}; choose one of {', '.join(POLICIES)}")
         path = os.path.abspath(os.path.expanduser(root.path))
@@ -264,11 +304,12 @@ class LocalService:
                                    "one file must belong to one root")
         else:
             path = old.path   # keep the spelling the files were stored under
-        levels = tuple(root.levels) if root.levels or old is None else old.levels   # rules and policy changes keep them
+        # a change of rules or policy alone keeps the levels; the picker states them all, so there they are replaced
+        levels = tuple(root.levels) if root.levels or old is None or not keep_levels else old.levels
         wanted = Root(path, root.policy, tuple(root.include), tuple(root.exclude), levels=levels)
         with self.store.transaction():
             self.store.set_root(wanted)
-            if old is not None and old.policy != wanted.policy:
+            if old is not None and (old.policy != wanted.policy or old.levels != wanted.levels):
                 self._apply_policy(wanted)
             if old is not None and (old.include, old.exclude) != (wanted.include, wanted.exclude):
                 self._apply_rules(wanted)

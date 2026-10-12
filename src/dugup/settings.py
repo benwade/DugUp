@@ -81,6 +81,12 @@ class Settings:
     # -- file kinds: extension (no dot, lower case) -> kind name
     extensions: Mapping[str, FileKind] = field(default_factory=lambda: dict(DEFAULT_EXTENSIONS))
 
+    # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
+    book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
+    book_folder_level: str = "names"       # what a folder with such a name starts at; "" makes no guess about books
+    picture_heavy_fraction: float = 0.8    # at least this share of a folder's readable files are pictures ...
+    picture_heavy_min: int = 20            # ... and there are at least this many: it starts without OCR
+
     def __post_init__(self) -> None:
         problems = validate(self)
         if problems:
@@ -138,6 +144,10 @@ def validate(s: Settings) -> List[str]:
             problems.append(f"{name} must be at least 1")
     if s.ocr_memory_mb < 0 or s.ocr_tiny_pixels < 0:
         problems.append("ocr_memory_mb and ocr_tiny_pixels must not be negative")
+    if s.book_folder_level not in ("", "names", "words", "ocr", "meaning"):
+        problems.append('book_folder_level must be "", "names", "words", "ocr" or "meaning"')
+    if not 0.0 < s.picture_heavy_fraction <= 1.0 or s.picture_heavy_min < 0:
+        problems.append("picture_heavy_fraction must be above 0 and at most 1, and picture_heavy_min must not be negative")
     if s.missing_retention_days < 0:
         problems.append("missing_retention_days must not be negative")
     return problems

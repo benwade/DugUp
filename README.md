@@ -110,6 +110,13 @@ turns it off for new text). Searching is unaffected: the word index is built fro
 index from an earlier version is converted the first time it is opened, which can take a minute on a
 large one; run `dugup space --compact` afterwards to hand the freed space back to the disk.
 
+In the window, "Add folder..." looks through the folder (opening no file) and shows a picker: a box to take
+each subfolder in or out, how far to go in each, what it holds, and what it would add to the index. It
+starts from guesses (tool data and trash out, picture folders without OCR, folders named like a book
+library by name only), each with its reason, and nothing changes until Apply. "Choose what to index..."
+opens it again for a folder that is already indexed. The guesses can be tuned in `config.toml`
+(`book_folders`, `book_folder_level`, `picture_heavy_fraction`, `picture_heavy_min`).
+
 Levels let one folder be treated differently from the rest: `names` keeps file names only, `words` also
 reads the text of readable files, `ocr` also reads pictures and scans, `meaning` is everything (the default).
 A folder's level applies to everything below it until a folder further down has its own; `inherit` takes a
