@@ -499,6 +499,11 @@ class LocalService:
         return machine.readers_for(s.ocr_fast_readers, s.ocr_reader_threads, s.ocr_reader_memory_mb,
                                    free_bytes=machine.free_memory_bytes())
 
+    def card_readers(self) -> int:
+        """How many readers share the graphics card in fast mode. Each still does its drawing and tidying on
+        the processor, so the count follows the cores, and eight is as far as it has been measured."""
+        return self.settings.ocr_gpu_readers or min(8, self.fast_readers())
+
     def _more_readers(self, count: int, gpu: bool = False) -> list:
         """`count` more OCR readers, each with its own worker. The caller closes them."""
         return [SandboxOcrBackend(SubprocessSandbox(), self.settings, threads=self.settings.ocr_reader_threads, gpu=gpu)
@@ -561,7 +566,7 @@ class LocalService:
                     # every core, and one such reader beside the others would crowd them all (seen on Windows)
                     # On a graphics card a few readers are enough: the card does the heavy part one page after another.
                     if gpu:
-                        extra = self._more_readers(self.settings.ocr_gpu_readers if fast else 1, gpu=True)
+                        extra = self._more_readers(self.card_readers() if fast else 1, gpu=True)
                     else:
                         extra = self._more_readers(self.fast_readers()) if fast else []
                     lead = extra.pop(0) if extra else self.ocr_backend

@@ -751,7 +751,7 @@ def cmd_ocr(args, env, out, environ, stop: Optional[threading.Event] = None, ins
                 if args.readers:        # the number asked for applies to whichever kind of reader this run uses
                     service.settings = replace(service.settings, ocr_fast_readers=max(1, args.readers),
                                                ocr_gpu_readers=max(1, args.readers))
-                count = service.settings.ocr_gpu_readers if on_card else service.fast_readers()
+                count = service.card_readers() if on_card else service.fast_readers()
                 safe_write(f"Fast: {count} reader(s) side by side" + (", sharing the graphics card" if on_card else "")
                            + ". The computer will be busier until this ends.", out)
             report = service.run_ocr(stop, printer, roots, budget, args.retry_failed, args.reread_old,
