@@ -14,3 +14,7 @@ dist/
 _backup_*.tgz
 _Pics_with_letters/
 _scratch/
+
+# directory summaries written by local tooling; not part of the project
+*_brainmap.md
+/index.md
