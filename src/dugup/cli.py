@@ -206,6 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
     index = sub.add_parser("index", parents=[common], help="bring the index up to date (Ctrl+C stops cleanly; run again to continue)")
     index.add_argument("--root", action="append", default=None, metavar="FOLDER", help="only this folder (repeatable)")
     index.add_argument("--retry-failed", action="store_true", help="try the files that failed last time again")
+    index.add_argument("--no-ocr", action="store_true",
+                       help="stop after the index is up to date; do not go on to read pictures and scans (dugup ocr does that later)")
     choice = index.add_mutually_exclusive_group()
     choice.add_argument("--reread", action="store_true", help="after a settings change: read every file again")
     choice.add_argument("--keep", action="store_true", help="after a settings change: keep what is stored as it is")
@@ -623,7 +625,24 @@ def cmd_index(args, env, out, environ, stop: Optional[threading.Event] = None, i
             if report.stopped:
                 safe_write("[Interrupted] Stopped cleanly. Run `dugup index` again to continue where it stopped.", out)
                 return 130
-            return 0
+            if args.no_ocr or not service.settings.ocr_after_index:
+                return 0
+            waiting = service.ocr_waiting()
+            if not waiting:
+                return 0
+            # the same run goes on to the pictures and scans the folders ask for; Ctrl+C stops it as before
+            safe_write(f"Now reading {waiting:,} picture(s) and scanned page(s) (OCR). Ctrl+C stops; what is done is kept "
+                       "and `dugup ocr` continues later. (`dugup index --no-ocr` leaves this step out.)", out)
+            pages = service.run_ocr(stop, printer, roots)
+            printer.finish()
+            if isinstance(pages, Failure):
+                return _fail(pages, out)
+            print_ocr_report(pages, out)
+            print_compacted(pages.compacted, out)
+            if pages.stopped:
+                safe_write("[Interrupted] Stopped cleanly. The index is up to date; run `dugup ocr` to read the rest.", out)
+                return 130
+            return 1 if pages.paused else 0
     finally:
         if previous is not None:
             signal.signal(signal.SIGINT, previous)

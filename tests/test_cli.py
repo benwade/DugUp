@@ -81,7 +81,8 @@ def test_add_index_search_status(sh):
 def test_files_waiting_for_ocr_are_counted_apart_and_do_not_bury_real_trouble(sh):
     for i in range(60):
         (sh.docs / f"icon{i:02d}.png").write_bytes(b"\x89PNG stand-in")
-    sh.ready()
+    assert sh.run("roots", "add", str(sh.docs))[0] == 0
+    assert sh.run("index", "--no-ocr")[0] == 0
     code, text = sh.run("status", "--attention")
     assert "60 file(s) wait for OCR" in text and "Needs attention: showing 1 of 1" in text
     assert "locked.docx" in text and "icon" not in text

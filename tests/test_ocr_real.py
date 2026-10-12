@@ -178,7 +178,7 @@ def test_index_then_ocr_then_search_finds_the_words_in_pictures(tmp_path):
     (docs / "broken.png").write_bytes(b"\x89PNG\r\n\x1a\n not really")
 
     assert run(data, "roots", "add", str(docs))[0] == 0
-    code, text = run(data, "index")
+    code, text = run(data, "index", "--no-ocr")
     assert code == 0 and "dugup ocr" in text
     assert "No files found" in run(data, "search", "trattoria")[1], "before OCR the words in a picture cannot be found"
     code, text = run(data, "status")

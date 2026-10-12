@@ -37,7 +37,7 @@ class Shell:
 
     def ready(self):
         assert self.run("roots", "add", str(self.docs))[0] == 0
-        assert self.run("index")[0] == 0
+        assert self.run("index", "--no-ocr")[0] == 0      # these tests look at the OCR command on its own
         return self
 
 
@@ -203,3 +203,42 @@ def test_closing_the_service_ends_the_ocr_worker(tmp_path):
     service, _ = make_service(tmp_path, ocr)
     service.close()
     assert ocr.closed
+
+
+# ---- `dugup index` goes on into OCR ---------------------------------------------------------------------------
+
+def test_index_goes_straight_on_to_the_pictures(sh):
+    sh.ocr.answers[(sh.path("a.png"), 1)] = words("needle on a sign")
+    assert sh.run("roots", "add", str(sh.docs))[0] == 0
+    code, text = sh.run("index")
+    assert code == 0, text
+    assert text.index("Read 4 file(s)") < text.index("Now reading 3 picture(s) and scanned page(s) (OCR)") < text.index("OCR read 3 of 3")
+    assert "dugup index --no-ocr" in text and "Ctrl+C stops" in text
+    assert "a.png" in sh.run("search", "needle")[1], "one command made the picture findable"
+    code, text = sh.run("index")
+    assert code == 0 and "Now reading" not in text, "nothing waits: no OCR step"
+
+
+def test_index_leaves_ocr_out_when_asked_or_set_or_not_wanted_by_the_folder(sh):
+    assert sh.run("roots", "add", str(sh.docs))[0] == 0
+    code, text = sh.run("index", "--no-ocr")
+    assert code == 0 and "Now reading" not in text and sh.ocr.calls == []
+    (sh.data / "config.toml").write_text("ocr_after_index = false\n", encoding="utf-8")
+    assert "Now reading" not in sh.run("index")[1] and sh.ocr.calls == []
+    (sh.data / "config.toml").unlink()
+    sh.run("roots", "level", str(sh.docs), "words")
+    assert "Now reading" not in sh.run("index")[1] and sh.ocr.calls == [], "the folder asks for words only"
+    sh.run("roots", "level", str(sh.docs), "ocr")
+    assert "Now reading 3 picture(s)" in sh.run("index")[1]
+
+
+def test_stopping_during_the_ocr_step_says_the_index_is_done(sh):
+    assert sh.run("roots", "add", str(sh.docs))[0] == 0
+    stop = threading.Event()
+    sh.ocr.on_call = lambda path, page: stop.set()    # the stop request arrives while the first picture is read
+    out = io.StringIO()
+    args = cli.build_parser().parse_args(["index", "--data-dir", str(sh.data)])
+    code = cli.cmd_index(args, None, out, {}, stop=stop, install_signals=False)
+    text = out.getvalue()
+    assert code == 130 and "The index is up to date; run `dugup ocr` to read the rest." in text
+    assert "Read 4 file(s)" in text
