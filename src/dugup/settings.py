@@ -34,6 +34,8 @@ class Settings:
     max_pdf_pages: int = 5000          # DigUp's cap per file [source]
     full_page_image_fraction: float = 0.7   # an image covering this share of a page marks a scan [unverified]
     garbled_fraction: float = 0.2      # share of unusable characters that marks a garbled layer [unverified]
+    figure_fraction: float = 0.1       # a picture covering this share of a typed page gets the page read by OCR
+                                       # too (labels in a figure, a pasted screenshot); 0 turns it off [unverified]
     # -- Office (native readers)
     max_member_bytes: int = 64_000_000  # one part inside a docx/xlsx/pptx/odt is read up to here
     # -- isolation: readers run in a worker process, so a bad file can hurt the worker and not the index
@@ -42,6 +44,11 @@ class Settings:
     reader_seconds_per_mb: float = 2.0     # extra time for each megabyte of the file
     reader_seconds_cap: float = 900.0      # never more than this for one file
     reader_memory_mb: int = 4096           # memory a reader may use; 0 means no limit
+    retry_patience: float = 2.0            # a file or page that ran out of time gets one more try, last of all,
+                                           # with its time limit multiplied by this; 1 or less means no second try
+    reader_failures_in_a_row: int = 10     # this many crashes or timeouts one after another pause the run; 0: never
+    min_free_mb: int = 200                 # a run stops when the drive that holds the index has less free; 0: no check
+    max_index_mb: int = 0                  # a spending limit: a run stops when the index is larger than this; 0: none
     # -- OCR: pictures and scanned pages are read in a worker of their own
     ocr_seconds: float = 120.0             # time allowed for one page or picture
     ocr_memory_mb: int = 0                 # memory the OCR worker may use; 0 means no limit [the engine reserves a lot]
@@ -70,6 +77,7 @@ class Settings:
         return {"chunk_chars": self.chunk_chars, "chunk_overlap": self.chunk_overlap, "language": self.language,
                 "max_text_bytes": self.max_text_bytes, "max_pdf_pages": self.max_pdf_pages,
                 "full_page_image_fraction": self.full_page_image_fraction, "garbled_fraction": self.garbled_fraction,
+                "figure_fraction": self.figure_fraction,
                 "max_member_bytes": self.max_member_bytes}
 
 
@@ -85,6 +93,10 @@ def validate(s: Settings) -> List[str]:
     for name in ("full_page_image_fraction", "garbled_fraction"):
         if not 0.0 < getattr(s, name) <= 1.0:
             problems.append(f"{name} must be above 0 and at most 1")
+    if not 0.0 <= s.figure_fraction <= 1.0:
+        problems.append("figure_fraction must be between 0 and 1")
+    if s.retry_patience < 0 or s.reader_failures_in_a_row < 0 or s.min_free_mb < 0 or s.max_index_mb < 0:
+        problems.append("retry_patience, reader_failures_in_a_row, min_free_mb and max_index_mb must not be negative")
     for name in ("reader_seconds", "reader_seconds_cap"):
         if getattr(s, name) <= 0:
             problems.append(f"{name} must be above 0")

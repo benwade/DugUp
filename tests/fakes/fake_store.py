@@ -206,7 +206,8 @@ class FakeStore:
 
     def _ocr_entry(self, row_id: int, page: int) -> dict:
         self._page_index(row_id, page)
-        return self.ocr.setdefault((row_id, page), {"state": "", "reason": "", "width": None, "height": None, "camera": False})
+        return self.ocr.setdefault((row_id, page), {"state": "", "reason": "", "width": None, "height": None,
+                                                    "camera": False, "engine": ""})
 
     def ocr_queue(self, prefix=None, case_insensitive=None):
         ids = sorted(self.files) if prefix is None else self._below(prefix, case_insensitive)
@@ -217,9 +218,9 @@ class FakeStore:
                 continue
             for info in self.pages.get(row_id, []):
                 entry = self.ocr.get((row_id, info.page), {})
-                if info.needs_ocr and not entry.get("state"):
+                if info.needs_ocr and entry.get("state", "") in ("", "retry"):
                     out.append(OcrTask(row_id, rec.path, rec.kind, info.page, entry.get("width"), entry.get("height"),
-                                       bool(entry.get("camera"))))
+                                       bool(entry.get("camera")), info.verdict.value, entry.get("state") == "retry"))
         return out
 
     def set_page_shape(self, row_id, page, width, height, camera) -> None:
@@ -243,12 +244,60 @@ class FakeStore:
             self.segment_ids[row_id].append(self.next_segment)
             self.lines[self.next_segment] = lines
             self.next_segment += 1
-        self._mark_read(row_id, page, index)
+        self._mark_read(row_id, page, index, f"{result.engine} {result.version}".strip())
 
-    def _mark_read(self, row_id, page, index) -> None:
+    def _mark_read(self, row_id, page, index, engine="") -> None:
         info = self.pages[row_id][index]
         self.pages[row_id][index] = PageInfo(info.page, info.verdict, False, info.unread_reason)
-        self._ocr_entry(row_id, page).update(state="done", reason="")
+        self._ocr_entry(row_id, page).update(state="done", reason="", engine=engine)
+
+    def defer_ocr(self, row_id, page, reason) -> None:
+        self._ocr_entry(row_id, page).update(state="retry", reason=reason)
+
+    def _kept_pages(self, row_id, pages):
+        return {p.page for p in pages if p.needs_ocr and self.ocr.get((row_id, p.page), {}).get("state") == "done"}
+
+    def replace_text(self, row_id, segments, pages) -> None:
+        if row_id not in self.files:
+            raise StoreError(f"no file with id {row_id}")
+        keep = self._kept_pages(row_id, pages)
+        old = {page: dict(entry) for (row, page), entry in self.ocr.items() if row == row_id}
+        saved = [(seg, self.lines.get(seg_id, [])) for seg, seg_id in zip(self.segments[row_id], self.segment_ids[row_id])
+                 if seg.kind is SegmentKind.OCR and seg.page in keep]
+        self.replace_segments(row_id, segments)
+        for seg, lines in saved:
+            self.segments[row_id].append(seg)
+            self.segment_ids[row_id].append(self.next_segment)
+            self.lines[self.next_segment] = lines
+            self.next_segment += 1
+        self.set_pages(row_id, pages)
+        for index, info in enumerate(self.pages[row_id]):
+            before = old.get(info.page)
+            if before is None:
+                continue
+            if info.page in keep:
+                self._mark_read(row_id, info.page, index, before.get("engine", ""))
+            if before.get("width") is not None:
+                self._ocr_entry(row_id, info.page).update(width=before["width"], height=before["height"], camera=before["camera"])
+
+    def ocr_engines(self):
+        counts: Dict[str, int] = {}
+        for (row, _), entry in self.ocr.items():
+            if entry["state"] == "done" and self.files[row].missing_since is None:
+                counts[entry["engine"]] = counts.get(entry["engine"], 0) + 1
+        return counts
+
+    def requeue_ocr_not_by(self, engine, prefix=None, case_insensitive=None):
+        ids = set(self.files) if prefix is None else set(self._below(prefix, case_insensitive))
+        found = set()
+        for (row, page), entry in self.ocr.items():
+            if row in ids and entry["state"] == "done" and entry["engine"] != engine:
+                entry.update(state="")
+                index = self._page_index(row, page)
+                info = self.pages[row][index]
+                self.pages[row][index] = PageInfo(info.page, info.verdict, True, info.unread_reason)
+                found.add(row)
+        return sorted(found)
 
     def fail_ocr(self, row_id, page, reason) -> None:
         self._ocr_entry(row_id, page).update(state="failed", reason=reason)
@@ -267,7 +316,8 @@ class FakeStore:
             entry = self.ocr.get((row_id, info.page), {})
             state = entry.get("state", "")
             if info.needs_ocr or state:
-                out.append((info.page, {"": OCR_WAITING, "done": OCR_DONE, "failed": OCR_FAILED}[state], entry.get("reason", "")))
+                names = {"": OCR_WAITING, "retry": OCR_WAITING, "done": OCR_DONE, "failed": OCR_FAILED}
+                out.append((info.page, names[state], entry.get("reason", "") if state == "failed" else ""))
         return out
 
     def _line_box(self, handle, start):
@@ -706,6 +756,29 @@ class OcrFailureStaysQueued(FakeStore):
 class OcrWithoutBoxes(FakeStore):
     def _line_box(self, handle, start):
         return None
+
+
+class RereadForgetsOcr(FakeStore):
+    def _kept_pages(self, row_id, pages):
+        return set()
+
+
+class RereadKeepsOcrOfPagesThatNoLongerNeedIt(FakeStore):
+    def _kept_pages(self, row_id, pages):
+        return {p.page for p in pages if self.ocr.get((row_id, p.page), {}).get("state") == "done"}
+
+    def _mark_read(self, row_id, page, index, engine=""):
+        self._ocr_entry(row_id, page).update(state="done", reason="", engine=engine)
+
+
+class DeferredPagesLeaveTheQueue(FakeStore):
+    def defer_ocr(self, row_id, page, reason):
+        self._ocr_entry(row_id, page).update(state="failed", reason=reason)
+
+
+class RequeueIgnoresTheEngine(FakeStore):
+    def requeue_ocr_not_by(self, engine, prefix=None, case_insensitive=None):
+        return super().requeue_ocr_not_by("no engine has this name", prefix, case_insensitive)
 
 
 class OcrQueueIncludesMissing(FakeStore):

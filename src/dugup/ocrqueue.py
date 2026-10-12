@@ -2,10 +2,15 @@
 
 The indexer leaves a page that needs OCR marked in the store. This runner takes those pages in this order:
 
-  0  pages of documents (a scanned PDF page, or one whose text layer cannot be used)
-  1  pictures that look like documents (no camera named: scans, screenshots, saved graphics)
-  2  photos (the picture names the camera that took it), and pictures whose shape is unknown
-  3  tiny pictures (longest side under `ocr_tiny_pixels`): icons and buttons, read last, never skipped
+  0  scanned pages of documents (a PDF page with no usable text layer)
+  1  typed pages that hold a sizeable picture (the typed text is found already; this is for the figure)
+  2  pictures that look like documents (no camera named: scans, screenshots, saved graphics)
+  3  photos (the picture names the camera that took it), and pictures whose shape is unknown
+  4  tiny pictures (longest side under `ocr_tiny_pixels`): icons and buttons, never skipped
+  5  second tries: a page that ran out of time is read again here, last of all, with more time
+
+A page that runs out of time is not failed at once: it moves to class 5 (the store remembers, so this
+holds across runs) and only a second timeout fails it.
 
 Promises, the same as indexing:
 - Resumable: each page is stored as it is read, in its own transaction. A run that stops or dies loses
@@ -24,15 +29,16 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .indexer import OCR_WAIT, Progress, safe_rate
-from .protocols import OCR_FAILED, OCR_WAITING, OcrResult, OcrTask, StopSignal, Store
+from .indexer import (OCR_FAILED_NOTE, OCR_WAIT, ROOM_EVERY, Progress, is_ocr_note, note_with_ocr, ocr_notes,
+                      safe_rate)
+from .protocols import OcrResult, OcrTask, PageVerdict, StopSignal, Store
 from .settings import Settings
 from .shapes import Failure, FailureReason, FileKind, FileState
 
 log = logging.getLogger("dugup.ocr")
 
-OCR_FAILED_NOTE = "OCR failed on"     # how the note of a page OCR could not read begins
-DOCUMENT_PAGE, DOCUMENT_PICTURE, PHOTO, TINY = 0, 1, 2, 3
+__all__ = ["OcrRunner", "OcrReport", "priority", "is_ocr_note", "ocr_notes", "OCR_FAILED_NOTE", "OCR_WAIT"]
+DOCUMENT_PAGE, FIGURE_PAGE, DOCUMENT_PICTURE, PHOTO, TINY, SECOND_TRY = 0, 1, 2, 3, 4, 5
 PROBE_CHUNK = 100
 # Reasons that say something about the run, not about the page: nothing is marked failed for these.
 NOT_READY = (FailureReason.NOT_INSTALLED, FailureReason.BUSY, FailureReason.UNSUPPORTED)
@@ -41,30 +47,15 @@ SUSPECT = (FailureReason.CRASHED, FailureReason.TIMED_OUT, FailureReason.OUT_OF_
 
 
 def priority(task: OcrTask, tiny_pixels: int) -> int:
+    if task.retry:
+        return SECOND_TRY
     if task.kind is not FileKind.IMAGE:
-        return DOCUMENT_PAGE
+        return FIGURE_PAGE if task.verdict == PageVerdict.BORN_DIGITAL.value else DOCUMENT_PAGE
     if not task.width or not task.height:
         return PHOTO                     # unknown shape: not first, not last
     if max(task.width, task.height) < tiny_pixels:
         return TINY
     return PHOTO if task.camera else DOCUMENT_PICTURE
-
-
-def is_ocr_note(part: str) -> bool:
-    return part.endswith(OCR_WAIT) or part.startswith(OCR_FAILED_NOTE)
-
-
-def ocr_notes(status: Sequence[Tuple[int, str, str]], total_pages: int) -> List[str]:
-    """The OCR part of a file's note, from what became of its pages."""
-    waiting = [page for page, state, _ in status if state == OCR_WAITING]
-    failed = [(page, reason) for page, state, reason in status if state == OCR_FAILED]
-    notes = []
-    if waiting:
-        notes.append(f"{len(waiting)} of {total_pages} {OCR_WAIT}")
-    if failed:
-        page, reason = failed[0]
-        notes.append(f"{OCR_FAILED_NOTE} {len(failed)} of {total_pages} page(s) (first: page {page}, {reason})")
-    return notes
 
 
 @dataclass
@@ -73,6 +64,8 @@ class OcrReport:
     read: int = 0                  # pages read (with or without words on them)
     with_words: int = 0
     failed: int = 0                # pages marked as failed, each with its reason
+    second_tries: int = 0          # pages that ran out of time and were given a second, longer try
+    requeued: int = 0              # files with pages put back because another engine version read them
     left: int = 0                  # pages whose file could not be reached; they stay queued
     stopped: bool = False
     out_of_time: bool = False
@@ -96,7 +89,9 @@ class OcrRunner:
 
     def __init__(self, store: Store, backend, settings: Optional[Settings] = None,
                  progress: Optional[Callable[[Progress], None]] = None,
-                 timer: Optional[Callable[[], float]] = None, case_insensitive: Optional[bool] = None) -> None:
+                 timer: Optional[Callable[[], float]] = None, case_insensitive: Optional[bool] = None,
+                 room: Optional[Callable[[], str]] = None) -> None:
+        self.room = room            # says why nothing more may be written; "" when there is room
         self.store = store
         self.backend = backend
         self.settings = settings or Settings()
@@ -111,10 +106,7 @@ class OcrRunner:
         record = self.store.get_file(path)
         if record is None or record.row_id is None or record.state not in (FileState.PARTIAL, FileState.DONE):
             return
-        others = [part for part in record.error.split("; ") if part and not is_ocr_note(part)]
-        notes = ocr_notes(self.store.ocr_status(record.row_id), len(self.store.get_pages(record.row_id))) + others
-        state = FileState.PARTIAL if notes else FileState.DONE
-        note = "; ".join(notes)
+        state, note = note_with_ocr(self.store, record.row_id, record.error)
         if (state, note) != (record.state, record.error):
             self.store.set_state(record.row_id, state, note)
 
@@ -155,12 +147,30 @@ class OcrRunner:
                                                                  width, height, camera)
         return [measured.get((t.row_id, t.page), t) for t in tasks]
 
+    def _room(self) -> str:
+        return "" if self.room is None else str(self.room() or "")
+
+    def _read(self, task: OcrTask, stop: Optional[StopSignal]):
+        more = {}
+        if task.retry:      # the second try: more time, when the backend can say how much that is
+            patient = getattr(self.backend, "patient_limit", None)
+            more["time_limit"] = (patient(self.settings.retry_patience) if patient is not None
+                                  else self.settings.ocr_seconds * self.settings.retry_patience)
+        if task.kind is FileKind.PDF:
+            return self.backend.read_page(task.path, task.page, language=self.settings.language, stop=stop, **more)
+        return self.backend.read(task.path, language=self.settings.language, stop=stop, **more)
+
     def run(self, stop: Optional[StopSignal] = None, roots: Optional[Sequence[str]] = None,
-            budget_seconds: Optional[float] = None, retry_failed: bool = False) -> OcrReport:
+            budget_seconds: Optional[float] = None, retry_failed: bool = False, reread_old: bool = False) -> OcrReport:
         started = self.timer()
         report = OcrReport()
+        report.paused = self._room()
+        if report.paused:
+            return report
         if retry_failed:
             self._retry(roots)
+        if reread_old:
+            report.requeued = self._requeue_old(roots)
         tasks = self._measure(self._queue(roots), stop)
         if isinstance(tasks, Failure):
             report.stopped = True
@@ -170,7 +180,15 @@ class OcrRunner:
         tasks.sort(key=lambda t: (priority(t, tiny), t.row_id, t.page))
         report.total = len(tasks)
         in_a_row = 0
-        for task in tasks:
+        queue = list(tasks)
+        at = -1
+        while at + 1 < len(queue):      # a page that runs out of time is put at the end, so the list can grow
+            at += 1
+            task = queue[at]
+            if at % ROOM_EVERY == 0 and at:
+                report.paused = self._room()
+                if report.paused:
+                    break
             if _stopped(stop):
                 report.stopped = True
                 break
@@ -179,10 +197,9 @@ class OcrRunner:
                 break
             self._tell(Progress("ocr", "", report.read + report.failed, report.total, report.failed,
                                 self.timer() - started, task.path))
-            if task.kind is FileKind.PDF:
-                result = self.backend.read_page(task.path, task.page, language=self.settings.language, stop=stop)
-            else:
-                result = self.backend.read(task.path, language=self.settings.language, stop=stop)
+            if task.retry:
+                report.second_tries += 1
+            result = self._read(task, stop)
             if isinstance(result, OcrResult):
                 with self.store.transaction():
                     self.store.save_ocr(task.row_id, task.page, result)
@@ -203,15 +220,22 @@ class OcrRunner:
                 report.left += 1          # the file or its drive is away: the page keeps its place in the queue
                 continue
             reason = f"{result.reason.value}: {result.detail}".replace(";", ",")
-            with self.store.transaction():
-                self.store.fail_ocr(task.row_id, task.page, reason)
-                self.refresh_file(task.path)
-            report.failed += 1
-            log.info("ocr failed: row %s page %s reason %s", task.row_id, task.page, result.reason.value)
+            if result.reason is FailureReason.TIMED_OUT and not task.retry and self.settings.retry_patience > 1.0:
+                self.store.defer_ocr(task.row_id, task.page, reason)     # not failed yet: one more try, last of all
+                queue.append(OcrTask(task.row_id, task.path, task.kind, task.page, task.width, task.height,
+                                     task.camera, task.verdict, True))
+                log.info("ocr deferred: row %s page %s", task.row_id, task.page)
+            else:
+                with self.store.transaction():
+                    self.store.fail_ocr(task.row_id, task.page, reason)
+                    self.refresh_file(task.path)
+                report.failed += 1
+                log.info("ocr failed: row %s page %s reason %s", task.row_id, task.page, result.reason.value)
             if result.reason in SUSPECT:
                 in_a_row += 1
                 if in_a_row >= self.settings.ocr_failures_in_a_row:
-                    report.paused = (f"{in_a_row} pages in a row failed (the last one: {result.reason.value.replace('_', ' ')}), "
+                    report.paused = (f"{in_a_row} pages in a row failed or ran out of time (the last one: "
+                                     f"{result.reason.value.replace('_', ' ')}), "
                                      "which looks like trouble with the OCR engine and not with the pictures")
                     break
         report.seconds = self.timer() - started
@@ -227,6 +251,24 @@ class OcrRunner:
         else:
             for root in roots:
                 wanted.update(self.store.retry_ocr(root, self.case_insensitive))
+        self._refresh_rows(wanted)
+
+    def _requeue_old(self, roots: Optional[Sequence[str]]) -> int:
+        """Pages read by another engine or version wait again. Their old text stays until they are read."""
+        engine_id = getattr(self.backend, "engine_id", None)
+        current = engine_id() if engine_id is not None else None
+        if not current:
+            return 0          # no engine to compare with: nothing is put back
+        wanted = set()
+        if roots is None:
+            wanted.update(self.store.requeue_ocr_not_by(current))
+        else:
+            for root in roots:
+                wanted.update(self.store.requeue_ocr_not_by(current, root, self.case_insensitive))
+        self._refresh_rows(wanted)
+        return len(wanted)
+
+    def _refresh_rows(self, wanted) -> None:
         if not wanted:
             return
         for record in self.store.list_files(missing=None):

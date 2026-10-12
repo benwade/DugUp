@@ -25,7 +25,8 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .filesource import excluded
 from .kinds import classify
-from .protocols import Extraction, Extractor, FileEntry, FileSource, ScanRules, Skipped, StopSignal, Store
+from .protocols import (OCR_FAILED, OCR_WAITING, Extraction, Extractor, FileEntry, FileSource, ScanRules, Skipped,
+                        StopSignal, Store)
 from .settings import Settings
 from .shapes import (POLICY_NAMES_ONLY, Failure, FailureReason, FileRecord, FileState, Root)
 
@@ -33,11 +34,40 @@ log = logging.getLogger("dugup.indexer")
 
 OFFLINE_NOTE = "cloud placeholder: the content is not on this machine, so it was not read"
 POLICY_NOTE = "names only: this folder's policy keeps file names and no text"
-READERS_GENERATION = 1   # raise when the extractors change what they produce, so old text is offered a re-read
+READERS_GENERATION = 2   # raise when the extractors change what they produce, so old text is offered a re-read
 APPLY_CHUNK = 500        # changes written per transaction while a scan is recorded
 
 OCR_WAIT = "page(s) wait for OCR"   # the note of a page that needs OCR; see only_waits_for_ocr
+OCR_FAILED_NOTE = "OCR failed on"     # how the note of a page OCR could not read begins
+RETRY_NOTE = "ran out of time once; waits for a second try with more time"   # the note of a file that stays queued
 KEEP, REREAD, REFUSE = "keep", "reread", "refuse"
+ROOM_EVERY = 25          # the free space on the index's drive is looked at once every this many files
+# Reasons that may be the reader's or the machine's fault and not the file's. Enough in a row pause the run.
+SUSPECT = (FailureReason.CRASHED, FailureReason.TIMED_OUT, FailureReason.OUT_OF_MEMORY)
+
+
+def is_ocr_note(part: str) -> bool:
+    return part.endswith(OCR_WAIT) or part.startswith(OCR_FAILED_NOTE)
+
+
+def ocr_notes(status: Sequence[Tuple[int, str, str]], total_pages: int) -> List[str]:
+    """The OCR part of a file's note, from what became of its pages (see Store.ocr_status)."""
+    waiting = [page for page, state, _ in status if state == OCR_WAITING]
+    failed = [(page, reason) for page, state, reason in status if state == OCR_FAILED]
+    notes = []
+    if waiting:
+        notes.append(f"{len(waiting)} of {total_pages} {OCR_WAIT}")
+    if failed:
+        page, reason = failed[0]
+        notes.append(f"{OCR_FAILED_NOTE} {len(failed)} of {total_pages} page(s) (first: page {page}, {reason})")
+    return notes
+
+
+def note_with_ocr(store: Store, row_id: int, note: str) -> Tuple[FileState, str]:
+    """A file's state and note with the OCR part rewritten from what the store knows about its pages."""
+    others = [part for part in note.split("; ") if part and not is_ocr_note(part)]
+    notes = ocr_notes(store.ocr_status(row_id), len(store.get_pages(row_id))) + others
+    return (FileState.PARTIAL if notes else FileState.DONE), "; ".join(notes)
 
 
 def only_waits_for_ocr(note: str) -> bool:
@@ -103,6 +133,8 @@ class IndexReport:
     failed: int = 0
     skipped: int = 0
     vanished: int = 0                # gone between the scan and the read; left for the next scan
+    second_tries: int = 0            # files that ran out of time and were read again, last, with more time
+    paused: str = ""                 # why the run paused itself (a run of reader failures, or a full drive)
     stopped: bool = False
     settings_changed: Tuple[str, ...] = ()   # set, with no work done, when the caller must decide first
     seconds: float = 0.0
@@ -135,7 +167,10 @@ def outcome_of(result: "Extraction | Failure") -> Tuple[Optional[FileState], str
 class Indexer:
     def __init__(self, store: Store, source: FileSource, extractor: Extractor, settings: Optional[Settings] = None,
                  progress: Optional[Callable[[Progress], None]] = None, clock: Callable[[], float] = time.time,
-                 timer: Callable[[], float] = time.monotonic, extra_excludes: Sequence[str] = ()) -> None:
+                 timer: Callable[[], float] = time.monotonic, extra_excludes: Sequence[str] = (),
+                 room: Optional[Callable[[], str]] = None) -> None:
+        self.room = room         # says why nothing more may be written (the drive is nearly full, or the
+                                 # index reached its spending limit); "" when there is room
         self.store = store
         self.source = source
         self.extractor = extractor
@@ -193,6 +228,9 @@ class Indexer:
         if changed:
             report.settings_changed = changed
             return report
+        report.paused = self._room()
+        if report.paused:
+            return report
         chosen = [r for r in self.store.list_roots() if roots is None or r.path in roots]
         if retry_failed:
             for root in chosen:
@@ -212,7 +250,7 @@ class Indexer:
         if not report.stopped:
             for root in readable:
                 if not self.read_pending(root, report, stop):
-                    report.stopped = True
+                    report.stopped = not report.paused
                     break
         report.seconds = self.timer() - started
         log.info("run finished: read=%d done=%d partial=%d failed=%d skipped=%d stopped=%s seconds=%.1f",
@@ -278,7 +316,7 @@ class Indexer:
                 self.store.set_missing(existing.row_id, None)   # back, unchanged: its text is still right
                 report.restored += 1
                 return
-            self.store.upsert_file(self._record_for(root, entry))
+            self._new_content(root, entry)
             report.added += 1
 
         def move(old: str, entry: FileEntry) -> None:
@@ -297,7 +335,7 @@ class Indexer:
                 self.store.upsert_file(self._record_for(root, entry))
 
         def change(entry: FileEntry) -> None:
-            self.store.upsert_file(self._record_for(root, entry))   # the old text stays until the file is re-read
+            self._new_content(root, entry)   # the old text stays until the file is re-read
             report.changed += 1
 
         def gone(path: str) -> None:
@@ -334,37 +372,108 @@ class Indexer:
 
     # -- step 2: read what is waiting
 
+    def _new_content(self, root: Root, entry: FileEntry) -> None:
+        """Record a file whose content is new or different. What OCR read from the old content is let go:
+        with its page records cleared, the next read keeps none of it (see Store.replace_text)."""
+        row_id = self.store.upsert_file(self._record_for(root, entry))
+        self.store.set_pages(row_id, ())
+
+    def _room(self) -> str:
+        return "" if self.room is None else str(self.room() or "")
+
+    def _patient(self):
+        """The extractor's more patient read, when it has one and second tries are on."""
+        if self.settings.retry_patience <= 1.0:
+            return None
+        return getattr(self.extractor, "extract_patiently", None)
+
     def read_pending(self, root: Root, report: IndexReport, stop: Optional[StopSignal] = None) -> bool:
-        """Read every waiting file below a root. False when a stop request ended it early."""
+        """Read every waiting file below a root. False when a stop request, or a pause, ended it early.
+
+        A file that runs out of time is not failed at once. It keeps its place in the queue with a note,
+        and is read again after everything else, with more time; only a second timeout fails it. The note
+        is stored, so a run that stops before that last pass still knows which files have had their first try.
+        """
         total = int(dict(self.store.state_counts(root.path)).get(FileState.PENDING.value, 0))
         started = self.timer()
-        done = failed = 0
+        done = failed = in_a_row = 0
+        later: List[FileRecord] = []
         cursor = 0
+
+        def one(record: FileRecord, patient: bool) -> Optional[bool]:
+            """None to carry on, else what read_pending returns."""
+            nonlocal done, failed, in_a_row
+            if _stopped(stop):
+                return False
+            if (done + len(later)) % ROOM_EVERY == 0:
+                report.paused = self._room()
+                if report.paused:
+                    return False
+            self._tell(Progress("read", root.path, done, total, failed, self.timer() - started, record.path))
+            state = self.read_one(record, report, stop, patient)
+            if state is None and _stopped(stop):
+                return False
+            if state is FileState.PENDING:      # out of time once: it waits for the last pass
+                later.append(record)
+            else:
+                done += 1
+                failed += state is FileState.FAILED
+            in_a_row = in_a_row + 1 if self._last_reason in SUSPECT else 0
+            limit = self.settings.reader_failures_in_a_row
+            if limit and in_a_row >= limit:
+                report.paused = (f"{in_a_row} files in a row crashed their reader or ran out of time (the last one: "
+                                 f"{self._last_reason.value.replace('_', ' ')}), which looks like trouble with the "
+                                 "program or the machine and not with the files. The rest stays queued")
+                return False
+            return None
+
         while True:
             batch = self.store.list_files(prefix=root.path, state=FileState.PENDING, missing=False,
                                           limit=self.settings.batch_files, after_row=cursor)
             if not batch:
-                return True
+                break
             for record in batch:
                 cursor = record.row_id
-                if _stopped(stop):
-                    return False
-                self._tell(Progress("read", root.path, done, total, failed, self.timer() - started, record.path))
-                state = self.read_one(record, report, stop)
-                if state is None and _stopped(stop):
-                    return False
-                done += 1
-                failed += state is FileState.FAILED
+                if record.error == RETRY_NOTE and self._patient() is not None:
+                    later.append(record)       # had its first try in an earlier run
+                    continue
+                answer = one(record, False)
+                if answer is not None:
+                    return answer
             self._tell(Progress("read", root.path, done, max(total, done), failed, self.timer() - started))
+        second = list(later)
+        del later[:]
+        for record in second:
+            answer = one(record, True)
+            if answer is not None:
+                return answer
+        if second:
+            self._tell(Progress("read", root.path, done, max(total, done), failed, self.timer() - started))
+        return True
 
-    def read_one(self, record: FileRecord, report: IndexReport, stop: Optional[StopSignal] = None) -> Optional[FileState]:
-        """Read one file and store the outcome. Returns its new state, or None when it was left waiting."""
+    _last_reason: Optional[FailureReason] = None
+
+    def read_one(self, record: FileRecord, report: IndexReport, stop: Optional[StopSignal] = None,
+                 patient: bool = False) -> Optional[FileState]:
+        """Read one file and store the outcome. Returns its new state; None when it was left waiting untouched;
+        PENDING when it ran out of time for the first time and now waits for a more patient second try."""
+        self._last_reason = None
+        patiently = self._patient()
         try:
-            result = self.extractor.extract(record, stop)
+            if patient and patiently is not None:
+                report.second_tries += 1
+                result = patiently(record, stop, self.settings.retry_patience)
+            else:
+                result = self.extractor.extract(record, stop)
         except Exception as exc:   # a reader bug must cost one file, not the run
             result = Failure(FailureReason.CRASHED, f"the reader raised {type(exc).__name__}: {exc}")
         if result is None:
             result = Failure(FailureReason.OTHER, "the reader returned nothing")
+        if isinstance(result, Failure):
+            self._last_reason = result.reason
+            if result.reason is FailureReason.TIMED_OUT and not patient and patiently is not None:
+                self.store.set_state(record.row_id, FileState.PENDING, RETRY_NOTE)
+                return FileState.PENDING
         state, note = outcome_of(result)
         if state is None:
             if isinstance(result, Failure) and result.reason is FailureReason.UNREACHABLE:
@@ -373,9 +482,13 @@ class Indexer:
         with self.store.transaction():
             # A file that could not be read keeps no text from an earlier version of itself: stale text
             # would be found and shown as if it were still in the file. Its name stays searchable.
-            readable = isinstance(result, Extraction)
-            self.store.replace_segments(record.row_id, result.segments if readable else ())
-            self.store.set_pages(record.row_id, result.pages if readable else ())
+            if isinstance(result, Extraction):
+                # what OCR already read from this same content is kept (a re-read after a settings change)
+                self.store.replace_text(record.row_id, result.segments, result.pages)
+                state, note = note_with_ocr(self.store, record.row_id, note)
+            else:
+                self.store.replace_segments(record.row_id, ())
+                self.store.set_pages(record.row_id, ())
             self.store.set_state(record.row_id, state, note)
         report.read += 1
         if state is FileState.DONE:

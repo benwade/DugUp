@@ -9,6 +9,8 @@ How a page is judged, by structure and not by who produced the file:
   text over a page-size image, or text that is all invisible
                              -> scanner_layer; the text is indexed and the page also goes to OCR
   anything else              -> born_digital; trusted
+  ... with a sizeable picture -> born_digital still, and the page also goes to OCR, because words inside
+                                a figure or a pasted screenshot are in no text layer
   the page cannot be opened  -> unreadable, with the reason
 
 The two thresholds (how much of the page an image must cover, how much unusable text makes a layer
@@ -65,7 +67,8 @@ def judge_page(text: str, has_objects: bool, image_fraction: float, visible_text
         return PageVerdict.GARBLED, True, False
     if image_fraction >= settings.full_page_image_fraction or not visible_text:
         return PageVerdict.SCANNER_LAYER, True, True
-    return PageVerdict.BORN_DIGITAL, False, True
+    figure = settings.figure_fraction > 0 and image_fraction >= settings.figure_fraction
+    return PageVerdict.BORN_DIGITAL, figure, True
 
 
 class PdfExtractor:

@@ -47,6 +47,10 @@ BROKEN = [
     (fs.OcrFailureStaysQueued, "ocr_blank_and_failed_pages_leave_the_queue"),
     (fs.OcrQueueIncludesMissing, "ocr_queue_lists_waiting_pages"),
     (fs.RereadKeepsOcrState, "reread_clears_ocr"),
+    (fs.RereadForgetsOcr, "replace_text_keeps_what_ocr_read"),
+    (fs.RereadKeepsOcrOfPagesThatNoLongerNeedIt, "replace_text_keeps_what_ocr_read"),
+    (fs.DeferredPagesLeaveTheQueue, "a_deferred_page_stays_queued_and_is_marked"),
+    (fs.RequeueIgnoresTheEngine, "pages_read_by_another_engine_can_be_requeued"),
     (fs.SetRootForgetsStatus, "roots_round_trip_and_keep_their_status"),
 ]
 

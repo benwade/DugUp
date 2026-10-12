@@ -588,6 +588,71 @@ def check_reread_clears_ocr(s):
     require(list(s.ocr_status(row)) == [(3, OCR_WAITING, "")], "old OCR outcomes must not survive a re-read")
 
 
+def check_a_deferred_page_stays_queued_and_is_marked(s):
+    row = _scan(s)
+    s.defer_ocr(row, 2, "timed_out: slow")
+    tasks = {t.page: t for t in s.ocr_queue()}
+    require(sorted(tasks) == [2, 3], "a deferred page stays in the queue")
+    require(tasks[2].retry and not tasks[3].retry, "a deferred page is marked as waiting for its second try")
+    require(tasks[2].verdict == PageVerdict.NO_LAYER.value, "a task carries its page's verdict")
+    require(list(s.ocr_status(row)) == [(2, OCR_WAITING, ""), (3, OCR_WAITING, "")], "a deferred page still counts as waiting")
+    s.fail_ocr(row, 2, "timed_out: slow again")
+    require([t.page for t in s.ocr_queue()] == [3], "failing a deferred page takes it out")
+    raises(StoreError, lambda: s.defer_ocr(row, 99, "x"), "defer_ocr on an unknown page")
+
+
+def check_replace_text_keeps_what_ocr_read(s):
+    row = _scan(s)
+    s.replace_segments(row, [SegmentIn(1, 0, SegmentKind.TEXT, "typed words")])
+    s.save_ocr(row, 2, _read(("scanned needle", (10, 10, 90, 20))))
+    s.save_ocr(row, 3, _read(("another haystack", (10, 30, 90, 40))))
+    s.set_page_shape(row, 2, 640, 480, True)
+    old = s.search_words("needle").rows[0].evidence[0]
+    # the same file read again: page 2 is still a scan, page 3 turns out to have a usable layer, page 4 is new
+    s.replace_text(row, [SegmentIn(1, 0, SegmentKind.TEXT, "typed words again"), SegmentIn(3, 0, SegmentKind.TEXT, "layer text")],
+                   [PageInfo(1, PageVerdict.BORN_DIGITAL, False), PageInfo(2, PageVerdict.NO_LAYER, True),
+                    PageInfo(3, PageVerdict.BORN_DIGITAL, False), PageInfo(4, PageVerdict.NO_LAYER, True)])
+    found = s.search_words("needle").rows
+    require(len(found) == 1 and found[0].evidence[0].page == 2, "OCR text of a page that still needs OCR must survive a re-read")
+    require(found[0].evidence[0].box == Box(10, 10, 90, 20), "and it keeps the box of its line")
+    require(s.get_passage(old) is None, "Evidence from before the re-read must not be honoured afterwards")
+    require(s.search_words("haystack").total == 0, "OCR text of a page that no longer needs OCR must go")
+    require(s.search_words("again").total == 1 and s.search_words("layer").total == 1, "the new text must be stored")
+    require([(t.page, t.width) for t in s.ocr_queue()] == [(4, None)], "only the page nobody has read waits")
+    require(list(s.ocr_status(row)) == [(2, OCR_DONE, ""), (4, OCR_WAITING, "")], "the kept page stays read; the new one waits")
+    require([p.needs_ocr for p in s.get_pages(row)] == [False, False, False, True], "page records must match")
+    require(dict(s.ocr_engines()) == {"fake-ocr 1.0": 1}, "the kept page remembers which engine read it")
+    s.replace_text(row, [], [PageInfo(1, PageVerdict.NO_LAYER, True), PageInfo(2, PageVerdict.NO_LAYER, True)])
+    require([(t.page, t.width, t.camera) for t in s.ocr_queue()] == [(1, None, False)],
+            "a second re-read keeps it again, and a failed or waiting page is simply asked for afresh")
+    s.fail_ocr(row, 1, "corrupt: x")
+    s.replace_text(row, [], [PageInfo(1, PageVerdict.NO_LAYER, True), PageInfo(2, PageVerdict.NO_LAYER, True)])
+    require([t.page for t in s.ocr_queue()] == [1], "a page OCR failed on gets a fresh chance when the file is read again")
+    s.set_pages(row, [])
+    s.replace_text(row, [], [PageInfo(2, PageVerdict.NO_LAYER, True)])
+    require(s.search_words("needle").total == 0 and [t.page for t in s.ocr_queue()] == [2],
+            "once the page records are cleared (the file changed), nothing is kept")
+    raises(StoreError, lambda: s.replace_text(424242, [], []), "replace_text on an unknown id")
+
+
+def check_pages_read_by_another_engine_can_be_requeued(s):
+    row = _scan(s)
+    other = _scan(s, "/e/b.pdf")
+    s.save_ocr(row, 2, _read(("old words", (1, 1, 9, 9))))
+    s.save_ocr(row, 3, _read())
+    s.save_ocr(other, 2, OcrResult((OcrLine("new words", Box(1, 1, 9, 9)),), "fake-ocr", "2.0"))
+    require(dict(s.ocr_engines()) == {"fake-ocr 1.0": 2, "fake-ocr 2.0": 1}, "pages read are counted by engine and version, blank ones too")
+    require(list(s.requeue_ocr_not_by("fake-ocr 2.0", "/e")) == [], "the folder asked for must be respected")
+    require(list(s.requeue_ocr_not_by("fake-ocr 2.0")) == [row], "the files with pages from another engine are named")
+    require([(t.row_id, t.page) for t in s.ocr_queue()] == [(row, 2), (row, 3), (other, 3)], "those pages wait again")
+    require(s.search_words("old").total == 1, "their old text stays until they are read again")
+    s.save_ocr(row, 2, OcrResult((OcrLine("fresh", Box(1, 1, 9, 9)),), "fake-ocr", "2.0"))
+    require(s.search_words("old").total == 0 and s.search_words("fresh").total == 1, "the new reading replaces the old")
+    require(dict(s.ocr_engines()) == {"fake-ocr 2.0": 2}, "the counts follow")
+    s.set_missing(other, 1.0)
+    require(dict(s.ocr_engines()) == {"fake-ocr 2.0": 1}, "pages of a missing file are not counted")
+
+
 # ---- roots ---------------------------------------------------------------------------------------------
 
 def check_roots_round_trip_and_keep_their_status(s):
@@ -651,6 +716,9 @@ CHECKS = {
     "ocr_text_is_searchable_with_a_box": check_ocr_text_is_searchable_with_a_box,
     "ocr_blank_and_failed_pages_leave_the_queue": check_ocr_blank_and_failed_pages_leave_the_queue,
     "reread_clears_ocr": check_reread_clears_ocr,
+    "a_deferred_page_stays_queued_and_is_marked": check_a_deferred_page_stays_queued_and_is_marked,
+    "replace_text_keeps_what_ocr_read": check_replace_text_keeps_what_ocr_read,
+    "pages_read_by_another_engine_can_be_requeued": check_pages_read_by_another_engine_can_be_requeued,
     "roots_round_trip_and_keep_their_status": check_roots_round_trip_and_keep_their_status,
     "purge_case_rule_is_explicit": check_purge_case_rule_is_explicit,
     "purge_with_non_ascii_folder": check_purge_with_non_ascii_folder,

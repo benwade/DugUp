@@ -20,6 +20,7 @@ from .protocols import Limits, OcrLine, OcrResult, Sandbox, StopSignal
 from .settings import Settings
 from .shapes import Box, BoxError, Failure, FailureReason, box_from_polygon
 
+ENGINE = "rapidocr"     # the engine behind this backend; another engine is another backend with its own name
 LANGUAGES = ("en",)     # what the engine's bundled models have been tried on here
 Shape = Optional[Tuple[int, int, bool]]   # (width, height, names a camera), or None when it cannot be opened
 
@@ -91,6 +92,10 @@ class SandboxOcrBackend:
             raise ValueError("pages are numbered from 1")
         return self._read(os.fspath(pdf), page, language, time_limit, None, stop)
 
+    def patient_limit(self, patience: float) -> float:
+        """The time limit of a second try (see OcrRunner)."""
+        return self.settings.ocr_seconds * max(1.0, patience)
+
     def _limits(self, time_limit: Optional[float]) -> Limits:
         seconds = self.settings.ocr_seconds if time_limit is None else time_limit
         return Limits(seconds, self.settings.ocr_memory_mb or None)
@@ -124,6 +129,15 @@ class SandboxOcrBackend:
             return shapes
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             return Failure(FailureReason.CRASHED, f"the worker's answer could not be understood ({type(exc).__name__}: {exc})")
+
+    def engine_id(self) -> Optional[str]:
+        """The engine's name and version as stored with every page it reads, or None when it is not installed.
+        Asked of the package's metadata, so no worker is started and the engine is not loaded."""
+        try:
+            from importlib.metadata import PackageNotFoundError, version
+            return f"{ENGINE} {version(ENGINE)}"
+        except Exception:
+            return None
 
     def close(self) -> None:
         close = getattr(self.sandbox, "close", None)

@@ -6,6 +6,8 @@
   garbled       visible text whose character map is broken (it extracts as private-use characters)
   none          no text; a full-page image when `ink` is true, an empty page otherwise
   unreadable    a page entry that is not a page at all
+  figure        visible text with a picture over about a quarter of the page (a chart, a pasted screenshot)
+  logo          visible text with a picture over about one percent of the page
 
 Text is written through a ToUnicode map made for the document, so any Unicode text (accents, CJK, emoji)
 comes back out of the text layer exactly, whatever the glyphs look like. Optional password protection uses
@@ -115,6 +117,10 @@ def build_pdf(pages: Sequence[PdfPage], password: Optional[str] = None) -> bytes
             contents.append(image + _text_ops("F1", good, page.text, True))
         elif page.layer == "none":
             contents.append(f"q {PAGE_W} 0 0 {PAGE_H} 0 0 cm /Im1 Do Q".encode() if page.ink else b"")
+        elif page.layer in ("figure", "logo"):
+            w, h = (PAGE_W // 2, PAGE_H // 2) if page.layer == "figure" else (PAGE_W // 10, PAGE_H // 10)
+            image = f"q {w} 0 0 {h} 40 40 cm /Im1 Do Q\n".encode()
+            contents.append(image + _text_ops("F1", good, page.text, False))
         elif page.layer == "unreadable":
             contents.append(None)
         else:

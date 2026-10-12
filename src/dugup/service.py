@@ -85,6 +85,22 @@ class LocalService:
             self._store_thread = threading.get_ident()
         return self._store
 
+    @property
+    def ocr_backend(self):
+        """Made on first use. Making it starts no worker; the first picture read does."""
+        if self._ocr_backend is None:
+            self._ocr_backend = SandboxOcrBackend(SubprocessSandbox(), self.settings)
+        return self._ocr_backend
+
+    def old_ocr_pages(self) -> Mapping[str, int]:
+        """Pages read by an OCR engine or version other than the one installed now, by engine. Empty when
+        there are none, or when no engine is installed to compare with."""
+        engine_id = getattr(self.ocr_backend, "engine_id", None)
+        current = engine_id() if engine_id is not None else None
+        if not current:
+            return {}
+        return {name: count for name, count in self.store.ocr_engines().items() if name != current}
+
     def close(self) -> None:
         self.stop_indexing()
         if self._store is not None:
@@ -102,6 +118,22 @@ class LocalService:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+    def room(self) -> str:
+        """Why nothing more may be written to the index, or "" when there is room. Two guards: the drive must
+        keep `min_free_mb` free, and the index must stay under the user's spending limit, `max_index_mb`."""
+        megabyte = 1024 * 1024
+        limit = self.settings.max_index_mb
+        if limit and self.layout.index_bytes() > limit * megabyte:
+            return (f"the index has reached its spending limit of {limit:,} MB (it is "
+                    f"{self.layout.index_bytes() / megabyte:,.0f} MB). Nothing more was written. "
+                    "Raise the limit with `dugup space --limit MB`, or index fewer folders")
+        floor = self.settings.min_free_mb
+        free = self.layout.free_bytes()
+        if floor and free is not None and free < floor * megabyte:
+            return (f"the drive that holds the index has less than {floor:,} MB free. Nothing more was written. "
+                    "Free some space and run the command again")
+        return ""
 
     # -- search
 
@@ -263,7 +295,7 @@ class LocalService:
                             progress(p)
 
                     indexer = Indexer(store, self.source, self.extractor, self.settings, tell, self.clock,
-                                      extra_excludes=(str(self.layout.root),))
+                                      extra_excludes=(str(self.layout.root),), room=self.room)
                     report = indexer.run(stop, roots, on_settings_change, retry_failed)
                     self.last_report = report
                     return report
@@ -276,7 +308,7 @@ class LocalService:
 
     def run_ocr(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
                 roots: Optional[Sequence[str]] = None, budget_seconds: Optional[float] = None,
-                retry_failed: bool = False) -> "OcrReport | Failure":
+                retry_failed: bool = False, reread_old: bool = False) -> "OcrReport | Failure":
         """Read the pages and pictures that wait for OCR, in the calling thread, until done or stopped.
         It writes to the index, so it takes the same lock as an indexing run: one or the other, never both."""
         if not self._run_guard.acquire(blocking=False):
@@ -290,16 +322,15 @@ class LocalService:
                     known = [r.path for r in store.list_roots()]
                     wanted = known if roots is None else [r for r in known if any(self._fold(r) == self._fold(w) for w in roots)]
                     here = [r for r in wanted if self.source.reachable(r)]
-                    if self._ocr_backend is None:
-                        self._ocr_backend = SandboxOcrBackend(SubprocessSandbox(), self.settings)
 
                     def tell(p: Progress) -> None:
                         self._progress = p
                         if progress is not None:
                             progress(p)
 
-                    runner = OcrRunner(store, self._ocr_backend, self.settings, tell, case_insensitive=self.case_insensitive)
-                    report = runner.run(stop, here, budget_seconds, retry_failed)
+                    runner = OcrRunner(store, self.ocr_backend, self.settings, tell,
+                                       case_insensitive=self.case_insensitive, room=self.room)
+                    report = runner.run(stop, here, budget_seconds, retry_failed, reread_old)
                     report.away = tuple(r for r in wanted if r not in here)
                     return report
                 finally:

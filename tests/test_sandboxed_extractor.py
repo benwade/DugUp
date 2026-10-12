@@ -171,8 +171,12 @@ def test_a_file_that_times_out_or_kills_its_worker_is_listed_and_the_run_goes_on
     good = {"segments": [[1, 0, "text", "fineword"]], "pages": [[1, "born_digital", False, ""]], "unread": []}
     box = Scripted(Failure(FailureReason.TIMED_OUT, "the job did not finish within 60 s and was ended"),
                    Failure(FailureReason.CRASHED, "the worker ended without an answer (exit code -11)"),
-                   Failure(FailureReason.OUT_OF_MEMORY, "the job needed more memory than the worker is allowed"), good)
+                   Failure(FailureReason.OUT_OF_MEMORY, "the job needed more memory than the worker is allowed"), good,
+                   Failure(FailureReason.TIMED_OUT, "the job did not finish within 120 s and was ended"))
     report = Indexer(store, disk.source, SandboxedExtractor(box)).run()
+    assert [round(limits.seconds) for _, _, limits, _ in box.asked] == [60.0, 60.0, 60.0, 60.0, 120.0], \
+        "the file that ran out of time is read once more, after the others, with double the time"
+    assert report.second_tries == 1
     states = {r.path.rsplit("/", 1)[-1]: (r.state, r.error.split(":")[0]) for r in store.list_files()}
     assert states == {"a.pdf": (FileState.FAILED, "timed_out"), "b.pdf": (FileState.FAILED, "crashed"),
                       "c.pdf": (FileState.FAILED, "out_of_memory"), "d.pdf": (FileState.DONE, "")}

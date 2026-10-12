@@ -48,13 +48,18 @@ class SandboxedExtractor:
         self._image = ImageExtractor()
 
     def extract(self, record: FileRecord, stop: Optional[StopSignal] = None) -> "Extraction | Failure":
+        return self.extract_patiently(record, stop, 1.0)
+
+    def extract_patiently(self, record: FileRecord, stop: Optional[StopSignal] = None,
+                          patience: float = 2.0) -> "Extraction | Failure":
+        """The same read with the time limit multiplied: the second try of a file that ran out of time."""
         if stopped(stop):
             return STOPPED
         if record.kind is FileKind.IMAGE:
             return self._image.extract(record, stop)
         if record.kind not in PARSED_IN_A_WORKER:
             return Failure(FailureReason.UNSUPPORTED, f"no reader for this kind of file ({record.kind.value})")
-        limits = Limits(self.settings.reader_limit(record.size), self.settings.reader_memory_mb or None)
+        limits = Limits(self.settings.reader_limit(record.size) * max(1.0, patience), self.settings.reader_memory_mb or None)
         answer = self.sandbox.run(EXTRACT, {"record": record_to_data(record), "settings": self._settings_data}, limits, stop)
         if isinstance(answer, Failure):
             return answer

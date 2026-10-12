@@ -267,6 +267,22 @@ class Store(Protocol):
     def fail_ocr(self, row_id: int, page: int, reason: str) -> None:
         """Mark a page as one OCR could not read, with the reason. It leaves the queue until retried."""
 
+    def defer_ocr(self, row_id: int, page: int, reason: str) -> None:
+        """Keep a page in the queue but mark it for a second, more patient try (see OcrTask.retry)."""
+
+    def replace_text(self, row_id: int, segments: Sequence[SegmentIn], pages: Sequence[PageInfo]) -> None:
+        """A file was read again. Its text and page records become these, but what OCR already read is kept
+        for every page that still needs OCR (the OCR text, the page marked read, a picture's shape).
+        OCR text of pages that no longer need it, or no longer exist, is dropped."""
+
+    def ocr_engines(self) -> Mapping[str, int]:
+        """How many pages each OCR engine (name and version) has read."""
+
+    def requeue_ocr_not_by(self, engine: str, prefix: Optional[str] = None,
+                           case_insensitive: Optional[bool] = None) -> Sequence[int]:
+        """Put pages read by any other engine or version back in the queue. Their old text stays until
+        they are read again. Returns the row ids of their files."""
+
     def retry_ocr(self, prefix: Optional[str] = None, case_insensitive: Optional[bool] = None) -> Sequence[int]:
         """Put pages OCR failed on back in the queue. Returns the row ids of their files."""
 
@@ -313,6 +329,8 @@ class OcrTask:
     width: Optional[int] = None    # None: not looked at yet; 0: could not be measured
     height: Optional[int] = None
     camera: bool = False           # the picture says which camera took it (a photo, not a scan or a screenshot)
+    verdict: str = ""              # the page's verdict (a PageVerdict value): a scan, or a typed page with a picture
+    retry: bool = False            # it ran out of time once and waits for a second try with more time
 
 
 OCR_WAITING, OCR_DONE, OCR_FAILED = "waiting", "done", "failed"

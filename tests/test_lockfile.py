@@ -3,6 +3,7 @@
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import helpers
@@ -67,5 +68,11 @@ def test_a_killed_holder_does_not_keep_the_lock(tmp_path):
     child.stdin.close()
     child.stdout.close()
     mine = RunLock(lock_path)
-    assert mine.acquire(), "a crash must never leave the index locked"
+    # On Windows, python.exe in a virtual environment is a small launcher that starts the real interpreter.
+    # Killing it ends the real one a moment later, and the lock is freed when THAT process is gone. So the
+    # test asks until the lock is free, and the limit only bounds how long a broken lock can hold the run up.
+    deadline = time.monotonic() + 30.0
+    while not mine.acquire() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert mine.held, "a crash must never leave the index locked"
     mine.release()

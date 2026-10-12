@@ -187,6 +187,12 @@ def build_parser() -> argparse.ArgumentParser:
     ocr.add_argument("--root", action="append", default=None, metavar="FOLDER", help="only this folder (repeatable)")
     ocr.add_argument("--minutes", type=float, default=None, metavar="N", help="stop after about N minutes")
     ocr.add_argument("--retry-failed", action="store_true", help="try the pages OCR failed on again")
+    ocr.add_argument("--reread-old", action="store_true",
+                     help="read again the pages that an older version of the OCR engine read")
+
+    space = sub.add_parser("space", parents=[common], help="how much disk the index uses, and its spending limit")
+    space.add_argument("--limit", type=int, default=None, metavar="MB",
+                       help="stop indexing and OCR when the index is larger than this many megabytes (0: no limit)")
 
     search = sub.add_parser("search", parents=[common], help="find files by the words in them or in their names")
     search.add_argument("words", nargs="+")
@@ -341,6 +347,8 @@ def cmd_roots(args, env, out, environ) -> int:
                 safe_write(f"  skipping: {', '.join(result.exclude)}", out)
             safe_write(f"Tip: dugup roots suggest {quote(result.path)} lists folders that may not be worth indexing "
                        "(downloaded requirements, trash, build output).", out)
+            if len(service.list_roots()) == 1:
+                space_hint(service.layout, service.settings, out)
             safe_write("Next: dugup index", out)
             return 0
         if args.roots_command == "suggest":
@@ -414,6 +422,8 @@ def print_report(report: IndexReport, out: TextIO, retention_days: float) -> Non
                 safe_write(f"    ... and {len(root.skipped) - 5:,} more", out)
     safe_write(f"Read {report.read:,} file(s) in {format_seconds(report.seconds)} ({report.rate:.1f} files/s): "
                f"{report.done:,} done, {report.partial:,} partial, {report.failed:,} failed, {report.skipped:,} skipped", out)
+    if report.second_tries:
+        safe_write(f"{report.second_tries:,} file(s) ran out of time and were read again, last, with more time.", out)
     if report.vanished:
         safe_write(f"{report.vanished:,} file(s) disappeared before they could be read; the next run looks again.", out)
     if report.read >= 100 and report.skipped > report.read / 2:
@@ -481,6 +491,10 @@ def cmd_index(args, env, out, environ, stop: Optional[threading.Event] = None, i
                 safe_write("  dugup index --keep     keep what is stored; only new and changed files use the new settings", out)
                 return 1
             print_report(report, out, service.settings.missing_retention_days)
+            if report.paused:
+                safe_write(f"Indexing paused itself: {report.paused}.", out)
+                safe_write("Run `dugup index` again to go on; `dugup index --retry-failed` also retries what failed.", out)
+                return 1
             if report.stopped:
                 safe_write("[Interrupted] Stopped cleanly. Run `dugup index` again to continue where it stopped.", out)
                 return 130
@@ -507,12 +521,16 @@ def _chosen_roots(service: LocalService, asked: Optional[List[str]], out: TextIO
 def print_ocr_report(report, out: TextIO) -> None:
     for path in report.away:
         safe_write(f"Folder NOT AVAILABLE right now, left alone: {path}", out)
-    if report.total == 0 and report.not_ready is None:
+    if report.requeued:
+        safe_write(f"{report.requeued:,} file(s) had pages read by an older OCR version; those pages were queued again.", out)
+    if report.total == 0 and report.not_ready is None and not report.paused:
         safe_write("Nothing waits for OCR.", out)
         return
     safe_write(f"OCR read {report.read:,} of {report.total:,} waiting page(s) in {format_seconds(report.seconds)} "
                f"({report.rate * 60:.1f} pages/min): {report.with_words:,} with words, "
                f"{report.read - report.with_words:,} with none, {report.failed:,} failed", out)
+    if report.second_tries:
+        safe_write(f"{report.second_tries:,} page(s) ran out of time and were read again, last, with more time.", out)
     if report.left:
         safe_write(f"{report.left:,} page(s) belong to files that could not be reached; they stay queued.", out)
     if report.failed:
@@ -554,7 +572,7 @@ def cmd_ocr(args, env, out, environ, stop: Optional[threading.Event] = None, ins
                 safe_write("--minutes must be above 0", out)
                 return 1
             budget = None if args.minutes is None else args.minutes * 60.0
-            report = service.run_ocr(stop, printer, roots, budget, args.retry_failed)
+            report = service.run_ocr(stop, printer, roots, budget, args.retry_failed, args.reread_old)
             printer.finish()
             if isinstance(report, Failure):
                 return _fail(report, out)
@@ -658,6 +676,9 @@ def cmd_status(args, env, out, environ) -> int:
         if tally["waiting_for_ocr"]:
             safe_write(f"{tally['waiting_for_ocr']:,} file(s) wait for OCR (pictures and scanned pages). "
                        "Their names are searchable already. To read the words in them: dugup ocr", out)
+        for engine, count in sorted(service.old_ocr_pages().items()):
+            safe_write(f"{count:,} page(s) were read by another OCR version ({engine or 'unknown'}). "
+                       "To read them again with the one installed now: dugup ocr --reread-old", out)
         if args.attention is not None:
             records = service.needs_attention(limit=max(0, args.attention))
             safe_write(f"Needs attention: showing {len(records):,} of {tally['attention']:,}", out)
@@ -669,8 +690,99 @@ def cmd_status(args, env, out, environ) -> int:
     return 0
 
 
+def megabytes(count: Optional[int]) -> str:
+    return "unknown" if count is None else f"{count / (1024 * 1024):,.0f} MB"
+
+
+def suggested_limit_mb(free_bytes: Optional[int]) -> Optional[int]:
+    """A starting point for the spending limit: a tenth of what is free now, and at least 500 MB."""
+    if free_bytes is None:
+        return None
+    return max(500, int(free_bytes / (1024 * 1024) / 10))
+
+
+def space_hint(layout: DataLayout, settings, out: TextIO) -> None:
+    """Said once a folder is added: what is free, what the index may use, and how to cap it."""
+    free = layout.free_bytes()
+    if settings.max_index_mb:
+        safe_write(f"Disk: {megabytes(free)} free; the index may use up to {settings.max_index_mb:,} MB (dugup space).", out)
+        return
+    suggestion = suggested_limit_mb(free)
+    line = f"Disk: {megabytes(free)} free where the index is kept. No spending limit is set"
+    if settings.min_free_mb:
+        line += f" (a run stops by itself when less than {settings.min_free_mb:,} MB is free)"
+    safe_write(line + ".", out)
+    if suggestion is not None:
+        safe_write(f"To cap what the index may use, for example at a tenth of the free space: dugup space --limit {suggestion}", out)
+
+
+def set_config_value(config, key: str, value: int) -> None:
+    """Write one `key = number` line into config.toml, replacing an earlier line for the same key and
+    leaving everything else in the file as it is."""
+    try:
+        lines = config.read_text(encoding="utf-8-sig").splitlines()
+    except FileNotFoundError:
+        lines = []
+    kept = []
+    section = False
+    done = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            if not section and not done:      # top-level keys must stand before the first table
+                kept.append(f"{key} = {value}")
+                done = True
+            section = True
+        if not section and stripped.split("=")[0].strip() == key:
+            if not done:
+                kept.append(f"{key} = {value}")
+                done = True
+            continue
+        kept.append(line)
+    if not done:
+        kept.append(f"{key} = {value}")
+    temporary = config.with_name(config.name + ".new")
+    temporary.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    os.replace(temporary, config)
+
+
+def cmd_space(args, env, out, environ) -> int:
+    service = _service(args, environ, out, create=args.limit is not None)
+    if service is None:
+        return 1
+    with service:
+        layout = service.layout
+        limit = service.settings.max_index_mb
+        if args.limit is not None:
+            if args.limit < 0:
+                safe_write("--limit must be 0 (no limit) or a number of megabytes", out)
+                return 1
+            set_config_value(layout.config, "max_index_mb", args.limit)
+            limit = args.limit
+            safe_write(f"Saved in {layout.config}", out)
+        used = layout.index_bytes()
+        free = layout.free_bytes()
+        safe_write(f"Data folder: {layout.root}", out)
+        safe_write(f"The index uses {megabytes(used)}. Free on that drive: {megabytes(free)}.", out)
+        if limit:
+            share = 100.0 * used / (limit * 1024 * 1024)
+            safe_write(f"Spending limit: {limit:,} MB ({share:.0f}% used). Indexing and OCR stop when it is reached; "
+                       "searching goes on working.", out)
+        else:
+            safe_write("Spending limit: none.", out)
+            suggestion = suggested_limit_mb(free)
+            if suggestion is not None:
+                safe_write(f"To set one, for example a tenth of the free space: dugup space --limit {suggestion}", out)
+        if service.settings.min_free_mb:
+            safe_write(f"Whatever the limit, a run stops when less than {service.settings.min_free_mb:,} MB is free on the drive.", out)
+        files = service.indexing_status()["files"]
+        if files and used:
+            safe_write(f"So far that is about {used / files / 1024:,.1f} KB of index for each of the {files:,} file(s).", out)
+    return 0
+
+
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "ocr": cmd_ocr}
+            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

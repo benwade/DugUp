@@ -147,7 +147,20 @@ def _migration_3(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
-MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3]
+def _migration_4(conn: sqlite3.Connection) -> None:
+    """Which OCR engine and version read each page, so a newer one can offer to read old pages again."""
+    conn.execute("ALTER TABLE pages ADD COLUMN ocr_engine TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "UPDATE pages SET ocr_engine = COALESCE((SELECT r.engine FROM segments s JOIN regions r ON r.segment_id = s.id "
+        "WHERE s.file_id = pages.file_id AND s.page = pages.page AND s.kind = 'ocr' LIMIT 1), '') WHERE ocr = 'done'")
+    # a page with no words on it left no line to copy the engine from: it was read by the engine in use so far
+    usual = conn.execute("SELECT ocr_engine FROM pages WHERE ocr_engine != '' GROUP BY ocr_engine "
+                         "ORDER BY COUNT(*) DESC LIMIT 1").fetchone()
+    if usual is not None:
+        conn.execute("UPDATE pages SET ocr_engine = ? WHERE ocr = 'done' AND ocr_engine = ''", (usual[0],))
+
+
+MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3, _migration_4]
 OCR_ORDER = 1_000_000   # the order number of a page's OCR text, after anything a text layer gave
 SCHEMA_VERSION = len(MIGRATIONS)  # informational; the live value is len(MIGRATIONS)
 
@@ -569,14 +582,15 @@ class SqliteStore:
     # -- OCR
 
     def ocr_queue(self, prefix: Optional[str] = None, case_insensitive: Optional[bool] = None) -> List[OcrTask]:
-        clauses, args = ["p.needs_ocr = 1", "p.ocr = ''", "f.missing_since IS NULL"], []
+        clauses, args = ["p.needs_ocr = 1", "p.ocr IN ('', 'retry')", "f.missing_since IS NULL"], []
         if prefix is not None:
             clause, args = _under_clause(prefix, case_insensitive, "f.path")
             clauses.append(clause)
-        sql = ("SELECT f.id, f.path, f.path_raw, f.kind, p.page, p.width, p.height, p.camera "
+        sql = ("SELECT f.id, f.path, f.path_raw, f.kind, p.page, p.width, p.height, p.camera, p.verdict, p.ocr "
                f"FROM pages p JOIN files f ON f.id = p.file_id WHERE {' AND '.join(clauses)} ORDER BY f.id, p.page")
         return [OcrTask(r["id"], decode_path(r["path"], r["path_raw"]), FileKind(r["kind"]), r["page"],
-                        r["width"], r["height"], bool(r["camera"])) for r in self.conn.execute(sql, args)]
+                        r["width"], r["height"], bool(r["camera"]), r["verdict"], r["ocr"] == "retry")
+                for r in self.conn.execute(sql, args)]
 
     def _page_row(self, row_id: int, page: int) -> None:
         if self.conn.execute("SELECT 1 FROM pages WHERE file_id=? AND page=?", (row_id, page)).fetchone() is None:
@@ -612,14 +626,69 @@ class SqliteStore:
                     "VALUES(?,?,'line',?,?,?,?,?,?)",
                     [(cur.lastrowid, f"{result.engine} {result.version}".strip(), l.box.x0, l.box.y0, l.box.x1, l.box.y1,
                       l.confidence, t) for t, l in lines])
-            self.conn.execute("UPDATE pages SET needs_ocr=0, ocr='done', ocr_reason='' WHERE file_id=? AND page=?",
-                              (row_id, page))
+            self.conn.execute("UPDATE pages SET needs_ocr=0, ocr='done', ocr_reason='', ocr_engine=? "
+                              "WHERE file_id=? AND page=?", (f"{result.engine} {result.version}".strip(), row_id, page))
 
     def fail_ocr(self, row_id: int, page: int, reason: str) -> None:
         with self.transaction():
             self._page_row(row_id, page)
             self.conn.execute("UPDATE pages SET ocr='failed', ocr_reason=? WHERE file_id=? AND page=?",
                               (reason, row_id, page))
+
+    def defer_ocr(self, row_id: int, page: int, reason: str) -> None:
+        with self.transaction():
+            self._page_row(row_id, page)
+            self.conn.execute("UPDATE pages SET ocr='retry', ocr_reason=? WHERE file_id=? AND page=?",
+                              (reason, row_id, page))
+
+    def replace_text(self, row_id: int, segments: Sequence[SegmentIn], pages: Sequence[PageInfo]) -> None:
+        with self.transaction():
+            old = {r["page"]: r for r in self.conn.execute(
+                "SELECT page, ocr, ocr_engine, width, height, camera FROM pages WHERE file_id=?", (row_id,))}
+            keep = {p.page for p in pages if p.needs_ocr and p.page in old and old[p.page]["ocr"] == "done"}
+            saved = [(r[0], r[1], r[2]) for r in self.conn.execute(
+                "SELECT id, page, text FROM segments WHERE file_id=? AND kind=?", (row_id, SegmentKind.OCR.value))
+                if r[1] in keep]
+            lines = {seg_id: self.conn.execute(
+                "SELECT engine, label, x0, y0, x1, y1, confidence, text FROM regions WHERE segment_id=? ORDER BY id",
+                (seg_id,)).fetchall() for seg_id, _, _ in saved}
+            self.replace_segments(row_id, segments)
+            name = _clean(self.conn.execute("SELECT name FROM files WHERE id=?", (row_id,)).fetchone()[0])
+            for seg_id, page, text in saved:      # the same text under a new handle: old Evidence stops matching
+                cur = self.conn.execute("INSERT INTO segments(file_id, page, ord, kind, text) VALUES(?,?,?,?,?)",
+                                        (row_id, page, OCR_ORDER, SegmentKind.OCR.value, text))
+                self.conn.execute("INSERT INTO fts(rowid, name, body) VALUES(?,?,?)", (cur.lastrowid, name, text))
+                self.conn.executemany(
+                    "INSERT INTO regions(segment_id, engine, label, x0, y0, x1, y1, confidence, text) VALUES(?,?,?,?,?,?,?,?,?)",
+                    [(cur.lastrowid,) + tuple(line) for line in lines[seg_id]])
+            self.set_pages(row_id, pages)
+            for page in sorted(old):
+                row = old[page]
+                if page in keep:
+                    self.conn.execute("UPDATE pages SET needs_ocr=0, ocr='done', ocr_engine=? WHERE file_id=? AND page=?",
+                                      (row["ocr_engine"], row_id, page))
+                if row["width"] is not None:
+                    self.conn.execute("UPDATE pages SET width=?, height=?, camera=? WHERE file_id=? AND page=?",
+                                      (row["width"], row["height"], row["camera"], row_id, page))
+
+    def ocr_engines(self) -> Dict[str, int]:
+        return {r[0]: r[1] for r in self.conn.execute(
+            "SELECT ocr_engine, COUNT(*) FROM pages p JOIN files f ON f.id = p.file_id "
+            "WHERE p.ocr='done' AND f.missing_since IS NULL GROUP BY ocr_engine")}
+
+    def requeue_ocr_not_by(self, engine: str, prefix: Optional[str] = None,
+                           case_insensitive: Optional[bool] = None) -> List[int]:
+        where, args = "", []
+        if prefix is not None:
+            clause, args = _under_clause(prefix, case_insensitive)
+            where = f"AND file_id IN (SELECT id FROM files WHERE {clause})"
+        with self.transaction():
+            ids = [r[0] for r in self.conn.execute(
+                f"SELECT DISTINCT file_id FROM pages WHERE ocr='done' AND ocr_engine != ? {where} ORDER BY file_id",
+                [engine] + args)]
+            self.conn.execute(f"UPDATE pages SET ocr='', needs_ocr=1 WHERE ocr='done' AND ocr_engine != ? {where}",
+                              [engine] + args)
+        return ids
 
     def retry_ocr(self, prefix: Optional[str] = None, case_insensitive: Optional[bool] = None) -> List[int]:
         where, args = "", []
@@ -635,8 +704,8 @@ class SqliteStore:
     def ocr_status(self, row_id: int) -> List[Tuple[int, str, str]]:
         rows = self.conn.execute("SELECT page, needs_ocr, ocr, ocr_reason FROM pages WHERE file_id=? "
                                  "AND (needs_ocr=1 OR ocr != '') ORDER BY page", (row_id,))
-        names = {"": OCR_WAITING, "done": OCR_DONE, "failed": OCR_FAILED}
-        return [(r[0], names.get(r[2], OCR_WAITING), r[3]) for r in rows]
+        names = {"": OCR_WAITING, "retry": OCR_WAITING, "done": OCR_DONE, "failed": OCR_FAILED}
+        return [(r[0], names.get(r[2], OCR_WAITING), r[3] if r[2] == "failed" else "") for r in rows]
 
     def _line_box(self, segment_id: int, start: int) -> Optional[Box]:
         """The box of the OCR line that holds character `start` of a segment's text."""

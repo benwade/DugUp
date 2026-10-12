@@ -322,7 +322,9 @@ S = Settings()
     ("  \n ", True, 1.0, False, (PageVerdict.NO_LAYER, True, False)),              # a scan with no layer
     ("", True, 0.0, False, (PageVerdict.NO_LAYER, True, False)),                   # a drawing with no text
     ("plain words", True, 0.0, True, (PageVerdict.BORN_DIGITAL, False, True)),
-    ("a caption", True, 0.3, True, (PageVerdict.BORN_DIGITAL, False, True)),       # text beside a small picture
+    ("a caption", True, 0.3, True, (PageVerdict.BORN_DIGITAL, True, True)),        # text beside a figure: trusted, and read too
+    ("a caption", True, 0.1, True, (PageVerdict.BORN_DIGITAL, True, True)),        # exactly at the figure setting
+    ("a letterhead", True, 0.05, True, (PageVerdict.BORN_DIGITAL, False, True)),   # a logo is not a figure
     ("ocr words", True, 1.0, False, (PageVerdict.SCANNER_LAYER, True, True)),      # hidden text over a page image
     ("ocr words", True, 1.0, True, (PageVerdict.SCANNER_LAYER, True, True)),       # visible text over a page image
     ("ocr words", True, 0.0, False, (PageVerdict.SCANNER_LAYER, True, True)),      # all text hidden, image not found
@@ -332,6 +334,26 @@ S = Settings()
 ])
 def test_the_page_rule_as_a_table(text, has_objects, image, visible, expected):
     assert judge_page(text, has_objects, image, visible, S) == expected
+
+
+def test_figures_can_be_turned_off_and_the_size_is_a_setting():
+    assert judge_page("a caption", True, 0.3, True, Settings(figure_fraction=0.0)) == (PageVerdict.BORN_DIGITAL, False, True)
+    assert judge_page("a caption", True, 0.3, True, Settings(figure_fraction=0.5)) == (PageVerdict.BORN_DIGITAL, False, True)
+    assert judge_page("a letterhead", True, 0.05, True, Settings(figure_fraction=0.05))[1] is True
+
+
+def test_a_typed_page_with_a_figure_is_trusted_and_also_sent_to_ocr(tmp_path):
+    from corpus.pdfwriter import PdfPage, build_pdf
+    from extractor_harness import RealHarness
+
+    h = RealHarness(tmp_path)
+    record = h.write("report.pdf", build_pdf([PdfPage("born_digital", "plain typed page"),
+                                              PdfPage("figure", "typed words beside a chart"),
+                                              PdfPage("logo", "typed words under a small logo")]))
+    result = h.extractor.extract(record)
+    assert [(p.verdict, p.needs_ocr) for p in result.pages] == [
+        (PageVerdict.BORN_DIGITAL, False), (PageVerdict.BORN_DIGITAL, True), (PageVerdict.BORN_DIGITAL, False)]
+    assert [s.text for s in result.segments if s.page == 2] == ["typed words beside a chart"], "its typed text is indexed as before"
 
 
 def test_the_page_rule_thresholds_are_settings():

@@ -193,11 +193,11 @@ def test_a_failed_page_is_stated_and_leaves_the_queue(store):
 def test_waiting_and_failed_pages_are_both_in_the_note(store):
     scan(store, "/r/letter.pdf", pages=4)
     stop = threading.Event()
-    ocr = ScriptedOcr({("/r/letter.pdf", 2): Failure(FailureReason.TIMED_OUT, "too slow")})
+    ocr = ScriptedOcr({("/r/letter.pdf", 2): Failure(FailureReason.CRASHED, "too slow")})
     ocr.on_call = lambda path, page: stop.set() if page == 3 else None
     assert OcrRunner(store, ocr).run(stop).stopped
     assert state(store, "/r/letter.pdf")[1] == ("2 of 4 page(s) wait for OCR; "
-                                              "OCR failed on 1 of 4 page(s) (first: page 2, timed_out: too slow)")
+                                              "OCR failed on 1 of 4 page(s) (first: page 2, crashed: too slow)")
 
 
 def test_retry_only_touches_the_folder_asked_for(store):
@@ -340,7 +340,7 @@ def test_a_run_of_engine_failures_pauses_the_run(store):
 def test_damaged_pictures_do_not_pause_the_run_and_a_success_resets_the_count(store):
     scan(store, "/r/long.pdf", pages=9)
     answers = {("/r/long.pdf", n): Failure(FailureReason.CORRUPT, "damaged") for n in (2, 3, 4, 5)}
-    answers.update({("/r/long.pdf", n): Failure(FailureReason.TIMED_OUT, "slow") for n in (6, 8)})
+    answers.update({("/r/long.pdf", n): Failure(FailureReason.OUT_OF_MEMORY, "big") for n in (6, 8)})
     report = OcrRunner(store, ScriptedOcr(answers), Settings(ocr_failures_in_a_row=2)).run()
     assert report.paused == "" and (report.read, report.failed) == (2, 6)
 

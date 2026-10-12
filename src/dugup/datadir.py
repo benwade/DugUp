@@ -145,6 +145,24 @@ class DataLayout:
     def tmp(self) -> Path:
         return self.root / "tmp"
 
+    def index_bytes(self) -> int:
+        """The size of the index on disk right now, with the files SQLite keeps beside it."""
+        total = 0
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                total += os.stat(str(self.index) + suffix).st_size
+            except OSError:
+                pass
+        return total
+
+    def free_bytes(self) -> Optional[int]:
+        """Free space on the drive that holds the data folder, or None when it cannot be told."""
+        import shutil
+        try:
+            return int(shutil.disk_usage(self.root).free)
+        except OSError:
+            return None
+
     def folders(self) -> list:
         return [self.logs, self.cache, self.models, self.tmp]
 

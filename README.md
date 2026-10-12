@@ -16,6 +16,11 @@ Windows 11 and Linux. Search by meaning, photo search and a window are planned a
 - Suggests what to skip (downloaded requirements, tool caches, trash, build output) and never skips by itself.
 - Reads the words in pictures and scanned PDF pages (`dugup ocr`), so a photo can be found by the sign in it.
   Document pages are read first, then scans and screenshots, then photos, and tiny graphics last.
+- A typed PDF page that holds a sizeable picture is read by OCR as well, for the words inside the figure.
+- A file or page that runs out of time is read once more, after everything else, with double the time.
+  A run of crashes or timeouts pauses the run instead of writing off the queue.
+- Disk guards: a run stops when the drive holding the index is nearly full, and you can give the index a
+  spending limit (`dugup space --limit MB`). Searching keeps working either way.
 - Every file ends in a stated state. A scan or photo is `partial` ("pages wait for OCR") until `dugup ocr`
   has read it; a file that cannot be read says why.
 - Stop with Ctrl+C and run again to continue. Deleted files stay findable, flagged, for 30 days.
@@ -56,11 +61,19 @@ It reads printed words well. Drawn or handwritten lettering and blurred photos a
     dugup ocr                                         (read pictures and scanned pages; --minutes N to limit it)
     dugup search invoice 2024
     dugup status --attention
+    dugup space                                       (what the index uses; --limit MB sets a spending limit)
 
 `python -m dugup ...` does the same. The index lives in one per-user data folder (`%LOCALAPPDATA%\DugUp`
 on Windows, `~/.local/share/DugUp` on Linux); add `--data-dir FOLDER` to any command to keep it somewhere
 else. Deleting that folder removes everything DugUp stored. Settings go in `config.toml` in the data
-folder; see `src/dugup/settings.py` for the names and defaults.
+folder; see `src/dugup/settings.py` for the names and defaults. The ones most likely to matter:
+
+    reader_seconds = 60        # time for one file, plus reader_seconds_per_mb (2) for each megabyte
+    ocr_seconds = 120          # time for one page or picture
+    retry_patience = 2.0       # the second try gets this many times the limit; 1 turns second tries off
+    max_index_mb = 0           # spending limit for the index; 0 means none (dugup space --limit sets it)
+    min_free_mb = 200          # a run stops when the drive has less than this free
+    figure_fraction = 0.1      # a picture this share of a typed page gets the page read by OCR too; 0: off
 
 ## Tests
 
