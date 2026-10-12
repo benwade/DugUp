@@ -290,18 +290,37 @@ def exact_terms(query: str) -> Tuple[str, ...]:
     return tuple(dict.fromkeys(word for _, _, word in _words(query) if word))
 
 
+def exact_phrases(query: str) -> Tuple[Tuple[str, ...], ...]:
+    """Each term of a query as its folded words: one word for a plain term, several for a quoted phrase."""
+    out = []
+    for term in parse_query(query):
+        words = tuple(w for _, _, w in _words(term) if w)
+        if words and words not in out:
+            out.append(words)
+    return tuple(out)
+
+
 @functools.lru_cache(maxsize=64)
-def _term_set(terms_json: str) -> frozenset:
-    return frozenset(json.loads(terms_json))
+def _term_set(terms_json: str) -> Tuple[Tuple[str, ...], ...]:
+    return tuple(tuple(term) if isinstance(term, list) else (term,) for term in json.loads(terms_json))
+
+
+def _holds(words: List[str], phrase: Tuple[str, ...]) -> bool:
+    """Whether the words of a text hold this phrase: the same words, next to each other, in that order."""
+    n = len(phrase)
+    if n == 1:
+        return phrase[0] in words
+    first = phrase[0]
+    return any(words[i] == first and tuple(words[i:i + n]) == phrase for i in range(len(words) - n + 1))
 
 
 def _exact_ok(name: Optional[str], body: Optional[str], place: str, terms_json: str) -> int:
-    """SQL function: 1 when every asked-for word stands in this row in exactly that form.
-    `place` says where it must stand: in the name, in the body, or in either."""
+    """SQL function: 1 when every asked-for word (and every quoted phrase) stands in this row in exactly
+    that form. `place` says where it must stand: in the name, in the body, or in either."""
     terms = _term_set(terms_json)
-    in_name = {w for _, _, w in _words(name or "")} if place != "body" else set()
-    in_body = {w for _, _, w in _words(body or "")} if place != "name" else set()
-    return int(all(t in in_name or t in in_body for t in terms))
+    in_name = [w for _, _, w in _words(name or "")] if place != "body" else []
+    in_body = [w for _, _, w in _words(body or "")] if place != "name" else []
+    return int(all(_holds(in_name, t) or _holds(in_body, t) for t in terms))
 
 
 def _exact_span(text: str, terms: Sequence[str]) -> Optional[Tuple[int, int]]:
@@ -331,19 +350,53 @@ def _under_clause(prefix: str, case_insensitive: Optional[bool], column: str = "
     return "(" + " OR ".join(clauses) + ")", args
 
 
+def parse_query(query: str) -> List[str]:
+    """What the user typed, as terms: each is one word, or a phrase that was typed between double quotes.
+    A quote that is never closed is taken as a slip of the keyboard and all quotes are ignored."""
+    if query.count('"') % 2:
+        return [t for t in query.replace('"', " ").split() if t]
+    terms: List[str] = []
+    for index, piece in enumerate(query.split('"')):
+        if index % 2:                       # between a pair of quotes: one phrase
+            phrase = " ".join(piece.split())
+            if phrase:
+                terms.append(phrase)
+        else:
+            terms.extend(piece.split())
+    return terms
+
+
+def _quoted(term: str) -> str:
+    return '"' + term.replace('"', '""') + '"'
+
+
 def build_match(query: str) -> Optional[str]:
-    """Turn what the user typed into a safe FTS5 query: every word quoted."""
-    terms = [t for t in query.split() if t]
+    """Turn what the user typed into a safe FTS5 query: every word, and every phrase, quoted."""
+    terms = parse_query(query)
     if not terms:
         return None
-    return " ".join('"' + t.replace('"', '""') + '"' for t in terms)
+    return " ".join(_quoted(t) for t in terms)
+
+
+def closeness_matches(query: str, near_words: int) -> Optional[Tuple[str, str]]:
+    """For a query of two or more words: (a match for the words as one phrase in the order typed, a match
+    for the words standing within `near_words` of each other in any order). None when there is nothing
+    to be close to, or closeness is turned off."""
+    terms = parse_query(query)
+    words = [w for _, _, w in _words(" ".join(terms))]
+    if len(words) < 2 or near_words <= 0:
+        return None
+    phrase = _quoted(" ".join(terms))
+    near = "NEAR(" + " ".join(_quoted(t) for t in terms) + f", {int(near_words)})"
+    return phrase, (near if len(terms) > 1 else phrase)
 
 
 # ---- the store -------------------------------------------------------------
 
 class SqliteStore:
-    def __init__(self, path: os.PathLike | str) -> None:
+    def __init__(self, path: os.PathLike | str, near_words: int = 15) -> None:
         self.path = Path(path)
+        self.near_words = near_words     # how close words must stand to rank above the same words far apart
         if not self.path.parent.is_dir():
             raise StoreError(f"the folder for the index does not exist: {self.path.parent}")
         self._depth = 0
@@ -826,7 +879,7 @@ class SqliteStore:
             terms = exact_terms(query)
             place = {WHERE_NAME: "name", WHERE_TEXT: "body", WHERE_OCR: "body"}.get(filters.where, "either")
             seg += " AND dugup_exact(fts.name, fts.body, ?, ?) = 1"
-            seg_args = [place, json.dumps(sorted(terms))]
+            seg_args = [place, json.dumps([list(p) for p in exact_phrases(query)])]
         clauses: List[str] = []
         args: List[object] = []
         if filters.folder is not None:
@@ -857,12 +910,25 @@ class SqliteStore:
             f"CROSS JOIN files f ON f.id = s.file_id WHERE fts MATCH ?{seg_clause}{file_clause}",
             [match] + seg_args + file_args,
         ).fetchone()[0]
-        order = ", ".join(f"{SORT_COLUMNS[key]} {'DESC' if down else 'ASC'}" for key, down in keys)
+        # Best match: files where the words stand as a phrase come first, then files where they stand close
+        # together, then the rest; the index's own score decides inside each of the three.
+        close = closeness_matches(query, self.near_words) if any(key == "rank" for key, _ in keys) else None
+        tier, tier_args = "0", []
+        if close is not None:
+            tier = ("MIN(CASE WHEN s.id IN (SELECT rowid FROM fts WHERE fts MATCH ?) THEN 0 "
+                    "WHEN s.id IN (SELECT rowid FROM fts WHERE fts MATCH ?) THEN 1 ELSE 2 END)")
+            tier_args = list(close)
+
+        def by(key: str, down: bool) -> str:
+            way = "DESC" if down else "ASC"
+            return f"tier {way}, rank {way}" if key == "rank" else f"{SORT_COLUMNS[key]} {way}"
+
+        order = ", ".join(by(key, down) for key, down in keys)
         # The score is read from FTS5's `rank` column (bm25 by default). Unlike the bm25() function it is an
         # ordinary column value, so it can be grouped and sorted on every SQLite version.
         sql = (
             "SELECT f.id, f.path, f.path_raw, f.name, f.folder, f.size, f.modified, f.kind, f.state, "
-            "f.missing_since, COUNT(*) AS matches, MIN(fts.rank) AS rank "
+            f"f.missing_since, COUNT(*) AS matches, MIN(fts.rank) AS rank, {tier} AS tier "
             "FROM fts CROSS JOIN segments s ON s.id = fts.rowid CROSS JOIN files f ON f.id = s.file_id "
             f"WHERE fts MATCH ?{seg_clause}{file_clause} GROUP BY f.id "
             f"ORDER BY {order}, f.id ASC LIMIT ? OFFSET ?"
@@ -871,7 +937,7 @@ class SqliteStore:
             SearchRow(r["id"], decode_path(r["path"], r["path_raw"]), r["name"], r["folder"], r["size"],
                       r["modified"], r["kind"], r["state"], r["matches"], r["rank"],
                       missing_since=r["missing_since"])
-            for r in self.conn.execute(sql, [match] + seg_args + file_args + [limit, offset])
+            for r in self.conn.execute(sql, tier_args + [match] + seg_args + file_args + [limit, offset])
         ]
         self._attach_evidence(rows, match, seg_clause, seg_args, terms)
         return SearchPage(rows, total, offset, limit)

@@ -123,7 +123,7 @@ class FakeDesktop:
 
 
 class Bench:
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, intent=None):
         self.docs = tmp_path / helpers.AWKWARD_FOLDER
         self.docs.mkdir()
         (self.docs / "sub").mkdir()
@@ -137,7 +137,7 @@ class Bench:
         self.sign = str(self.docs / "sign.png")
         self.ocr = ScriptedOcr({(self.sign, 1): words("needle on a shop sign")}, shapes={})
         self.layout = DataLayout(tmp_path / "data").ensure()
-        self.service = LocalService(self.layout, Settings(), ocr_backend=self.ocr)
+        self.service = LocalService(self.layout, Settings(), ocr_backend=self.ocr, intent=intent)
         self.root = make_root()
         self.desktop = FakeDesktop()
         self.asked = []
@@ -480,3 +480,89 @@ def test_exact_form_tick_box(bench):
     bench.app.clear_filters()
     assert bench.app.exact.get() is False and len(bench.find("education")) == 2
     assert w.build_filters(exact=True).exact and not w.build_filters().exact
+
+
+# ---- plain words ---------------------------------------------------------------------------------------------
+
+class FakeReader:
+    """Stands in for the model: answers from a table, after the test lets it."""
+
+    def __init__(self):
+        self.answer = None
+        self.asked = []
+        self.go = __import__("threading").Event()
+        self.go.set()
+        self.closed = False
+
+    def understand(self, text, folders=()):
+        self.asked.append((text, list(folders)))
+        self.go.wait()
+        return self.answer
+
+    def close(self):
+        self.closed = True
+
+
+def finish_asking(bench):
+    asker = bench.app.asker
+    assert asker is not None, "nothing was asked"
+    while bench.app.asker is not None:
+        asker.join(0.05)
+        bench.app.drain()
+    bench.root.update()
+
+
+def test_without_a_model_there_is_no_plain_words_row(bench):
+    assert bench.service.intent is None
+    assert bench.app.ask_row.winfo_manager() == "", "the row is not on the window at all"
+    bench.app.sentence.set("anything")
+    bench.app.ask_in_plain_words()
+    finish_asking(bench)
+    assert "not set up" in bench.app.message.get()
+
+
+def test_a_sentence_fills_in_the_form_and_waits_for_the_person(tmp_path):
+    from dugup.intent import Understood
+    from dugup.shapes import Failure, FailureReason
+    reader = FakeReader()
+    bench = Bench(tmp_path, intent=reader)
+    try:
+        bench.ready()
+        app = bench.app
+        assert app.ask_row.winfo_manager() == "grid", "with a model set up, the row is there"
+        app.ask_in_plain_words()
+        assert "as a sentence" in app.message.get() and reader.asked == []
+        app.smallest.set("5g")                     # an old filter, which the sentence should replace
+        reader.answer = Understood(words="needle", folder=str(bench.docs), where="text", kinds=("text", "pdf"),
+                                   after="2026-03-05", before="2026-03-25", smallest="10", exact=True,
+                                   notes=("a kind of file it named is not one this program knows",))
+        reader.go.clear()
+        app.sentence.set("text files about needle from mid March")
+        app.ask_in_plain_words()
+        assert str(app.ask_button.cget("state")) == "disabled" and "Reading your sentence" in app.message.get()
+        app.ask_in_plain_words()
+        assert "still being read" in app.message.get() and len(reader.asked) <= 1
+        reader.go.set()
+        finish_asking(bench)
+        assert reader.asked == [("text files about needle from mid March", [str(bench.docs)])]
+        assert (app.words.get(), app.folder.get(), app.where.get()) == ("needle", str(bench.docs), "In the text")
+        assert [k for k, v in app.kinds.items() if v.get()] == ["pdf", "text"]
+        assert (app.after_day.get(), app.before_day.get(), app.smallest.get(), app.largest.get()) == ("2026-03-05", "2026-03-25", "10", "")
+        assert app.exact.get() is True and str(app.ask_button.cget("state")) == "normal"
+        said = app.message.get()
+        assert said.startswith("Filled in: words: needle; types: text, pdf") and "Not used: a kind of file" in said
+        assert "press Enter to search" in said and bench.names() == [], "nothing is searched until the person says so"
+        app.search()
+        bench.root.update()
+        assert sorted(bench.names()) == ["beta.txt", "gamma.txt"], "the filled-in form searches like a typed one"
+
+        reader.answer = Failure(FailureReason.TIMED_OUT, "the model did not answer within 30 s")
+        app.sentence.set("something else")
+        app.ask_in_plain_words()
+        finish_asking(bench)
+        assert "could not be read (timed out)" in app.message.get() and app.words.get() == "needle", "a failure leaves the form alone"
+    finally:
+        bench.close()
+        bench.app = bench.root = None
+        gc.collect()        # as the fixture does: a closed window's leftovers are collected in this thread
+    assert reader.closed, "closing the window ends the model server"

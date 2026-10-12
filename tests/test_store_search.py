@@ -96,7 +96,10 @@ def test_empty_or_blank_query_returns_an_empty_page(store):
 
 
 def test_build_match_quotes_each_word_and_doubles_inner_quotes():
-    assert build_match('a "b"') == '"a" """b"""'
+    assert build_match('a "b"') == '"a" "b"'
+    assert build_match('one "two three"  four') == '"one" "two three" "four"', "a quoted phrase stays one phrase"
+    assert build_match('say "hi') == '"say" "hi"', "a quote that is never closed is ignored"
+    assert build_match('"" " "') is None
     assert build_match("  ") is None
 
 

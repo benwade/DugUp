@@ -16,7 +16,7 @@ import os
 
 from dugup.protocols import OCR_DONE, OCR_FAILED, OCR_WAITING, OcrTask, PageInfo
 from dugup.shapes import (sort_keys, Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SegmentIn, SegmentKind)
-from dugup.store import SORT_COLUMNS, SearchPage, SearchRow, StoreError
+from dugup.store import SORT_COLUMNS, SearchPage, SearchRow, StoreError, parse_query
 
 FakeSearchRow = SearchRow   # the real row carries evidence now; the old name is kept for the broken variants
 
@@ -40,6 +40,14 @@ def tokens(text: str) -> List[str]:
 def _contains(haystack: List[str], needle: List[str]) -> bool:
     n = len(needle)
     return n > 0 and any(haystack[i:i + n] == needle for i in range(len(haystack) - n + 1))
+
+
+def _one_of_each(places):
+    """Every way to take one position from each list (small lists only: this is a fake)."""
+    combos = [[]]
+    for options in places:
+        combos = [c + [o] for c in combos for o in options[:20]][:2000]
+    return combos
 
 
 def _split(path: str) -> Tuple[str, str]:
@@ -435,7 +443,28 @@ class FakeStore:
 
     @staticmethod
     def _terms(query: str) -> List[List[str]]:
-        return [t for t in (tokens(word) for word in query.split()) if t]
+        return [t for t in (tokens(term) for term in parse_query(query)) if t]
+
+    near_words = 15
+
+    def _tier(self, row_id: int, query: str) -> int:
+        """0 when a piece of the file holds the words as one phrase in the order typed, 1 when it holds them
+        close together, 2 otherwise. One word alone has nothing to be close to."""
+        terms = self._terms(query)
+        words = [w for term in terms for w in term]
+        if len(words) < 2:
+            return 0
+        best = 2
+        for name, body, _ in self._rows_of(row_id):
+            for text in (tokens(name), tokens(body)):
+                if _contains(text, words):
+                    return 0
+                if all(_contains(text, term) for term in terms):
+                    places = [[i for i in range(len(text)) if text[i:i + len(term)] == term] for term in terms]
+                    spans = [max(p) - min(p) for p in _one_of_each(places)]
+                    if spans and min(spans) <= self.near_words + len(words):
+                        best = 1
+        return best
 
     def _row_matches(self, name: str, body: str, terms: List[List[str]]) -> bool:
         name_t, body_t = tokens(name), tokens(body)
@@ -522,10 +551,15 @@ class FakeStore:
             if not evidence:
                 evidence = (Evidence(row_id, hits[0][0], 0, 0, None, hits[0][2]),)
             rows.append(FakeSearchRow(row_id, rec.path, name, folder, rec.size, rec.modified, rec.kind.value,
-                                      rec.state.value, len(hits), -float(len(hits)), evidence, rec.missing_since))
+                                      rec.state.value, len(hits), self._rank(row_id, query, len(hits)), evidence,
+                                      rec.missing_since))
         if len(keys) == 1:
             return self._page(rows, keys[0][0], keys[0][1], limit, offset)
         return self._page_by(rows, keys, limit, offset)
+
+    def _rank(self, row_id: int, query: str, hits: int) -> float:
+        """Smaller is better: closeness first (a whole step apart), then the number of matching pieces."""
+        return self._tier(row_id, query) * 1_000_000.0 - float(hits)
 
     def _keys(self, sort, descending):
         return sort_keys(sort, descending, SORT_COLUMNS)
@@ -817,6 +851,17 @@ class ExactMatchesRelatives(FakeStore):
             return any(h[:6] == n[:6] for n in needle for h in haystack)
         name_t, body_t = tokens(name), tokens(body)
         return all(close(name_t, t) or close(body_t, t) for t in terms)
+
+
+class IgnoresCloseness(FakeStore):
+    def _tier(self, row_id, query):
+        return 0
+
+
+class PhraseIsJustItsWords(FakeStore):
+    @staticmethod
+    def _terms(query):
+        return [t for t in (tokens(word) for word in query.replace('"', " ").split()) if t]
 
 
 class IgnoresSecondSortKey(FakeStore):

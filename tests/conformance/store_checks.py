@@ -635,6 +635,47 @@ def check_exact_form_finds_only_the_very_word(s):
     require(s.search_words("education", limit=1, filters=exact).total == 2, "the total counts exact matches only")
 
 
+def check_words_that_stand_together_rank_first(s):
+    filler = " ".join(f"filler{n}" for n in range(60))
+    # added in the order that would win WITHOUT closeness (oldest row first on a tie), so the check means something
+    far = add(s, "/d/far.txt", f"alpha alpha alpha is frequent at the start. {filler} {filler} and at the very end omega omega omega")
+    near = add(s, "/d/near.txt", f"{filler} the alpha is not far from the omega here {filler}")
+    phrase = add(s, "/d/phrase.txt", f"{filler} somewhere it says alpha omega once {filler}")
+    backwards = add(s, "/d/backwards.txt", f"{filler} here it says omega alpha once {filler}")
+    order = [r.file_id for r in s.search_words("alpha omega").rows]
+    require(order[0] == phrase, "the words as a phrase, in the order typed, rank first")
+    require(set(order[1:3]) == {near, backwards} and order[3] == far,
+            "then the words close together in any order, and last the same words far apart")
+    require(len(order) == 4 and s.search_words("alpha omega").total == 4, "closeness changes the order, never what is found")
+    reverse = [r.file_id for r in s.search_words("alpha omega", sort="rank", descending=True).rows]
+    require(reverse[0] == far and reverse[-1] == phrase, "best match last turns the whole order round")
+    by_name = paths(s.search_words("alpha omega", sort="name"))
+    require(by_name == ["/d/backwards.txt", "/d/far.txt", "/d/near.txt", "/d/phrase.txt"], "another sort key is not disturbed")
+    page = s.search_words("alpha omega", limit=1, offset=3)
+    require([r.file_id for r in page.rows] == [far], "closeness is applied before the page is cut")
+    require(len(s.search_words("alpha").rows) == 4, "one word alone is ranked as before")
+
+
+def check_a_quoted_phrase_must_stand_as_typed(s):
+    add(s, "/d/phrase.txt", "somewhere it says alpha omega once")
+    add(s, "/d/backwards.txt", "here it says omega alpha once")
+    add(s, "/d/apart.txt", "alpha and then, later, omega")
+    add(s, "/d/Alpha Omega notes.txt", "nothing relevant inside")
+    require(len(paths(s.search_words("alpha omega"))) == 4, "without quotes, any file holding both words")
+    require(sorted(paths(s.search_words('"alpha omega"'))) == ["/d/Alpha Omega notes.txt", "/d/phrase.txt"],
+            "in quotes: only where the words stand next to each other in that order (in the text or the name)")
+    require(paths(s.search_words('"omega alpha"')) == ["/d/backwards.txt"], "the order inside the quotes counts")
+    require(paths(s.search_words('"alpha omega" once')) == ["/d/phrase.txt"], "a phrase and a word together: both are needed")
+    require(sorted(paths(s.search_words('"alpha omega', sort="name"))) == sorted(paths(s.search_words("alpha omega"))),
+            "a quote that is never closed is ignored, not an error")
+    require(paths(s.search_words('"alpha omega"', filters=SearchFilters(where="name"))) == ["/d/Alpha Omega notes.txt"],
+            "a phrase combines with the place")
+    require(paths(s.search_words('"ALPHA omega"', filters=SearchFilters(exact=True, where="text"))) == ["/d/phrase.txt"],
+            "and with the exact form")
+    ev = s.search_words('"alpha omega"', filters=SearchFilters(where="text")).rows[0].evidence[0]
+    require(s.get_passage(ev, context=0).text.casefold().startswith("alpha"), "the evidence points at the phrase")
+
+
 # ---- OCR -----------------------------------------------------------------------------------------------
 
 def _scan(s, path="/d/scan.pdf", kind=FileKind.PDF):
@@ -862,6 +903,8 @@ CHECKS = {
     "ocr_text_is_searchable_with_a_box": check_ocr_text_is_searchable_with_a_box,
     "ocr_blank_and_failed_pages_leave_the_queue": check_ocr_blank_and_failed_pages_leave_the_queue,
     "reread_clears_ocr": check_reread_clears_ocr,
+    "words_that_stand_together_rank_first": check_words_that_stand_together_rank_first,
+    "a_quoted_phrase_must_stand_as_typed": check_a_quoted_phrase_must_stand_as_typed,
     "exact_form_finds_only_the_very_word": check_exact_form_finds_only_the_very_word,
     "every_place_in_one_file_can_be_listed": check_every_place_in_one_file_can_be_listed,
     "filters_narrow_the_search": check_filters_narrow_the_search,

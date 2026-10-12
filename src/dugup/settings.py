@@ -59,6 +59,19 @@ class Settings:
     ocr_max_pixels: int = 4000             # a larger picture is scaled down to this longest side before reading
     ocr_tiny_pixels: int = 200             # a picture whose longest side is under this is queued last (icons, buttons)
     ocr_failures_in_a_row: int = 5         # this many pages failing one after another pauses the run
+    # -- plain-words search (optional): a small language model fills in the search form from a sentence.
+    #    Either name a server that is already running (LM Studio, for example) ...
+    intent_url: str = ""               # for example "http://127.0.0.1:1234"; empty: not used
+    intent_model: str = ""             # the model's name on that server, when the server needs one
+    intent_allow_remote: bool = False  # a server on another machine would be sent what you type; off by default
+    #    ... or let the program start a model server itself (llama.cpp's llama-server) and end it on closing.
+    intent_server: str = ""            # the server program, for example "C:\\Tools\\llama\\llama-server.exe"
+    intent_model_file: str = ""        # the model file (GGUF) it should load
+    intent_gpu_layers: int = 0         # 0 keeps the model on the processor; a small model does not need the GPU
+    intent_seconds: float = 30.0       # time allowed for one sentence
+    intent_start_seconds: float = 120.0   # time allowed for the server to load the model
+    # -- searching
+    near_words: int = 15               # words this close together rank above the same words far apart
     # -- indexing
     batch_files: int = 200             # files fetched per step of the work queue
     missing_retention_days: float = 30.0   # guide 5d item 10
@@ -107,6 +120,10 @@ def validate(s: Settings) -> List[str]:
         problems.append("reader_seconds_per_mb and reader_memory_mb must not be negative")
     if not 0.0 <= s.compact_at_fraction <= 1.0 or s.compact_min_mb < 0:
         problems.append("compact_at_fraction must be between 0 and 1, and compact_min_mb must not be negative")
+    if s.intent_seconds <= 0 or s.intent_start_seconds <= 0 or s.intent_gpu_layers < 0:
+        problems.append("intent_seconds and intent_start_seconds must be above 0, and intent_gpu_layers must not be negative")
+    if s.near_words < 0:
+        problems.append("near_words must not be negative")
     if s.ocr_seconds <= 0:
         problems.append("ocr_seconds must be above 0")
     for name in ("ocr_dpi", "ocr_max_pixels", "ocr_failures_in_a_row"):

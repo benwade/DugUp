@@ -53,9 +53,11 @@ class LocalService:
     def __init__(self, layout: DataLayout, settings: Optional[Settings] = None,
                  source: Optional[FileSource] = None, extractor: Optional[Extractor] = None,
                  open_store: Optional[Callable[[], Store]] = None, clock: Callable[[], float] = time.time,
-                 case_insensitive: Optional[bool] = None, ocr_backend=None) -> None:
+                 case_insensitive: Optional[bool] = None, ocr_backend=None, intent=None) -> None:
         self.layout = layout
         self._ocr_backend = ocr_backend      # made on first use: most commands never read a picture
+        self._intent = intent
+        self._intent_looked = intent is not None
         self.settings = settings or Settings()
         self.source = source or DirectoryScan()
         if extractor is not None:
@@ -64,7 +66,7 @@ class LocalService:
             self.extractor = SandboxedExtractor(SubprocessSandbox(), self.settings)
         else:
             self.extractor = default_extractors(self.settings)
-        self._open_store = open_store or (lambda: SqliteStore(layout.index))
+        self._open_store = open_store or (lambda: SqliteStore(layout.index, near_words=self.settings.near_words))
         self.clock = clock
         self.case_insensitive = (os.name == "nt") if case_insensitive is None else case_insensitive
         self._fold: Callable[[str], str] = (lambda t: t.lower()) if self.case_insensitive else (lambda t: t)
@@ -111,6 +113,8 @@ class LocalService:
         close_readers = getattr(self.extractor, "close", None)
         if close_readers is not None:
             close_readers()      # ends any worker process and everything it started
+        if self._intent is not None:
+            self._intent.close()         # ends a model server this program started
         close_ocr = getattr(self._ocr_backend, "close", None)
         if close_ocr is not None:
             close_ocr()
@@ -152,6 +156,32 @@ class LocalService:
             for row in page.rows:
                 row.unavailable = any(_under(row.path, folder, self._fold) for folder in away)
         return page
+
+    @property
+    def intent(self):
+        """The plain-words reader, or None when it is not set up. Made on first use; making it starts nothing."""
+        if self._intent is None and not self._intent_looked:
+            from .intent import from_settings
+            self._intent = from_settings(self.settings)
+            self._intent_looked = True
+        return self._intent
+
+    def understand(self, text: str):
+        """A sentence as search-form fields (intent.Understood), or a Failure saying why not.
+        May take seconds, and on first use as long as loading a model takes: call it off the window's thread."""
+        reader = self.intent
+        if reader is None:
+            return Failure(FailureReason.NOT_INSTALLED,
+                           "plain-words search is not set up (intent_url, or intent_server and intent_model_file, in config.toml)")
+        return reader.understand(text, [r.path for r in self._open_roots()])
+
+    def _open_roots(self):
+        """The indexed folders, read on a connection of the calling thread's own."""
+        store = self._open_store()
+        try:
+            return list(store.list_roots())
+        finally:
+            store.close()
 
     def more_evidence(self, file_id: int, query: str, filters: Optional[SearchFilters] = None) -> Sequence[Evidence]:
         """Every place in one file where the words were found, in reading order."""

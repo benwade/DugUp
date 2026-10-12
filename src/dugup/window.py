@@ -206,6 +206,19 @@ class App:
         self.kinds: Dict[str, object] = {value: tk.BooleanVar(value=True) for _, value in KIND_LABELS}
         self.exact = tk.BooleanVar(value=False)
 
+        self.sentence = tk.StringVar()
+        self.asker: Optional[threading.Thread] = None
+        self.ask_row = ttk.Frame(form)
+        self.ask_row.columnconfigure(1, weight=1)
+        ttk.Label(self.ask_row, text="In plain words:").grid(row=0, column=0, sticky="w")
+        self.sentence_entry = ttk.Entry(self.ask_row, textvariable=self.sentence)
+        self.sentence_entry.grid(row=0, column=1, sticky="ew", padx=4)
+        self.sentence_entry.bind("<Return>", lambda event: self.ask_in_plain_words())
+        self.ask_button = ttk.Button(self.ask_row, text="Fill in the form", command=self.ask_in_plain_words)
+        self.ask_button.grid(row=0, column=2, padx=2)
+        if self.service.intent is not None:      # the row only exists when a model is set up
+            self.ask_row.grid(row=3, column=0, columnspan=11, sticky="ew", pady=(4, 0))
+
         ttk.Label(form, text="Words:").grid(row=0, column=0, sticky="w")
         self.words_entry = ttk.Entry(form, textvariable=self.words)
         self.words_entry.grid(row=0, column=1, columnspan=9, sticky="ew", padx=4)
@@ -323,7 +336,7 @@ class App:
         self._sash_placed = False
         panes.bind("<Configure>", self._place_sash)
 
-        self.message = tk.StringVar(value="Type words and press Enter.")
+        self.message = tk.StringVar(value='Type words and press Enter. Put "a phrase" in double quotes to find it as typed.')
         self._readonly(root, self.message, row=2, column=0, sticky="ew", padx=6, pady=4)
         self.words_entry.focus_set()
 
@@ -373,6 +386,50 @@ class App:
         for variable in self.kinds.values():
             variable.set(True)    # type: ignore[attr-defined]
         self.exact.set(False)
+
+    def ask_in_plain_words(self) -> None:
+        """Hand the sentence to the model, in the background; the answer fills in the form (see _understood)."""
+        sentence = self.sentence.get().strip()
+        if not sentence:
+            self.say("Type what you are looking for as a sentence.")
+            return
+        if self.asker is not None and self.asker.is_alive():
+            self.say("The last sentence is still being read.")
+            return
+        events, service = self.events, self.service
+
+        def work() -> None:
+            try:
+                answer = service.understand(sentence)
+            except Exception as exc:      # never die silently in the background
+                answer = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
+            events.put(("ask", answer))
+
+        self.ask_button.configure(state="disabled")
+        self.say("Reading your sentence ... (the first time, the model has to load)")
+        self.asker = threading.Thread(target=work, name="dugup-window-ask", daemon=True)
+        self.asker.start()
+
+    def _understood(self, answer) -> None:
+        self.asker = None
+        self.ask_button.configure(state="normal")
+        if isinstance(answer, Failure):
+            self.say(f"The sentence could not be read ({answer.reason.value.replace('_', ' ')}): {answer.detail}")
+            return
+        self.clear_filters()
+        self.words.set(answer.words)
+        self.folder.set(answer.folder or ALL_FOLDERS)
+        self.where.set(next((label for label, value in WHERE_LABELS if value == answer.where), WHERE_LABELS[0][0]))
+        for value, variable in self.kinds.items():
+            variable.set(not answer.kinds or value in answer.kinds)    # type: ignore[attr-defined]
+        self.after_day.set(answer.after)
+        self.before_day.set(answer.before)
+        self.smallest.set(answer.smallest)
+        self.largest.set(answer.largest)
+        self.exact.set(answer.exact)
+        doubts = f" Not used: {'; '.join(answer.notes)}." if answer.notes else ""
+        self.say(f"Filled in: {answer.describe()}.{doubts} Check the form, then press Enter to search.")
+        self.words_entry.focus_set()
 
     def search(self) -> None:
         words = self.words.get().strip()
@@ -665,7 +722,10 @@ class App:
             self.progress_text.set(progress_text(latest))
             self.bar.configure(value=latest.percent if latest.phase in ("read", "ocr") else 0.0)
         for what, report in finished:
-            self._finished(what, report)
+            if what == "ask":
+                self._understood(report)
+            else:
+                self._finished(what, report)
 
     def _finished(self, what: str, report) -> None:
         if self.worker is not None:

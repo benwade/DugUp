@@ -60,6 +60,8 @@ BROKEN = [
     (fs.FileEvidenceStopsAtThree, "every_place_in_one_file_can_be_listed"),
     (fs.FileEvidenceOutOfOrder, "every_place_in_one_file_can_be_listed"),
     (fs.ExactMatchesRelatives, "exact_form_finds_only_the_very_word"),
+    (fs.IgnoresCloseness, "words_that_stand_together_rank_first"),
+    (fs.PhraseIsJustItsWords, "a_quoted_phrase_must_stand_as_typed"),
     (fs.SetRootForgetsStatus, "roots_round_trip_and_keep_their_status"),
 ]
 
