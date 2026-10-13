@@ -13,6 +13,7 @@ from .protocols import Extraction, PageInfo, PageVerdict
 from .shapes import Failure, FailureReason, FileKind, FileRecord, SegmentIn, SegmentKind
 
 EXTRACT = "dugup.jobs:extract"
+CONTENT_MARK = "dugup.jobs:content_mark"
 OCR = "dugup.jobs:ocr"
 PROBE = "dugup.jobs:probe_pictures"
 
@@ -72,6 +73,18 @@ def extract(payload: Mapping[str, Any]) -> Dict[str, Any]:
         _extractors.clear()
         _extractors[key] = default_extractors(from_mapping(settings_data)[0])
     return result_to_data(_extractors[key].extract(record_from_data(payload["record"])))
+
+
+def content_mark(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """The fingerprint of one file's content. Runs inside a worker, so a drive that never answers costs the
+    time limit and not the program."""
+    from . import contentmark as printing
+    try:
+        return {"content": printing.of_file(path_from_data(payload["path"]))}
+    except FileNotFoundError as exc:
+        return {"failure": FailureReason.UNREACHABLE.value, "detail": f"the file was not there ({type(exc).__name__})"}
+    except OSError as exc:
+        return {"failure": FailureReason.OTHER.value, "detail": f"the file could not be read ({type(exc).__name__})"}
 
 
 # ---- OCR ------------------------------------------------------------------------------------------------

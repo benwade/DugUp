@@ -154,6 +154,47 @@ class FakeStore:
             out.append(copy.copy(rec))
         return out if limit is None else out[:limit]
 
+    # -- the same content in several places (kept beside the records: FileRecord does not carry it)
+    def set_content(self, row_id: int, mark) -> None:
+        if not hasattr(self, "contents"):
+            self.contents = {}
+        if mark:
+            self.contents[row_id] = mark
+        else:
+            self.contents.pop(row_id, None)
+
+    def content_of(self, row_id: int):
+        return getattr(self, "contents", {}).get(row_id) if row_id in self.files else None
+
+    def _marked(self):
+        return {i: m for i, m in getattr(self, "contents", {}).items()
+                if i in self.files and self.files[i].missing_since is None}
+
+    def copies_of(self, row_ids):
+        marked, out = self._marked(), {}
+        every = getattr(self, "contents", {})
+        for row_id in row_ids:
+            mark = every.get(row_id) if row_id in self.files else None
+            others = sorted((self.files[i].path for i, m in marked.items() if m == mark and i != row_id),
+                            key=lambda p: (len(p), p)) if mark else []
+            if others:
+                out[row_id] = others
+        return out
+
+    def unmarked(self, prefix=None, limit=None, after_row=0, case_insensitive=None):
+        read = (FileState.DONE, FileState.PARTIAL, FileState.FAILED)
+        every = getattr(self, "contents", {})
+        out = [r for r in self.list_files(prefix, None, None, after_row, False, case_insensitive)
+               if r.state in read and r.row_id not in every]
+        return out if limit is None else out[:max(0, limit)]
+
+    def copy_counts(self):
+        marked = self._marked()
+        sizes = {}
+        for mark in marked.values():
+            sizes[mark] = sizes.get(mark, 0) + 1
+        return len(marked), sum(1 for n in sizes.values() if n > 1), sum(n - 1 for n in sizes.values() if n > 1)
+
     def move_file(self, old_path: str, new_path: str) -> int:
         row_id = self._find(old_path)
         if row_id is None:

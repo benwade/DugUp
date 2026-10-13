@@ -240,6 +240,21 @@ class Store(Protocol):
 
     def set_state(self, row_id: int, state, error: str = "") -> None: ...
 
+    def set_content(self, row_id: int, mark: Optional[str]) -> None:
+        """The mark of the file's exact content (contentmark.py), or None when it is not known."""
+
+    def content_of(self, row_id: int) -> Optional[str]: ...
+
+    def copies_of(self, row_ids: Sequence[int]) -> Mapping[int, Sequence[str]]:
+        """For each file, the paths of the other files with the same content (not missing), shortest first."""
+
+    def unmarked(self, prefix: Optional[str] = None, limit: Optional[int] = None, after_row: int = 0,
+                 case_insensitive: Optional[bool] = None) -> Sequence[FileRecord]:
+        """Files that were read and have no content mark yet, in row order."""
+
+    def copy_counts(self) -> Tuple[int, int, int]:
+        """(files with a mark, sets of files with the same content, files that are an extra copy)."""
+
     def remove_files(self, row_ids: Sequence[int]) -> int:
         """Take these files out of the index (text and page records too). Returns how many were there."""
 

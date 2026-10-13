@@ -173,7 +173,7 @@ def test_a_file_that_times_out_or_kills_its_worker_is_listed_and_the_run_goes_on
                    Failure(FailureReason.CRASHED, "the worker ended without an answer (exit code -11)"),
                    Failure(FailureReason.OUT_OF_MEMORY, "the job needed more memory than the worker is allowed"), good,
                    Failure(FailureReason.TIMED_OUT, "the job did not finish within 120 s and was ended"))
-    report = Indexer(store, disk.source, SandboxedExtractor(box)).run()
+    report = Indexer(store, disk.source, SandboxedExtractor(box), Settings(content_marks=False)).run()   # the jobs are counted
     assert [round(limits.seconds) for _, _, limits, _ in box.asked] == [60.0, 60.0, 60.0, 60.0, 120.0], \
         "the file that ran out of time is read once more, after the others, with double the time"
     assert report.second_tries == 1

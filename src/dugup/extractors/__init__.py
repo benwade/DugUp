@@ -36,6 +36,17 @@ class ExtractorSet:
             return Failure(FailureReason.UNSUPPORTED, f"no reader for this kind of file ({record.kind.value})")
         return extractor.extract(record, stop)
 
+    def content_mark(self, record: FileRecord, stop: Optional[StopSignal] = None) -> "str | Failure":
+        """The fingerprint of the file's content (contentmark.py), read here, in this program."""
+        from .. import contentmark as printing
+        try:
+            found = printing.of_file(record.path, stop)
+        except FileNotFoundError as exc:
+            return Failure(FailureReason.UNREACHABLE, f"the file was not there ({type(exc).__name__})")
+        except OSError as exc:
+            return Failure(FailureReason.OTHER, f"the file could not be read ({type(exc).__name__})")
+        return found if found is not None else Failure(FailureReason.STOPPED, "stopped while the file was read")
+
 
 def default_extractors(settings: Optional[Settings] = None) -> ExtractorSet:
     settings = settings or Settings()

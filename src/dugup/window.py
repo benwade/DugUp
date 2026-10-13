@@ -943,7 +943,7 @@ class App:
                 finished.append(item)    # type: ignore[arg-type]
         if latest is not None and not finished:
             self.progress_text.set(progress_text(latest))
-            if latest.phase in ("read", "ocr", "download", "record") and latest.total > 0:
+            if latest.phase in ("read", "ocr", "download", "record", "mark") and latest.total > 0:
                 self._bar_at(latest.percent)
             elif latest.phase != "estimate":           # an estimate is a note on the side: the bar stays as it is
                 self._bar_moving()                     # no total yet (listing, unpacking, measuring): it moves

@@ -216,8 +216,15 @@ def _migration_6(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE roots ADD COLUMN levels TEXT NOT NULL DEFAULT '[]'")
 
 
+def _migration_7(conn: sqlite3.Connection) -> None:
+    """A mark for each file's exact content (contentmark.py): files with the same mark are the same file.
+    NULL until the file has been read with marks on."""
+    conn.execute("ALTER TABLE files ADD COLUMN content TEXT")
+    conn.execute("CREATE INDEX files_content ON files(content) WHERE content IS NOT NULL")
+
+
 MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3, _migration_4,
-                                                          _migration_5, _migration_6]
+                                                          _migration_5, _migration_6, _migration_7]
 OCR_ORDER = 1_000_000   # the order number of a page's OCR text, after anything a text layer gave
 SCHEMA_VERSION = len(MIGRATIONS)  # informational; the live value is len(MIGRATIONS)
 
@@ -653,6 +660,54 @@ class SqliteStore:
             sql += " LIMIT ?"
             args.append(limit)
         return [self._record(r) for r in self.conn.execute(sql, args)]
+
+    # -- the same content in several places
+
+    def set_content(self, row_id: int, mark: Optional[str]) -> None:
+        self.conn.execute("UPDATE files SET content=? WHERE id=?", (mark or None, row_id))
+
+    def content_of(self, row_id: int) -> Optional[str]:
+        row = self.conn.execute("SELECT content FROM files WHERE id=?", (row_id,)).fetchone()
+        return None if row is None else row[0]
+
+    def copies_of(self, row_ids: Sequence[int]) -> Dict[int, List[str]]:
+        """For each of these files, the paths of the OTHER files with the same content that were there at
+        the last scan, shortest path first. A file with no mark, or no copy, is left out."""
+        found: Dict[int, List[str]] = {}
+        ids = [int(i) for i in row_ids]
+        for at in range(0, len(ids), 400):
+            chunk = ids[at:at + 400]
+            marks = ",".join("?" * len(chunk))
+            sql = ("SELECT a.id AS one, b.path, b.path_raw FROM files a JOIN files b ON b.content = a.content AND b.id <> a.id "
+                   f"WHERE a.id IN ({marks}) AND a.content IS NOT NULL AND b.missing_since IS NULL "
+                   "ORDER BY a.id, length(b.path), b.path")
+            for r in self.conn.execute(sql, chunk):
+                found.setdefault(r["one"], []).append(decode_path(r["path"], r["path_raw"]))
+        return found
+
+    def unmarked(self, prefix: Optional[str] = None, limit: Optional[int] = None, after_row: int = 0,
+                 case_insensitive: Optional[bool] = None) -> List[FileRecord]:
+        """Files that were read (done, partial or failed) and have no content mark yet, in row order."""
+        clauses, args = ["id > ?", "content IS NULL", "missing_since IS NULL", "state IN (?,?,?)"], \
+            [after_row, FileState.DONE.value, FileState.PARTIAL.value, FileState.FAILED.value]
+        if prefix is not None:
+            clause, more = _under_clause(prefix, case_insensitive)
+            clauses.append(clause)
+            args.extend(more)
+        sql = f"SELECT * FROM files WHERE {' AND '.join(clauses)} ORDER BY id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(max(0, limit))
+        return [self._record(r) for r in self.conn.execute(sql, args)]
+
+    def copy_counts(self) -> Tuple[int, int, int]:
+        """(files with a content mark, sets of two or more files with the same content, files that are an
+        extra copy of another), counting files that were there at the last scan."""
+        marked = self.conn.execute("SELECT COUNT(*) FROM files WHERE content IS NOT NULL AND missing_since IS NULL").fetchone()[0]
+        row = self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(n - 1), 0) FROM (SELECT COUNT(*) AS n FROM files WHERE content IS NOT NULL "
+            "AND missing_since IS NULL GROUP BY content HAVING COUNT(*) > 1)").fetchone()
+        return int(marked), int(row[0]), int(row[1])
 
     def move_file(self, old_path: str, new_path: str) -> int:
         """The same file at a new path: its text, pages and state are kept. Returns the row id."""

@@ -105,6 +105,12 @@ def progress_text(p: Progress) -> str:
                 f"{p.rate / 1048576:.1f} MB/s  {left_text}")
     if p.phase == "unpack":
         return f"[download] unpacking {p.root}"
+    if p.phase == "mark":
+        left = p.remaining_seconds
+        left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
+        line = (f"[same files] marking what was read before: {p.done:,} of {p.total:,} ({p.percent:.1f}%)  "
+                f"{p.rate:.1f} files/s  {left_text}")
+        return line + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else "")
     if p.phase == "measure":
         return f"[ocr] looking at the size of the pictures: {p.done:,} of {p.total:,}"
     left = p.remaining_seconds
@@ -615,6 +621,9 @@ def print_report(report: IndexReport, out: TextIO, retention_days: float) -> Non
                f"{report.done:,} done, {report.partial:,} partial, {report.failed:,} failed, {report.skipped:,} skipped", out)
     if report.second_tries:
         safe_write(f"{report.second_tries:,} file(s) ran out of time and were read again, last, with more time.", out)
+    if report.marked:
+        safe_write(f"{report.marked:,} file(s) read earlier were given a content mark, so the same file in several "
+                   "places is now known for one file.", out)
     if report.vanished:
         safe_write(f"{report.vanished:,} file(s) disappeared before they could be read; the next run looks again.", out)
     if report.read >= 100 and report.skipped > report.read / 2:

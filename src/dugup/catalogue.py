@@ -164,6 +164,11 @@ def _entries() -> Tuple[Entry, ...]:
           "This many pages failing one after another pause the run: it looks like trouble with the reader, not the pictures.",
           low=1, unit="pages"),
         # -- speed
+        E("content_marks", "speed", "Recognise the same file in several places",
+          "Each file that is read gets a mark of its exact content. Files with the same mark are the same file, "
+          "whatever they are called and wherever they lie.",
+          why="A search then shows such a file once, with its other places listed. It costs reading each file one "
+              "more time from start to end, which is quick next to reading its words.", choices=YES_NO),
         E("index_readers", "speed", "Files read side by side",
           "How many files are read at the same time when the index is updated. 0 lets DugUp work it out; 1 reads one at a time.",
           why="Side by side, one slow file (a large PDF, or one that must first come down from a cloud drive) does not "

@@ -44,6 +44,8 @@ class Settings:
     reader_seconds_per_mb: float = 2.0     # extra time for each megabyte of the file
     reader_seconds_cap: float = 900.0      # never more than this for one file
     reader_memory_mb: int = 4096           # memory a reader may use; 0 means no limit
+    content_marks: bool = True             # give each file read a mark of its exact content, so the same file in
+                                           # several places is known for one file (it is read once more for that)
     index_readers: int = 0                 # files read side by side when indexing; 0 works it out, 1 is one at a time
     retry_patience: float = 2.0            # a file or page that ran out of time gets one more try, last of all,
                                            # with its time limit multiplied by this; 1 or less means no second try

@@ -152,6 +152,7 @@ class IndexReport:
     skipped: int = 0
     vanished: int = 0                # gone between the scan and the read; left for the next scan
     second_tries: int = 0            # files that ran out of time and were read again, last, with more time
+    marked: int = 0                  # files read before content marks existed that were given one this run
     paused: str = ""                 # why the run paused itself (a run of reader failures, or a full drive)
     compacted: Optional[Dict[str, int]] = None   # the index's size before and after, when it was compacted at the end
     stopped: bool = False
@@ -278,6 +279,11 @@ class Indexer:
                 if not self.read_pending(root, report, stop):
                     report.stopped = not report.paused
                     break
+        if not report.stopped and not report.paused and self.settings.content_marks:
+            for root in readable:
+                if not self.mark_pending(root, report, stop):
+                    report.stopped = True
+                    break
         report.seconds = self.timer() - started
         log.info("run finished: read=%d done=%d partial=%d failed=%d skipped=%d stopped=%s seconds=%.1f",
                  report.read, report.done, report.partial, report.failed, report.skipped, report.stopped, report.seconds)
@@ -403,6 +409,7 @@ class Indexer:
         with its page records cleared, the next read keeps none of it (see Store.replace_text)."""
         row_id = self.store.upsert_file(self._record_for(root, entry))
         self.store.set_pages(row_id, ())
+        self.store.set_content(row_id, None)      # the old mark was of the old content
 
     def _size(self) -> int:
         """The index's size now, or -1 when it cannot be told."""
@@ -548,6 +555,56 @@ class Indexer:
             if readers is not None:
                 readers.close()
 
+    def mark_pending(self, root: Root, report: IndexReport, stop: Optional[StopSignal] = None) -> bool:
+        """Give a content mark to the files below a root that were read before marks existed. Each file is
+        read once from start to end and nothing else about it changes. False when a stop ended it early;
+        what was marked is kept and the next run goes on from there."""
+        first = self.store.unmarked(prefix=root.path, limit=1, case_insensitive=self.case_insensitive)
+        if not first or getattr(self.extractor, "content_mark", None) is None:
+            return True
+        waiting = self.store.unmarked(prefix=root.path, case_insensitive=self.case_insensitive)
+        total, done, started = len(waiting), 0, self.timer()
+        extractors = (self.extractor, *(e for e in self.extra_extractors if getattr(e, "content_mark", None) is not None))
+        readers = _Readers(extractors) if len(extractors) > 1 else None
+
+        def keep(record: FileRecord, mark) -> None:
+            nonlocal done
+            if isinstance(mark, Failure) and mark.reason is FailureReason.STOPPED:
+                return
+            # one that could not be marked (gone, unreadable, out of time) gets a mark of its own: not asked again
+            self.store.set_content(record.row_id, mark if isinstance(mark, str) and mark else f"!{record.row_id}")
+            done += 1
+            report.marked += 1
+
+        def take(wait: bool) -> None:
+            for record, _, mark in readers.finished(wait):
+                keep(record, mark)
+            if wait:
+                self._tell(Progress("mark", root.path, done, total, 0, self.timer() - started, readers.longest()))
+
+        try:
+            for record in waiting:
+                if _stopped(stop):
+                    break
+                self._tell(Progress("mark", root.path, done, total, 0, self.timer() - started, record.path))
+                if readers is None:
+                    try:
+                        keep(record, self.extractor.content_mark(record, stop))
+                    except Exception:
+                        keep(record, None)
+                    continue
+                while not readers.free():
+                    take(True)
+                readers.start(lambda extractor, record=record: _safely(extractor.content_mark, record, stop), record, False)
+                take(False)
+            while readers is not None and readers.busy():
+                take(True)
+        finally:
+            if readers is not None:
+                readers.close()
+        self._tell(Progress("mark", root.path, done, total, 0, self.timer() - started))
+        return not _stopped(stop)
+
     _last_reason: Optional[FailureReason] = None
 
     def read_one(self, record: FileRecord, report: IndexReport, stop: Optional[StopSignal] = None,
@@ -559,9 +616,13 @@ class Indexer:
         return self._keep(record, self._read(self.extractor, record, stop, patient), report, patient)
 
     def _read(self, extractor, record: FileRecord, stop: Optional[StopSignal], patient: bool):
-        """The reading half: no index, no counters, so several of these may run side by side."""
+        """The reading half: no index, no counters, so several of these may run side by side. Returns what the
+        reader answered and the mark of the file's content (None when it could not be taken)."""
         if is_lock_file(record.path):      # one recorded as a document before lock files were known
-            return Failure(FailureReason.UNSUPPORTED, "an editing lock file, not a document")
+            return Failure(FailureReason.UNSUPPORTED, "an editing lock file, not a document"), None
+        mark = self._mark(extractor, record, stop)
+        if isinstance(mark, Failure):      # stopped, or the file is gone: there is nothing to read either
+            return mark, None
         patiently = getattr(extractor, "extract_patiently", None) if self.settings.retry_patience > 1.0 else None
         try:
             if patient and patiently is not None:
@@ -572,10 +633,32 @@ class Indexer:
             result = Failure(FailureReason.CRASHED, f"the reader raised {type(exc).__name__}: {exc}")
         if result is None:
             result = Failure(FailureReason.OTHER, "the reader returned nothing")
-        return result
+        return result, mark
+
+    def _mark(self, extractor, record: FileRecord, stop: Optional[StopSignal]):
+        """The content mark of a file, None when there is none to be had, or a Failure that ends the read
+        (a stop, or a file that is no longer there)."""
+        marker = getattr(extractor, "content_mark", None) if self.settings.content_marks else None
+        if marker is None:
+            return None
+        try:
+            mark = marker(record, stop)
+        except Exception:                  # a mark is a help, never a reason to lose the file
+            return None
+        if isinstance(mark, Failure):
+            return mark if mark.reason in (FailureReason.STOPPED, FailureReason.UNREACHABLE) else None
+        return mark or None
 
     def _keep(self, record: FileRecord, result, report: IndexReport, patient: bool) -> Optional[FileState]:
-        """The storing half: always on the indexer's own thread."""
+        """The storing half: always on the indexer's own thread. `result` is what _read returned."""
+        result, mark = result if isinstance(result, tuple) else (result, None)
+        state = self._keep_result(record, result, report, patient)
+        if state is not None and state is not FileState.PENDING and self.settings.content_marks:
+            # a file that was read and gave no mark gets one of its own, so it is not asked again every run
+            self.store.set_content(record.row_id, mark or f"!{record.row_id}")
+        return state
+
+    def _keep_result(self, record: FileRecord, result, report: IndexReport, patient: bool) -> Optional[FileState]:
         self._last_reason = None
         patiently = self._patient()
         if isinstance(result, Failure):
@@ -614,6 +697,13 @@ class Indexer:
     def _tell(self, progress: Progress) -> None:
         if self.progress is not None:
             self.progress(progress)
+
+
+def _safely(call, *args):
+    try:
+        return call(*args)
+    except Exception:
+        return None
 
 
 def _stopped(stop: Optional[StopSignal]) -> bool:

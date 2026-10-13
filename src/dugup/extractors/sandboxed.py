@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import fields
 from typing import Any, Dict, Optional
 
-from ..jobs import EXTRACT, record_to_data, result_from_data
+from ..jobs import EXTRACT, CONTENT_MARK, path_to_data, record_to_data, result_from_data
 from ..protocols import Extraction, Limits, Sandbox, StopSignal
 from ..settings import Settings
 from ..shapes import Failure, FailureReason, FileKind, FileRecord
@@ -64,6 +64,21 @@ class SandboxedExtractor:
         if isinstance(answer, Failure):
             return answer
         return result_from_data(answer)
+
+    def content_mark(self, record: FileRecord, stop: Optional[StopSignal] = None) -> "str | Failure":
+        """The fingerprint of the file's content (contentmark.py), read in the worker under the file's time limit."""
+        if stopped(stop):
+            return STOPPED
+        limits = Limits(self.settings.reader_limit(record.size), self.settings.reader_memory_mb or None)
+        answer = self.sandbox.run(CONTENT_MARK, {"path": path_to_data(record.path)}, limits, stop)
+        if isinstance(answer, Failure):
+            return answer
+        try:
+            if "failure" in answer:
+                return Failure(FailureReason(answer["failure"]), str(answer["detail"]))
+            return str(answer["content"])
+        except (KeyError, TypeError, ValueError) as exc:
+            return Failure(FailureReason.CRASHED, f"the worker's answer could not be understood ({type(exc).__name__})")
 
     def close(self) -> None:
         close = getattr(self.sandbox, "close", None)
