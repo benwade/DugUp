@@ -19,7 +19,7 @@ from .catalogue import Entry, Machine
 from .setup import WARNING, WHY_QUESTIONS, SetupPlan
 
 POLL_MS = 100
-WELCOME, COMPUTER, SUMMARY = "welcome", "computer", "summary"
+WELCOME, COMPUTER, PLACES, SUMMARY = "welcome", "computer", "places", "summary"
 
 
 class SetupWizard:
@@ -27,7 +27,10 @@ class SetupWizard:
     `on_finish(plan)` saves; it returns "" when that worked, else what went wrong."""
 
     def __init__(self, parent, plan: SetupPlan, look: Optional[Callable[[threading.Event], Machine]],
-                 on_finish: Callable[[SetupPlan], str], on_close: Optional[Callable[[], None]] = None) -> None:
+                 on_finish: Callable[[SetupPlan], str], on_close: Optional[Callable[[], None]] = None,
+                 choose_folder: Optional[Callable[[], str]] = None) -> None:
+        self.choose_folder = choose_folder       # asks the person for one more folder; None: no such button
+        self.skipped = False
         import tkinter as tk
         from tkinter import ttk
 
@@ -45,7 +48,7 @@ class SetupWizard:
 
         win = self.window = tk.Toplevel(parent)
         win.title("Set up DugUp" if plan.first_run else "DugUp settings")
-        win.geometry("900x640")
+        win.geometry("940x720")
         win.columnconfigure(0, weight=1)
         win.rowconfigure(1, weight=1)
         self.heading = tk.StringVar()
@@ -73,7 +76,7 @@ class SetupWizard:
 
     def sequence(self) -> List[str]:
         """Page names in order. The pages of questions are left out on the express path."""
-        pages = [WELCOME, COMPUTER] if self.plan.first_run else []
+        pages = [WELCOME, COMPUTER, PLACES] if self.plan.first_run else []
         if not (self.plan.first_run and self.express):
             pages += [group.key for group in self.plan.pages()]
         return pages + [SUMMARY]
@@ -125,6 +128,8 @@ class SetupWizard:
             self._welcome()
         elif name == COMPUTER:
             self._computer()
+        elif name == PLACES:
+            self._places()
         elif name == SUMMARY:
             self._summary()
         else:
@@ -148,12 +153,99 @@ class SetupWizard:
                         "reader on a made-up page, on the processor and on the graphics card if there is one. That takes "
                         "up to a minute and reads none of your files.", 0, 3)
         self.facts = [self._line(line, 1 + i) for i, line in enumerate(self.plan.computer_lines())]
-        self.test_text = self.tk.StringVar(value="The test is running ..." if self.busy() else "")
-        self._line("", 6, self.test_text)
-        self.skip_button = self.ttk.Button(self.body, text="Skip the test", command=self.skip_test)
-        self.skip_button.grid(row=7, column=0, sticky="w", pady=6)
-        if not self.busy():
-            self.skip_button.configure(state="disabled")
+        if self.busy():
+            state = "The speed test is running. It started by itself and reads none of your files ..."
+        elif self.skipped:
+            state = "The speed test was skipped. The processor will be used unless you choose the graphics card yourself."
+        elif self.plan.tested:
+            state = "The speed test is finished. Its results are in the lines above."
+        else:
+            state = "The speed test has not been run."
+        self.test_text = self.tk.StringVar(value=state)
+        self._line("", 8, self.test_text)
+        buttons = self.ttk.Frame(self.body)
+        buttons.grid(row=9, column=0, sticky="w", pady=6)
+        self.skip_button = self.ttk.Button(buttons, text="Skip the test", command=self.skip_test,
+                                           state="normal" if self.busy() else "disabled")
+        self.skip_button.pack(side="left", padx=(0, 6))
+        self.again_button = self.ttk.Button(buttons, text="Run the speed test" + (" again" if self.plan.tested else ""),
+                                            command=self.test_again,
+                                            state="disabled" if self.busy() or self.look is None else "normal")
+        self.again_button.pack(side="left")
+
+    def test_again(self) -> None:
+        if self.busy() or self.look is None:
+            return
+        self.stop = threading.Event()
+        self.skipped = False
+        self.start_looking()
+        self.show()
+
+    def _places(self) -> None:
+        from .places import LEVELS_EXPLAINED, MAYBE, SYSTEM, YOURS
+        tk, ttk = self.tk, self.ttk
+        self.heading.set("Which folders")
+        self._paragraph(LEVELS_EXPLAINED.format(pace=self.plan.pace()), 0, 5)
+        holder = ttk.Frame(self.body)
+        holder.grid(row=1, column=0, sticky="nsew")
+        self.body.rowconfigure(1, weight=1)
+        holder.columnconfigure(0, weight=1)
+        holder.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(holder, highlightthickness=0, background=self.window.cget("background"))
+        bar = ttk.Scrollbar(holder, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.columnconfigure(0, weight=1)
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window_id, width=event.width))
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        bar.grid(row=0, column=1, sticky="ns")
+        self.place_boxes = {}
+        row = 0
+        titles = {YOURS: "Your own folders", MAYBE: "Others you may want",
+                  SYSTEM: "Left out unless you tick them: the system's own folders"}
+        for kind in (YOURS, MAYBE, SYSTEM):
+            group = [place for place in self.plan.places if place.kind == kind]
+            if not group:
+                continue
+            ttk.Label(inner, text=titles[kind], font=("TkDefaultFont", 10, "bold")).grid(row=row, column=0, sticky="w", pady=(8, 2))
+            row += 1
+            for place in group:
+                variable = tk.BooleanVar(value=bool(self.plan.ticked.get(place.path)))
+                text = place.label if place.label == place.path else f"{place.label}   ({place.path})"
+                ttk.Checkbutton(inner, text=text, variable=variable,
+                                command=lambda p=place.path, v=variable: self.tick_place(p, v.get())).grid(row=row, column=0, sticky="w")
+                self.place_boxes[place.path] = variable
+                why = tk.Text(inner, height=2 if len(place.reason) > 110 else 1, wrap="word", relief="flat", borderwidth=0,
+                              font="TkDefaultFont", background=self.window.cget("background"))
+                why.insert("1.0", place.reason[0].upper() + place.reason[1:] + ".")
+                why.configure(state="disabled")
+                why.grid(row=row + 1, column=0, sticky="ew", padx=(22, 0))
+                row += 2
+        if self.choose_folder is not None:
+            ttk.Button(self.body, text="Add another folder...", command=self.add_place).grid(row=2, column=0, sticky="w", pady=6)
+        self._say_places()
+
+    def tick_place(self, path: str, ticked: bool) -> None:
+        self.plan.ticked[path] = bool(ticked)
+        self._say_places()
+
+    def add_place(self) -> None:
+        chosen = self.choose_folder() if self.choose_folder is not None else ""
+        if chosen:
+            import os
+            self.plan.add_place(os.path.normpath(chosen))
+            self.show()
+
+    def _say_places(self) -> None:
+        chosen, covered = self.plan.chosen_places(), self.plan.covered()
+        if not chosen:
+            self.message.set("No folder is ticked. You can finish all the same and add folders later.")
+        elif covered:
+            self.message.set(f"{len(chosen)} folder(s) chosen. {len(covered)} more lie inside one of them and are covered by it.")
+        else:
+            self.message.set(f"{len(chosen)} folder(s) chosen.")
 
     def _group(self, key: str) -> None:
         group = catalogue.group(key)
@@ -220,7 +312,15 @@ class SetupWizard:
         for title, rows in self.plan.summary():
             lines += [title, *("  " + line for line in rows), ""]
         if self.plan.first_run:
-            lines += ["Next you choose which folders to index. " + WARNING]
+            chosen = self.plan.chosen_places()
+            lines += ["Folders to index", *("  " + path for path in chosen)] if chosen else ["Folders to index", "  none yet"]
+            lines += [""]
+            if chosen:
+                lines += ["When you press Finish, DugUp looks through " + ("each of these folders in turn" if len(chosen) > 1 else "this folder")
+                          + " (opening no file) and shows what is inside, with a suggestion for every folder in it. "
+                          "Nothing is read until you agree there. " + WARNING]
+            else:
+                lines += ["No folder is chosen, so nothing will be read yet. Use \"Add folder...\" in the main window when you are ready."]
         lines += ["", "Every choice can be changed later under Settings."]
         text.insert("1.0", "\n".join(lines))
         text.configure(state="disabled")
@@ -258,6 +358,7 @@ class SetupWizard:
 
     def skip_test(self) -> None:
         self.stop.set()
+        self.skipped = True
         self.message.set("The test was skipped. The processor will be used unless you choose the graphics card yourself.")
         if hasattr(self, "skip_button"):
             self.skip_button.configure(state="disabled")
@@ -311,5 +412,6 @@ class SetupWizard:
         self.widgets, self.hints, self._hint_boxes = {}, {}, {}
         self.facts = []
         self.test_text = None
+        self.place_boxes = {}
         if self.on_close is not None:
             self.on_close()

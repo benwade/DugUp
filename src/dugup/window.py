@@ -171,7 +171,9 @@ class App:
         self.service = service
         self.desktop = desktop or Desktop()
         self.ask = ask or (lambda title, text: messagebox.askyesnocancel(title, text, parent=root))
-        self.choose_folder = choose_folder or (lambda: filedialog.askdirectory(parent=root, mustexist=True))
+        self.choose_folder = choose_folder or (lambda: filedialog.askdirectory(
+            parent=root, mustexist=True, title="Choose a folder for DugUp to index", initialdir=os.path.expanduser("~")))
+        self.place_queue: List[str] = []     # folders chosen in the setup wizard, each still to be looked through
         self.copy_text: Callable[[str], None] = self._to_clipboard
         self.order = SortOrder()
         self.rows: List[SearchRow] = []
@@ -711,12 +713,31 @@ class App:
                     return f"That could not be saved: {result.detail}"
             self.refresh_status()
             self.say(f"Saved {len(changes)} setting(s)." if changes else "Nothing was changed.")
-            if done.first_run and not service.list_roots():
-                self.root.after(0, self.add_folder)       # the last step of setting up: which folders
+            if done.first_run:
+                self.place_queue = list(done.chosen_places())
+                if self.place_queue:
+                    self.root.after(0, self.next_place)   # the last step of setting up: look through each folder
+                else:
+                    self.say("Settings saved. No folder was chosen: use \"Add folder...\" when you are ready.")
             return ""
 
         look = (lambda stop: service.look_at_machine(stop, test_card=True)) if first_run else None
-        self.wizard = SetupWizard(self.root, plan, look, save)
+        if first_run:
+            from . import places
+            plan.offer(places.candidates())
+        self.wizard = SetupWizard(self.root, plan, look, save, choose_folder=self.choose_folder)
+
+    def next_place(self) -> None:
+        """Look through the next folder chosen in the setup wizard and show the picker for it."""
+        if self.closed or not self.place_queue:
+            return
+        if self.busy():
+            self.root.after(300, self.next_place)
+            return
+        folder = self.place_queue.pop(0)
+        left = len(self.place_queue)
+        self.say(f"Looking through {folder}" + (f"; {left} more folder(s) after this one." if left else "."))
+        self.start("plan", path=folder)
 
     def read_folder_now(self) -> None:
         """Read one folder's pictures and scans at once, with several readers side by side. A run that is
@@ -756,8 +777,14 @@ class App:
                      + (f" Still left out by an older skip rule: {', '.join(still[:3])}." if still else ""))
             return ""
 
+        def closed() -> None:
+            if self.place_queue and not self.closed:
+                self.root.after(0, self.next_place)
+            elif not self.closed and self.service.list_roots() and not self.busy():
+                self.progress_text.set("Ready. Press \"Update the index\" to start reading.")
+
         self.picker = PickerDialog(self.root, material["plan"], material["rates"], take, bool(material["known"]),
-                                   material["fresh"])
+                                   material["fresh"], on_close=closed)
 
     def set_up_plain_words(self) -> None:
         """Show what would be downloaded and, on a yes, fetch it in the background."""
@@ -868,6 +895,10 @@ class App:
                 self.progress_text.set("Stopped." if stopped else "That folder could not be looked through.")
                 if not stopped:
                     self.say(f"That folder could not be looked through: {report.detail}")
+                if stopped:
+                    self.place_queue = []
+                elif self.place_queue:
+                    self.root.after(0, self.next_place)      # one folder could not be looked at: on to the next
                 return
             self.progress_text.set("Choose what to index in the window that opened.")
             self._show_picker(report)

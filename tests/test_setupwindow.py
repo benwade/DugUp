@@ -8,7 +8,8 @@ import pytest
 from dugup import catalogue, settings as settings_module
 from dugup.catalogue import Machine
 from dugup.setup import SetupPlan
-from dugup.setupwindow import COMPUTER, SUMMARY, WELCOME, SetupWizard
+from dugup.places import MAYBE, SYSTEM, YOURS, Place
+from dugup.setupwindow import COMPUTER, PLACES, SUMMARY, WELCOME, SetupWizard
 from dugup.settings import Settings
 from test_window import Bench, make_root
 
@@ -20,6 +21,12 @@ STRONG = Machine(cores=32, free_memory_bytes=35 * GB, free_disk_bytes=550 * GB, 
 def windows_are_collected_on_this_thread():
     yield
     gc.collect()
+
+
+OFFERED = [Place("/home/u/Documents", "Documents", True, "your own documents", YOURS),
+           Place("/home/u/Pictures", "Pictures", True, "photos and scans", YOURS),
+           Place("/home/u/Downloads", "Downloads", False, "mostly installers", MAYBE),
+           Place("/usr", "/usr", False, "the system's programs: nothing you wrote lives here", SYSTEM)]
 
 
 class Stage:
@@ -36,7 +43,11 @@ class Stage:
             return found
 
         self.plan = SetupPlan(settings or Settings(), first_run=first_run, advanced=not first_run)
-        self.wizard = SetupWizard(self.root, self.plan, looker if look else None, self.save)
+        if first_run:
+            self.plan.offer(OFFERED)
+        self.folder_to_add = ""
+        self.wizard = SetupWizard(self.root, self.plan, looker if look else None, self.save,
+                                  choose_folder=lambda: self.folder_to_add)
 
     def save(self, plan):
         if not self.answer:
@@ -101,12 +112,17 @@ def test_the_express_path_is_welcome_computer_summary_and_finish_saves_what_suit
     assert s.wizard.page() == COMPUTER
     text = s.texts()
     assert "Processor cores: 32" in text and "23.0 times the processor's speed" in text and "reads none of your files" in text
+    assert "The speed test is finished" in text and str(s.wizard.again_button.cget("text")) == "Run the speed test again"
+    assert str(s.wizard.skip_button.cget("state")) == "disabled" and str(s.wizard.again_button.cget("state")) == "normal"
+    s.wizard.next()
+    assert s.wizard.page() == PLACES
     s.wizard.next()
     assert s.wizard.page() == SUMMARY and str(s.wizard.next_button.cget("text")) == "Finish"
     summary = s.wizard.summary_text
     assert "Read on the graphics card: yes  (the graphics card read a sample page 23.0 times faster" in summary
     assert "Spending limit for the index: 56,320 MB  (a tenth of the 550 GB that is free now)" in summary
-    assert "Next you choose which folders to index." in summary and "This is temporary" in summary
+    assert "Folders to index\n  /home/u/Documents\n  /home/u/Pictures" in summary and "This is temporary" in summary
+    assert "looks through each of these folders in turn (opening no file)" in summary and "Nothing is read until you agree" in summary
     assert "Every choice can be changed later under Settings." in summary
     s.wizard.next()
     assert s.saved == [{"ocr_gpu": True, "max_index_mb": 56320}] and s.wizard.finished and s.wizard.closed
@@ -116,6 +132,7 @@ def test_choosing_goes_through_one_page_for_each_group_with_rows_from_the_catalo
     s = stage()
     s.settle()
     s.wizard.choice.set("choose")
+    s.wizard.next()
     s.wizard.next()
     s.wizard.next()
     seen = []
@@ -160,8 +177,9 @@ def test_a_change_is_checked_at_once_and_the_hint_follows(stage):
 def test_the_speed_test_can_still_be_running_and_can_be_skipped(stage):
     s = stage(look="held")
     s.wizard.next()
-    assert s.wizard.page() == COMPUTER and "The test is running" in s.texts() and s.wizard.busy()
-    assert "not tested" not in s.texts() and "none that the reader can use" in s.texts(), "nothing is claimed before it is known"
+    assert s.wizard.page() == COMPUTER and "The speed test is running. It started by itself" in s.texts() and s.wizard.busy()
+    assert "not looked at yet" in s.texts(), "nothing is claimed before it is known"
+    assert str(s.wizard.skip_button.cget("state")) == "normal" and str(s.wizard.again_button.cget("state")) == "disabled"
     s.wizard.skip_test()
     assert "skipped" in s.wizard.message.get()
     s.release.set()
@@ -183,12 +201,12 @@ def test_a_look_that_fails_is_no_hurdle(stage):
 
     s.plan = SetupPlan(Settings())
     s.wizard = SetupWizard(s.root, s.plan, broken, s.save)
+    s.folder_to_add = ""
     try:
         s.settle()
         assert "usual defaults are used" in s.wizard.message.get()
-        s.wizard.next()
-        s.wizard.next()
-        s.wizard.next()
+        for _ in range(4):
+            s.wizard.next()
         assert s.saved == [{}] and s.wizard.finished
     finally:
         s.close()
@@ -232,14 +250,27 @@ def test_the_wizard_opens_by_itself_on_a_first_start_and_finishing_saves_and_ask
         while wizard.looking is not None:
             wizard.looking.join(0.05)
             wizard.drain()
-        for _ in range(3):
+        wizard.plan.offer([Place(str(bench.docs), "Documents", True, "your own documents", YOURS),
+                           Place(str(bench.docs / "sub"), "sub", True, "inside the first", YOURS),
+                           Place(str(tmp_path / "nowhere"), "Gone", True, "a folder that cannot be read", MAYBE)])
+        for _ in range(4):
             wizard.next()
-        assert wizard.finished and "Saved 2 setting(s)." in bench.app.message.get()
+        assert wizard.finished
         assert bench.service.settings.ocr_gpu is True and bench.service.settings.max_index_mb == 56320
         saved, notes = settings_module.load(bench.layout.config)
         assert saved.ocr_gpu is True and saved.max_index_mb == 56320 and notes == []
-        bench.root.update()                        # the folder step that finishing queued
-        assert str(bench.docs) in bench.app.folder_box.cget("values"), "setting up ends with choosing a folder"
+        assert bench.app.place_queue == [str(bench.docs), str(tmp_path / "nowhere")], "the folder inside another is covered by it"
+        bench.root.update()                        # finishing queued a look through the first folder
+        bench.finish_run()
+        picker = bench.app.picker
+        assert picker is not None and picker.where.get() == str(bench.docs), "no bare file box: the picker, for the folder chosen"
+        assert "1 more folder(s) after this one" in bench.app.message.get()
+        picker.apply()
+        assert str(bench.docs) in bench.app.folder_box.cget("values")
+        bench.root.update()                        # closing the picker moves on to the next folder
+        bench.finish_run()
+        assert "could not be looked through" in bench.app.message.get() and bench.app.place_queue == []
+        assert bench.app.worker is None
     finally:
         bench.close()
 
@@ -270,3 +301,50 @@ def test_no_wizard_when_there_is_a_folder_already_and_settings_opens_on_request(
         assert bench.app.wizard is not wizard and not bench.app.wizard.closed
     finally:
         bench.app.close()
+
+
+# ---- which folders ---------------------------------------------------------------------------------------------
+
+def test_the_folders_page_lists_places_with_reasons_and_explains_the_cost(stage):
+    s = stage()
+    s.settle()
+    s.wizard.at = s.wizard.sequence().index(PLACES)
+    s.wizard.show()
+    assert s.wizard.heading.get() == "Which folders"
+    assert "Listing file names takes seconds" in s.texts() and "Nothing is read until you have seen that and agreed" in s.texts()
+    assert {path: box.get() for path, box in s.wizard.place_boxes.items()} == {
+        "/home/u/Documents": True, "/home/u/Pictures": True, "/home/u/Downloads": False, "/usr": False}
+    assert "2 folder(s) chosen." in s.wizard.message.get()
+    s.wizard.tick_place("/home/u/Documents", False)
+    s.wizard.tick_place("/home/u/Pictures", False)
+    assert "No folder is ticked" in s.wizard.message.get()
+    s.folder_to_add = "/data/Archive"
+    s.wizard.add_place()
+    assert s.plan.chosen_places() == ["/data/Archive"] and s.wizard.place_boxes["/data/Archive"].get() is True
+    s.folder_to_add = ""
+    s.wizard.add_place()
+    assert s.plan.chosen_places() == ["/data/Archive"], "a cancelled folder box adds nothing"
+    s.wizard.at = len(s.wizard.sequence()) - 1
+    s.wizard.show()
+    assert "Folders to index\n  /data/Archive" in s.wizard.summary_text and "looks through this folder (opening no file)" in s.wizard.summary_text
+
+
+def test_finishing_with_no_folder_says_what_to_do_next(stage):
+    s = stage()
+    s.settle()
+    for path in list(s.plan.ticked):
+        s.plan.ticked[path] = False
+    s.wizard.at = len(s.wizard.sequence()) - 1
+    s.wizard.show()
+    assert "Folders to index\n  none yet" in s.wizard.summary_text and "Add folder..." in s.wizard.summary_text
+
+
+def test_the_speed_test_can_be_run_again_by_a_button(stage):
+    s = stage()
+    s.settle()
+    s.wizard.at = 1
+    s.wizard.show()
+    s.wizard.test_again()
+    assert s.wizard.busy() or s.wizard.looking is not None
+    s.settle()
+    assert "The speed test is finished" in s.texts() and s.plan.values["ocr_gpu"] is True

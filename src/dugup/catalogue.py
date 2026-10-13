@@ -33,6 +33,7 @@ class Machine:
     free_disk_bytes: Optional[int] = None
     card: str = ""                           # the graphics card route the OCR runtime has, in words; "" when none
     card_speedup: Optional[float] = None     # how many times faster the card read a sample page than the processor
+    page_seconds: Optional[float] = None     # how long the processor took to read the sample page
 
 
 @dataclass(frozen=True)

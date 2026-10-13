@@ -106,5 +106,7 @@ def test_the_computer_is_described_plainly_whatever_could_be_found():
         "Processor cores: 32", "Memory free now: 35 GB", "Disk space free where the index is kept: 550 GB",
         "Graphics card for reading pictures: graphics card (DirectML), 23.0 times the processor's speed on a sample page"]
     unknown = SetupPlan(Settings(), Machine()).computer_lines()
-    assert "not known" in unknown[1] and "none that the reader can use" in unknown[3]
+    assert "not known" in unknown[1] and "not looked at yet" in unknown[3], "nothing is claimed about the card before it is looked at"
+    tested = SetupPlan(Settings(), Machine(cores=4, page_seconds=2.0)).computer_lines()
+    assert "Reading a sample page on the processor: 2.0 seconds" in tested and "none that the reader can use" in tested[-1]
     assert "temporary" in WARNING and "choose for you" in WHY_QUESTIONS

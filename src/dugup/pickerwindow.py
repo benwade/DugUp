@@ -46,7 +46,8 @@ class PickerDialog:
     it returns "" when the plan was taken, else what went wrong (the dialog then stays open and says so)."""
 
     def __init__(self, parent, plan: Plan, rates: Rates, on_apply: Callable[[Plan], str], known: bool = False,
-                 fresh: Optional[Callable[[], Plan]] = None) -> None:
+                 fresh: Optional[Callable[[], Plan]] = None, on_close: Optional[Callable[[], None]] = None) -> None:
+        self.on_close = on_close
         import tkinter as tk
         from tkinter import ttk
 
@@ -255,3 +256,5 @@ class PickerDialog:
             # tkinter's variables must be let go here, on the window's thread. Left to the garbage collector
             # they may be freed on a background thread, which tkinter does not allow (it can hang on Windows).
             self.where = self.help = self.total = self.message = self.skip_tool = None
+            if self.on_close is not None:
+                self.on_close()

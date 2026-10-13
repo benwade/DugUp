@@ -506,17 +506,18 @@ class LocalService:
         from . import machine
         from .catalogue import Machine
         backend = self.ocr_backend
-        card, speedup = "", None
+        card, speedup, page_seconds = "", None, None
         if test_card and hasattr(backend, "speed_test"):
             timed = backend.speed_test(stop)
             if isinstance(timed, dict):
                 card = str(timed.get("card_name") or "")
                 slow, quick = timed.get("processor"), timed.get("card")
+                page_seconds = float(slow) if slow else None
                 if card and slow and quick and quick > 0:
                     speedup = float(slow) / float(quick)
         elif hasattr(backend, "card"):
             card = backend.card(stop)
-        return Machine(machine.cores(), machine.free_memory_bytes(), self.layout.free_bytes(), card, speedup)
+        return Machine(machine.cores(), machine.free_memory_bytes(), self.layout.free_bytes(), card, speedup, page_seconds)
 
     def apply_settings(self, changes: Mapping[str, object]) -> "Settings | Failure":
         """Check these settings, save them in config.toml and use them from now on. Nothing is saved when one

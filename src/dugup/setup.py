@@ -35,6 +35,9 @@ class SetupPlan:
         self.machine = machine or Machine()
         self.first_run = first_run
         self.advanced = advanced          # show every setting, not only the everyday ones
+        self.places = []                  # places.Place offered on a first run
+        self.ticked: Dict[str, bool] = {}   # path -> chosen
+        self.tested = False               # the speed test has given its result
         self.values: Dict[str, object] = {name: getattr(settings, name) for name in catalogue.ENTRIES}
         self.reasons: Dict[str, str] = {}
         self.suggested: Dict[str, Tuple[object, str]] = {}
@@ -44,6 +47,7 @@ class SetupPlan:
         """Take in what was found on the computer. On a first run the suggestions become the values; later
         they are only shown beside the value in use, which a person chose and keeps."""
         self.machine = machine
+        self.tested = self.tested or machine.page_seconds is not None or machine.card_speedup is not None
         self.suggested = catalogue.suggestions(machine)
         untouched = {name for name in self.suggested
                      if self.values[name] == getattr(self.settings, name) or name in self.reasons}
@@ -52,6 +56,32 @@ class SetupPlan:
             if self.first_run and name in untouched and getattr(self.settings, name) == catalogue.default(name):
                 self.values[name] = value
                 self.reasons[name] = reason
+
+    # -- which folders (a first run only)
+
+    def offer(self, found) -> None:
+        self.places = list(found)
+        self.ticked = {place.path: place.ticked for place in self.places}
+
+    def add_place(self, path: str) -> None:
+        from .places import YOURS, Place
+        if path not in self.ticked:
+            self.places.append(Place(path, path, True, "a folder you added", YOURS))
+        self.ticked[path] = True
+
+    def chosen_places(self) -> List[str]:
+        """The folders to index, in the order shown, without any that lie inside another chosen one."""
+        from .places import without_nested
+        return without_nested([place.path for place in self.places if self.ticked.get(place.path)])
+
+    def covered(self) -> List[str]:
+        """Ticked folders that lie inside another ticked one, and so need no entry of their own."""
+        chosen = set(self.chosen_places())
+        return [place.path for place in self.places if self.ticked.get(place.path) and place.path not in chosen]
+
+    def pace(self) -> str:
+        from .places import pace_words
+        return pace_words(self.machine.page_seconds, self.machine.card_speedup, bool(self.values.get("ocr_gpu")))
 
     # -- what to show
 
@@ -119,8 +149,11 @@ class SetupPlan:
         gb = lambda count: "not known" if count is None else f"{count / 1024 ** 3:,.0f} GB"
         lines = [f"Processor cores: {m.cores}", f"Memory free now: {gb(m.free_memory_bytes)}",
                  f"Disk space free where the index is kept: {gb(m.free_disk_bytes)}"]
+        if m.page_seconds:
+            lines.append(f"Reading a sample page on the processor: {m.page_seconds:.1f} seconds")
         if not m.card:
-            lines.append("Graphics card for reading pictures: none that the reader can use (the processor is used)")
+            lines.append("Graphics card for reading pictures: none that the reader can use (the processor is used)"
+                         if self.tested else "Graphics card for reading pictures: not looked at yet")
         elif m.card_speedup is None:
             lines.append(f"Graphics card for reading pictures: {m.card}, not tested yet")
         else:
