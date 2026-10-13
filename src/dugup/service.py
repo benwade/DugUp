@@ -390,12 +390,15 @@ class LocalService:
         return surveying.survey(target, ((e.path, e.size, e.offline) for e in listing.entries),
                                 self.settings.extensions, rates)
 
-    def duplicates(self, drive: str, protected: Sequence[str] = ()):
+    def duplicates(self, drive: str, protected: Sequence[str] = (), preferred: Sequence[str] = ()):
         """The same file kept in several places below `drive`, from the content marks in the index (cleanup.Report).
-        Changes nothing. `protected`: folders never proposed, on top of the setting cleanup_protect."""
+        Changes nothing. `protected`: folders never proposed, and `preferred`: folders whose copy is the one
+        to keep, both on top of the settings cleanup_protect and cleanup_prefer."""
         from . import cleanup
         kept = [p.strip() for p in self.settings.cleanup_protect.split(";") if p.strip()] + [p for p in protected if p.strip()]
-        return cleanup.report(self.store, _place(drive), [_place(p) for p in kept], self.case_insensitive)
+        home = [p.strip() for p in self.settings.cleanup_prefer.split(";") if p.strip()] + [p for p in preferred if p.strip()]
+        return cleanup.report(self.store, _place(drive), [_place(p) for p in kept], self.case_insensitive,
+                              [_place(p) for p in home])
 
     def copies(self, path: str, stop: Optional[StopSignal] = None):
         """Folders below `path` that look like copies of each other (copies.Pair, most files first), or a

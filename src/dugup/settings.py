@@ -52,6 +52,8 @@ class Settings:
                                            # (and what OCR read) from there, and is not read again
     cleanup_protect: str = ""              # folders never proposed for removal, separated by ";" (a live backup of this
                                            # computer on a cloud drive, say); the duplicates report shows them aside
+    cleanup_prefer: str = ""               # folders, separated by ";", that are the proper home of their files: a copy
+                                           # there is the one to keep when the duplicates report must choose
     index_readers: int = 0                 # files read side by side when indexing; 0 works it out, 1 is one at a time
     retry_patience: float = 2.0            # a file or page that ran out of time gets one more try, last of all,
                                            # with its time limit multiplied by this; 1 or less means no second try

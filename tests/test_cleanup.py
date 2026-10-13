@@ -88,6 +88,11 @@ def test_the_command_lists_saves_and_changes_nothing(tmp_path):
     code = main(["duplicates", "G:\\", "--protect", "G:\\Other computers\\PC (4)", "--data-dir", str(data), "--rows", "2"], stdout=out)
     text = out.getvalue()
     assert code == 0 and "nothing is changed, DugUp never deletes" in text and "never proposed: G:\\Other computers\\PC (4)" in text
+    assert "NO INDEXED FILE" not in text
+    gone = io.StringIO()
+    main(["duplicates", "G:\\", "--protect", "G:\\Nowhere", "--prefer", "G:\\My Drive", "--data-dir", str(data)], stdout=gone)
+    assert "never proposed: G:\\Nowhere   <- NO INDEXED FILE LIES BELOW THIS" in gone.getvalue()
+    assert "the proper home, kept when there is a choice: G:\\My Drive" in gone.getvalue()
     assert "6 extra copy(ies) of 6 file(s)" in text and "keep   G:\\My Drive\\Desktop\\d0.txt   (9 files in its folder)" in text
     assert "extra  G:\\Other computers\\PC (2)\\Desktop\\d0.txt   (5 files in its folder)" in text
     assert "... and 4 more set(s)" in text
@@ -99,3 +104,18 @@ def test_the_command_lists_saves_and_changes_nothing(tmp_path):
     assert lines[0].split("\t") == ["keep", "G:\\My Drive\\Desktop\\d0.txt", "1000", "9"]
     assert any(line.startswith("protected\tG:\\Other computers\\PC (4)\\Documents\\also.txt") for line in lines)
     assert lines.count("") == 6, "a blank line after each set"
+
+
+def test_a_preferred_folder_wins_the_choice_and_a_protected_folder_with_nothing_below_is_flagged(store):
+    def put(path, mark):
+        store.set_content(store.upsert_file(FileRecord(path, 10, 1.0, state=FileState.DONE)), mark)
+    for name in ("a.txt", "b.txt"):
+        put(f"G:\\My Drive\\Desktop\\Alex's Classes\\{name}", name)
+        put(f"G:\\My Drive\\Rivera-ALEX\\School\\Alex's Classes\\{name}", name)
+    plain = cleanup.report(store, "G:\\", case_insensitive=True)
+    assert plain.sets[0].keep.record.path.startswith("G:\\My Drive\\Desktop"), "the same set size: higher up wins"
+    homed = cleanup.report(store, "G:\\", case_insensitive=True, preferred=["G:\\My Drive\\Rivera-ALEX"],
+                           protected=["G:\\Other computers\\My Computer (4)"])
+    assert all(s.keep.record.path.startswith("G:\\My Drive\\Rivera-ALEX") for s in homed.sets), "the proper home wins"
+    assert homed.protected_empty == ("G:\\Other computers\\My Computer (4)",), "a protected folder that holds nothing is said"
+    assert cleanup.report(store, "G:\\", case_insensitive=True, protected=["G:\\My Drive\\Desktop"]).protected_empty == ()

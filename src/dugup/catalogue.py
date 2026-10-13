@@ -174,6 +174,10 @@ def _entries() -> Tuple[Entry, ...]:
           "A live backup of this computer on a cloud drive belongs here: removing a file there can remove it here too.",
           why="The report only lists; you do the removing. But it should never point you at a folder where a removal "
               "reaches further than you can see."),
+        E("cleanup_prefer", "search", "Folders that are the proper home of their files",
+          "Folders, separated by \";\". When the duplicates report must choose which copy to keep, a copy in one of "
+          "these wins; otherwise the copy in the larger set of files, then the one higher up.",
+          why="Four folders may hold the same 23 files, and only you know which one is where they belong."),
         E("main_place", "search", "Where your own copy of a file is",
           "When the same file is in several places, a search shows the one below this folder or drive (for example C:\\) "
           "and lists the others under it. Empty lets DugUp work it out: on Windows, the drive your own folders are on.",

@@ -302,6 +302,9 @@ def build_parser() -> argparse.ArgumentParser:
     dup.add_argument("drive", help="the drive or folder to look in, for example G:\\ (copies on other drives are not duplicates)")
     dup.add_argument("--protect", action="append", default=[], metavar="FOLDER",
                      help="a folder never proposed for removal (as well as the setting cleanup_protect); may be repeated")
+    dup.add_argument("--prefer", action="append", default=[], metavar="FOLDER",
+                     help="a folder that is the proper home of its files: a copy there is the one to keep (as well as "
+                          "the setting cleanup_prefer); may be repeated")
     dup.add_argument("--rows", type=int, default=50, help="how many sets to show, most space first (default 50)")
     dup.add_argument("--save", metavar="FILE", help="write the whole report to a text file (keep or extra, path, size, files in its folder)")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
@@ -1306,15 +1309,18 @@ def cmd_duplicates(args, env, out, environ) -> int:
     if service is None:
         return 1
     with service:
-        found = service.duplicates(args.drive, args.protect)
+        found = service.duplicates(args.drive, args.protect, args.prefer)
         safe_write(f"The same file in several places below {found.drive} (from the index; nothing is changed, DugUp never deletes).", out)
         for folder in found.protected:
-            safe_write(f"  never proposed: {folder}", out)
+            gone = folder in found.protected_empty
+            safe_write(f"  never proposed: {folder}" + ("   <- NO INDEXED FILE LIES BELOW THIS: is the name right?" if gone else ""), out)
+        for folder in found.preferred:
+            safe_write(f"  the proper home, kept when there is a choice: {folder}", out)
         if not found.sets:
             safe_write("No file below there is kept in two or more places (among the files whose content is known).", out)
             return 0
         safe_write(f"{found.extra_files:,} extra copy(ies) of {len(found.sets):,} file(s), taking about {format_bytes(found.wasted_bytes)}. "
-                   "'keep' is the copy in the larger set of files (then the one higher up); every other copy is 'extra'.", out)
+                   "'keep' is the copy in a proper-home folder, else in the larger set of files, then the one higher up; every other copy is 'extra'.", out)
         if args.save:
             lines = []
             for same in found.sets:

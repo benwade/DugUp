@@ -4,7 +4,8 @@ Nothing here changes a file. DugUp never deletes. The report is for a person to 
 every copy where it is.
 
   report()   the sets of exact copies on a drive, the keeper of each chosen, and the totals
-  Keeper rule (Ben's): the copy that is part of the larger set of files first, that is, the one whose folder
+  Keeper rule (Ben's): a copy in a folder the person named as the proper home first; then the copy that is
+  part of the larger set of files, that is, the one whose folder
   holds more files; then the copy higher up in the folders; then the one seen first. The date a file was made
   is not kept by the index (and a copy gets a new one when it is made), so it does not decide.
 """
@@ -46,6 +47,8 @@ class Report:
     drive: str
     protected: Tuple[str, ...]
     sets: List[Same]
+    preferred: Tuple[str, ...] = ()
+    protected_empty: Tuple[str, ...] = ()   # protected folders with no indexed file below them: likely misspelt
 
     @property
     def extra_files(self) -> int:
@@ -72,13 +75,16 @@ def _depth(path: str) -> int:
     return path.count("/") + path.count("\\")
 
 
-def report(store, drive: str, protected: Sequence[str] = (), case_insensitive: Optional[bool] = None) -> Report:
+def report(store, drive: str, protected: Sequence[str] = (), case_insensitive: Optional[bool] = None,
+           preferred: Sequence[str] = ()) -> Report:
     """The sets of exact copies below `drive` (a drive or any folder). Copies in a protected folder are shown
-    beside their set and never proposed; a set with fewer than two copies left is not a set."""
+    beside their set and never proposed; a set with fewer than two copies left is not a set. A copy below a
+    preferred folder (a folder the person calls the proper home of such files) wins the choice of keeper."""
     if case_insensitive is None:
         case_insensitive = os.name == "nt"
     fold = (lambda t: t.lower()) if case_insensitive else (lambda t: t)
     sets = store.same_content(drive, case_insensitive)
+    empty = tuple(p for p in protected if not store.list_files(prefix=p, limit=1, case_insensitive=case_insensitive))
     folders = sorted({folder_of(r.path) for members in sets for r in members})
     counts = store.files_in_folders(folders)
     found: List[Same] = []
@@ -88,7 +94,8 @@ def report(store, drive: str, protected: Sequence[str] = (), case_insensitive: O
         open_ones = [c for c in copies if not c.protected]
         if len(open_ones) < 2:
             continue
-        ranked = sorted(open_ones, key=lambda c: (-c.folder_files, _depth(c.record.path), len(c.record.path), c.record.row_id or 0))
+        ranked = sorted(open_ones, key=lambda c: (not any(_under(c.record.path, p, fold) for p in preferred),
+                                                  -c.folder_files, _depth(c.record.path), len(c.record.path), c.record.row_id or 0))
         found.append(Same(ranked[0], ranked[1:], [c for c in copies if c.protected]))
     found.sort(key=lambda s: (-s.wasted, s.keep.record.path.lower()))
-    return Report(drive, tuple(protected), found)
+    return Report(drive, tuple(protected), found, tuple(preferred), empty)
