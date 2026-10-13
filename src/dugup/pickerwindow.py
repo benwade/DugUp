@@ -16,7 +16,7 @@ from .shapes import OPTIONS
 from .survey import CODE, DOCUMENTS, MEDIA, OTHER, PICTURES, TEXT, Rates
 
 IN, OUT = "☑", "☐"       # a ticked and an empty box
-COLUMNS = (("tick", "In", 36),
+COLUMNS = (("tick", "Include", 64),
            *((option, OPTION_LABELS[option] + ("*" if option in NOT_YET else ""), 112 if option == "alike" else 76) for option in OPTIONS),
            ("holds", "What is there", 300), ("cost", "Index grows by", 116), ("why", "Notes", 380))
 OPTION_COLUMN = {f"#{index + 2}": option for index, option in enumerate(OPTIONS)}     # "#1" is the tick
@@ -144,7 +144,7 @@ class PickerDialog:
         elif not why and inside:
             why = "its own choice: differs from the folder above" if plan.differs(node.rel) else \
                 ("follows the folder above" if "/" in node.rel else "")
-        return (IN if plan.own_tick(node.rel) else OUT, *marks, holds_text(node),
+        return (IN if plan.ticked(node.rel) else OUT, *marks, holds_text(node),
                 size_text(plan.cost(self.rates, node.rel)) if inside else "", why)
 
     def _insert(self, parent: str, node: Node) -> None:
@@ -236,6 +236,11 @@ class PickerDialog:
         if not rel:
             self.message.set("This is the folder being chosen, so it stays in. To leave it out altogether, press Cancel.")
             return
+        above = rel.rsplit("/", 1)[0] if "/" in rel else ""
+        if above and not self.plan.ticked(above):
+            self.message.set("A folder above this one is not included, so nothing inside it is. Tick that folder's "
+                             "\"Include\" box first.")
+            return
         self.plan.set_ticked(rel, not self.plan.own_tick(rel))
         self.plan.reasons.pop(rel.casefold(), None)       # the starting reason no longer describes the row
         self.refresh()
@@ -243,7 +248,7 @@ class PickerDialog:
     def toggle_option(self, rel: str, option: str) -> None:
         """Tick or untick one of the choices for a folder (a click in its column)."""
         if not self.plan.ticked(rel):
-            self.message.set("That folder is left out. Tick its \"In\" box first.")
+            self.message.set("That folder is not included. Tick its \"Include\" box first.")
             return
         self.plan.set_option(rel, option, not self.plan.has(rel, option))
         self.plan.reasons.pop(rel.casefold(), None)

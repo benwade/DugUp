@@ -860,7 +860,7 @@ class App:
         if what == "plan":
             from .waitwindow import WaitWindow
             self._close_waiting()
-            self.waiting = WaitWindow(self.root, "Looking through a folder", self.looking_text(), self.stop_work)
+            self.waiting = WaitWindow(self.root, "Getting ready - please wait", self.looking_text(), self.stop_work)
         self.worker = threading.Thread(target=work, name=f"dugup-window-{what}", daemon=True)
         for button in self.run_buttons:
             button.configure(state="disabled")
@@ -889,18 +889,21 @@ class App:
             seen = {}
         took = format_seconds(max(0.0, time.monotonic() - self.job_started))
         files = int(seen.get("files", 0) or 0)
-        if seen.get("sorting"):
-            return (f"Looked through {self.job_path}: {files:,} file(s) found. Sorting them into folders ({took} so far) ... "
-                    "The picker opens when this is done.")
-        return (f"Looking through {self.job_path} (no file is opened): {files:,} file(s) seen, {took} so far. "
-                "A whole drive can take a few minutes. The picker opens when this is done.")
+        why = ("DugUp is listing the files in this folder so that you can choose what to include, and see what each "
+               "choice costs in time and disk space, before anything is read. Only names and sizes are looked at; "
+               "no file is opened or changed.\n\n"
+               "Please wait if you can. A large folder or a whole drive can take a few minutes, and the computer "
+               "stays usable meanwhile. If you cannot wait, press Stop: nothing is lost, and you can choose this "
+               "folder again later.\n\n")
+        now = "sorting them into folders" if seen.get("sorting") else "still listing"
+        return why + f"{self.job_path}\n{files:,} file(s) found, {took} so far, {now}."
 
     def _poll(self) -> None:
         if self.closed:
             return
         if self.busy() and getattr(self, "job", "") == "plan":
             text = self.looking_text()
-            self.progress_text.set(text)
+            self.progress_text.set(" ".join(text.split("\n")[-2:]))
             if self.waiting is not None:
                 self.waiting.say(text)
         self.drain()

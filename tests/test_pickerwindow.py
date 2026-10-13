@@ -64,7 +64,7 @@ def test_adding_a_folder_opens_the_picker_with_the_guesses_and_adds_nothing_yet(
     shown = [picker.tree.item(i, "text") for i in picker.tree.get_children("n:")]
     assert set(shown) == {"Books", "Trash", "Proj", "Letters", "sub"} and ".venv" not in shown
     assert [str(picker.tree.heading(key, "text")) for key in ("tick", "words", "ocr", "meaning", "alike")] == \
-        ["In", "Words", "Scans", "Meaning*", "Pictures alike*"]
+        ["Include", "Words", "Scans", "Meaning*", "Pictures alike*"]
     assert row(picker, "Trash")["tick"] == OUT and "trash" in row(picker, "Trash")["why"] and marks(picker, "Trash") == "    "
     assert row(picker, "Books")["tick"] == IN and marks(picker, "Books") == "----", "a book library: names only"
     assert "book library" in row(picker, "Books")["why"]
@@ -82,7 +82,7 @@ def test_ticks_choices_and_the_total_follow_clicks(bench):
     assert row(picker, "Letters")["tick"] == OUT and row(picker, "Letters")["cost"] == "" and "3 folder(s) in, 2 out" in picker.total.get()
     assert "out" in picker.tree.item("n:Letters", "tags")
     picker.toggle_option("Letters", "ocr")
-    assert "Tick its \"In\" box first" in picker.message.get() and marks(picker, "Letters") == "    "
+    assert "Tick its \"Include\" box first" in picker.message.get() and marks(picker, "Letters") == "    "
     picker.toggle("Letters")
     assert picker.total.get() == before
     picker.toggle_option("Books", "alike")
@@ -131,7 +131,7 @@ def test_folders_inside_follow_the_folder_above_until_one_is_changed(bench):
 
     picker.toggle("Letters")
     assert marks(picker, "Letters/2019") == "    " and "out" in picker.tree.item("n:Letters/2019", "tags")
-    assert row(picker, "Letters/2019")["tick"] == IN, "its own box is still ticked; it is out because Letters is"
+    assert row(picker, "Letters/2019")["tick"] == OUT, "shown as left out, because Letters is"
 
 
 def test_apply_saves_the_choices_and_indexing_follows_them(bench):
@@ -230,15 +230,15 @@ def test_a_look_through_a_folder_says_how_far_it_has_got(bench, monkeypatch):
     bench.app.add_folder()
     assert started.wait(30)
     text = bench.app.looking_text()
-    assert "48,213 file(s) seen" in text and "no file is opened" in text and "A whole drive can take a few minutes" in text
-    assert str(bench.docs) in text and "The picker opens when this is done" in text
+    assert "48,213 file(s) found" in text and "no file is opened" in text and "a whole drive can take a few minutes" in text and "If you cannot wait, press Stop" in text
+    assert str(bench.docs) in text and "so that you can choose what to include" in text
     waiting = bench.app.waiting
     assert waiting is not None and not waiting.closed, "a wait is shown in a window of its own, not only in a line"
-    assert waiting.window.title() == "Looking through a folder" and str(bench.docs) in waiting.text.get()
+    assert waiting.window.title() == "Getting ready - please wait" and str(bench.docs) in waiting.text.get()
     bench.app._poll()
-    assert "48,213 file(s) seen" in waiting.text.get(), "and it is kept up to date"
+    assert "48,213 file(s) found" in waiting.text.get(), "and it is kept up to date"
     monkeypatch.setattr(type(bench.service), "looking_at", lambda self: {"files": 48213, "sorting": True})
-    assert "Sorting them into folders" in bench.app.looking_text()
+    assert "sorting them into folders" in bench.app.looking_text()
     release.set()
     bench.finish_run()
     assert waiting.closed and bench.app.waiting is None, "it goes away when the look is done"
@@ -269,3 +269,16 @@ def test_stop_in_the_waiting_window_stops_the_look_and_a_failure_is_said_in_a_bo
     bench.finish_run()
     assert len(bench.told) == 1 and bench.told[0][0] == "A folder could not be looked through"
     assert str(bench.docs / "missing") in bench.told[0][1], "what must not be missed is said in a box of its own"
+
+
+def test_a_folder_that_is_not_included_shows_everything_inside_it_as_not_included(bench):
+    picker = open_picker(bench)
+    picker.open("Letters")
+    assert row(picker, "Letters/2019")["tick"] == IN
+    picker.toggle("Letters")
+    assert row(picker, "Letters")["tick"] == OUT and row(picker, "Letters/2019")["tick"] == OUT, \
+        "what is inside a folder that is left out is left out, and is shown so"
+    picker.toggle("Letters/2019")
+    assert "A folder above this one is not included" in picker.message.get() and row(picker, "Letters/2019")["tick"] == OUT
+    picker.toggle("Letters")
+    assert row(picker, "Letters")["tick"] == IN and row(picker, "Letters/2019")["tick"] == IN

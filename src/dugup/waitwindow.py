@@ -37,17 +37,13 @@ class WaitWindow:
             self.stop_button.grid_remove()
         win.protocol("WM_DELETE_WINDOW", self.stop)
         win.update_idletasks()
-        try:                                   # in the middle of the window it belongs to, or of the screen
-            if shown:
-                x = parent.winfo_rootx() + max(0, (parent.winfo_width() - win.winfo_width()) // 2)
-                y = parent.winfo_rooty() + max(0, (parent.winfo_height() - win.winfo_height()) // 3)
-            else:
-                x = max(0, (win.winfo_screenwidth() - win.winfo_width()) // 2)
-                y = max(0, (win.winfo_screenheight() - win.winfo_height()) // 3)
+        try:                                   # in the middle of the screen, and it stays on top
+            x = max(0, (win.winfo_screenwidth() - win.winfo_width()) // 2)
+            y = max(0, (win.winfo_screenheight() - win.winfo_height()) // 2)
             win.geometry(f"+{x}+{y}")
         except tk.TclError:
             pass
-        bring_to_front(win)
+        bring_to_front(win, stay=True)
 
     def say(self, text: str) -> None:
         if not self.closed:
@@ -80,13 +76,14 @@ def _shown(window) -> bool:
         return False
 
 
-def bring_to_front(window) -> None:
+def bring_to_front(window, stay: bool = False) -> None:
     """Put a window in front of the others and give it the keyboard. It is made "always on top" for a moment
     only, because Windows otherwise leaves a new window behind the one in use."""
     try:
         window.lift()
         window.attributes("-topmost", True)
-        window.after(300, lambda: _not_topmost(window))
+        if not stay:
+            window.after(300, lambda: _not_topmost(window))
         window.focus_force()
     except Exception:
         pass
