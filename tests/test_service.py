@@ -163,11 +163,11 @@ def test_status_and_needs_attention(service, docs):
     status = service.indexing_status()
     assert status["files"] == 4 and status["counts"] == {"done": 2, "failed": 1, "partial": 1}
     assert status["roots"][0]["counts"] == status["counts"] and status["roots"][0]["reachable"] is True
-    attention = service.needs_attention()
-    assert [(os.path.basename(r.path), r.state) for r in attention] == [("locked.docx", FileState.FAILED)], \
+    hopeless = service.unreadable_files()
+    assert [(os.path.basename(r.path), r.state) for r in hopeless] == [("locked.docx", FileState.FAILED)], \
         "a picture that only waits for OCR is queued work, not trouble"
-    assert all(r.error for r in attention)
-    assert dict(service.attention_counts()) == {"attention": 1, "waiting_for_ocr": 1}
+    assert all(r.error for r in hopeless) and service.needs_attention() == [], "a password is nothing to act on here"
+    assert dict(service.attention_counts()) == {"attention": 0, "unreadable": 1, "waiting_for_ocr": 1}
 
 
 def test_trouble_is_listed_failed_first_and_a_page_that_could_not_be_read_counts(service, docs):
@@ -175,10 +175,12 @@ def test_trouble_is_listed_failed_first_and_a_page_that_could_not_be_read_counts
     (docs / "a broken page.pdf").write_bytes(build_pdf([PdfPage("none", ink=True), PdfPage("unreadable")]))
     service.set_root(Root(str(docs)))
     service.run_indexing()
-    assert [(os.path.basename(r.path), r.state) for r in service.needs_attention()] == [
-        ("locked.docx", FileState.FAILED), ("a broken page.pdf", FileState.PARTIAL)]
-    assert len(service.needs_attention(limit=1)) == 1 and len(service.needs_attention(offset=1)) == 1
-    assert dict(service.attention_counts()) == {"attention": 2, "waiting_for_ocr": 1}
+    listed = [(os.path.basename(r.path), r.state) for r in service.unreadable_files()] + \
+        [(os.path.basename(r.path), r.state) for r in service.needs_attention()]
+    assert sorted(listed) == sorted([("locked.docx", FileState.FAILED), ("a broken page.pdf", FileState.PARTIAL)])
+    assert len(service.unreadable_files(limit=1)) == 1 and service.unreadable_files(offset=5) == []
+    tally = dict(service.attention_counts())
+    assert tally["attention"] + tally["unreadable"] == 2 and tally["waiting_for_ocr"] == 1
 
 
 def test_parts_not_built_yet_say_so(service):

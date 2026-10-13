@@ -25,7 +25,7 @@ from .datadir import DataLayout, is_within
 from .dirscan import DirectoryScan
 from .extractors import default_extractors
 from .extractors.sandboxed import SandboxedExtractor
-from .indexer import POLICY_NOTE, REFUSE, Indexer, IndexReport, Progress, only_waits_for_ocr
+from .indexer import POLICY_NOTE, REFUSE, Indexer, IndexReport, Progress, cannot_be_read, only_waits_for_ocr
 from .lockfile import RunLock
 from .ocr import SandboxOcrBackend
 from .ocrqueue import OcrReport, OcrRunner
@@ -462,14 +462,22 @@ class LocalService:
         return found
 
     def needs_attention(self, limit: int = 100, offset: int = 0) -> Sequence[FileRecord]:
-        return self._troubled()[offset:offset + limit]
+        """Files worth a look: something went wrong that a setting or another try might put right."""
+        return [r for r in self._troubled() if not cannot_be_read(r.error)][offset:offset + limit]
+
+    def unreadable_files(self, limit: Optional[int] = None, offset: int = 0) -> Sequence[FileRecord]:
+        """Files that are damaged or need a password. Their names are searchable; nothing here will read them."""
+        found = [r for r in self._troubled() if cannot_be_read(r.error)]
+        return found[offset:] if limit is None else found[offset:offset + limit]
 
     def attention_counts(self) -> Mapping[str, int]:
-        """How many files need attention, and how many only wait for OCR (queued, nothing wrong)."""
+        """How many files are worth a look, how many cannot be read (damaged or protected), and how many only
+        wait for OCR (queued, nothing wrong)."""
         partial = self.store.list_files(state=FileState.PARTIAL, missing=False)
         waiting = sum(1 for r in partial if only_waits_for_ocr(r.error))
-        failed = len(self.store.list_files(state=FileState.FAILED, missing=False))
-        return {"attention": failed + len(partial) - waiting, "waiting_for_ocr": waiting}
+        troubled = self._troubled()
+        hopeless = sum(1 for r in troubled if cannot_be_read(r.error))
+        return {"attention": len(troubled) - hopeless, "unreadable": hopeless, "waiting_for_ocr": waiting}
 
     # -- indexing
 

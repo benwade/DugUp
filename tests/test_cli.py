@@ -70,9 +70,21 @@ def test_add_index_search_status(sh):
     assert code == 0 and "No files found" in text
 
     code, text = sh.run("status")
-    assert code == 0 and "3 file(s)" in text and "done 2" in text and "failed 1" in text and "status --attention" in text
+    assert code == 0 and "3 file(s)" in text and "done 2" in text and "failed 1" in text
+    assert "1 file(s) cannot be read" in text and "status --unreadable" in text and "worth a look" not in text
     code, text = sh.run("status", "--attention")
-    assert "showing 1 of 1" in text and "locked.docx" in text and "password_protected" in text
+    assert "Worth a look: showing 0 of 0" in text and "Cannot be read" in text and "showing 1 of 1" in text
+    assert "locked.docx" in text and "password_protected" in text
+    code, text = sh.run("status", "--unreadable")
+    assert code == 0 and "Cannot be read (damaged, or needs a password): 1 file(s)" in text and "locked.docx" in text
+    assert "never deletes" in text
+    listing = sh.docs.parent / "unreadable.txt"
+    code, text = sh.run("status", "--save", str(listing))
+    assert code == 0 and "1 file(s) that cannot be read are listed" in text
+    lines = listing.read_text(encoding="utf-8-sig").splitlines()
+    assert len(lines) == 1 and lines[0].split("\t")[0].endswith("locked.docx") and "password_protected" in lines[0]
+    code, text = sh.run("status", "--save", str(listing))
+    assert code == 1 and "is there already" in text, "a list is never written over a file"
 
     code, text = sh.run("roots", "list")
     assert code == 0 and str(sh.docs) in text and "3 file(s)" in text and "last scan never" not in text
@@ -84,10 +96,10 @@ def test_files_waiting_for_ocr_are_counted_apart_and_do_not_bury_real_trouble(sh
     assert sh.run("roots", "add", str(sh.docs))[0] == 0
     assert sh.run("index", "--no-ocr")[0] == 0
     code, text = sh.run("status", "--attention")
-    assert "60 file(s) wait for OCR" in text and "Needs attention: showing 1 of 1" in text
+    assert "60 file(s) wait for OCR" in text and "Cannot be read" in text and "showing 1 of 1" in text
     assert "locked.docx" in text and "icon" not in text
     plain = sh.run("status")[1]
-    assert "60 file(s) wait for OCR" in plain and "1 file(s) failed or were read only in part" in plain
+    assert "60 file(s) wait for OCR" in plain and "1 file(s) cannot be read" in plain
 
 
 def test_a_query_of_several_words_points_at_the_place_where_they_stand_together(sh):

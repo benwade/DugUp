@@ -282,6 +282,10 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--context", type=int, default=60, help="characters shown on each side of a match")
 
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
+    status.add_argument("--unreadable", action="store_true",
+                        help="list every file that cannot be read (damaged, or needs a password)")
+    status.add_argument("--save", metavar="FILE",
+                        help="write that list to a text file (path, a tab, the reason) instead of the screen")
     status.add_argument("--attention", nargs="?", type=int, const=50, default=None, metavar="N",
                         help="list up to N files that failed or were read only in part (default 50)")
     return parser
@@ -856,6 +860,26 @@ def cmd_search(args, env, out, environ) -> int:
     return 0
 
 
+def save_file_list(target: str, records, args, environ) -> str:
+    """Write "path<TAB>reason" lines as UTF-8. Returns "" when done, else why not. Never into a folder the
+    program must not write to or one that looks cloud-synced, and never over a file that is there already."""
+    from .datadir import check_allowed
+    path = os.path.abspath(os.path.expanduser(target))
+    try:
+        check_allowed(path, list(args.never_write) + never_write_from_env(environ), args.allow_synced)
+    except DataDirError as exc:
+        return f"The list was not written: {path} is {exc}."
+    if os.path.exists(path):
+        return f"The list was not written: {path} is there already. Give another name."
+    try:
+        with open(path, "x", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n") as handle:
+            for record in records:
+                handle.write(f"{record.path}\t{' '.join(str(record.error).split())}\n")
+    except OSError as exc:
+        return f"The list was not written: {type(exc).__name__}: {exc}"
+    return ""
+
+
 def cmd_status(args, env, out, environ) -> int:
     service = _service(args, environ, out, create=False)
     if service is None:
@@ -882,14 +906,38 @@ def cmd_status(args, env, out, environ) -> int:
         for engine, count in sorted(service.old_ocr_pages().items()):
             safe_write(f"{count:,} page(s) were read by another OCR version ({engine or 'unknown'}). "
                        "To read them again with the one installed now: dugup ocr --reread-old", out)
+        if args.unreadable or args.save:
+            records = service.unreadable_files()
+            if args.save:
+                problem = save_file_list(args.save, records, args, environ)
+                if problem:
+                    safe_write(problem, out)
+                    return 1
+                safe_write(f"{len(records):,} file(s) that cannot be read are listed in {args.save} (path, a tab, the reason).", out)
+            else:
+                safe_write(f"Cannot be read (damaged, or needs a password): {len(records):,} file(s). Their names are "
+                           "searchable. DugUp never deletes or changes a file.", out)
+                for record in records:
+                    safe_write(f"  {record.path}", out)
+                    safe_write(f"      {record.error}", out)
         if args.attention is not None:
             records = service.needs_attention(limit=max(0, args.attention))
-            safe_write(f"Needs attention: showing {len(records):,} of {tally['attention']:,}", out)
+            safe_write(f"Worth a look: showing {len(records):,} of {tally['attention']:,}", out)
             for record in records:
                 safe_write(f"  [{record.state.value}] {record.path}", out)
                 safe_write(f"      {record.error}", out)
+            if tally["unreadable"] and not (args.unreadable or args.save):
+                shown = service.unreadable_files(limit=max(0, args.attention))
+                safe_write(f"Cannot be read (damaged, or needs a password; nothing to do here): showing {len(shown):,} of "
+                           f"{tally['unreadable']:,}. All of them: dugup status --unreadable", out)
+                for record in shown:
+                    safe_write(f"  [{record.state.value}] {record.path}", out)
+                    safe_write(f"      {record.error}", out)
         elif tally["attention"]:
-            safe_write(f"{tally['attention']:,} file(s) failed or were read only in part. List them: dugup status --attention", out)
+            safe_write(f"{tally['attention']:,} file(s) are worth a look (a limit, a timeout or a crash). List them: dugup status --attention", out)
+        if tally["unreadable"] and not (args.unreadable or args.save) and args.attention is None:
+            safe_write(f"{tally['unreadable']:,} file(s) cannot be read (damaged, or need a password); nothing to do here. "
+                       "List them: dugup status --unreadable    Save the list: dugup status --save FILE", out)
     return 0
 
 

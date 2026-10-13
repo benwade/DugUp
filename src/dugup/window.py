@@ -645,12 +645,15 @@ class App:
         if tally["waiting_for_ocr"]:
             lines.append(f"{tally['waiting_for_ocr']:,} file(s) wait for OCR: Read pictures and scans.")
         if tally["attention"]:
-            lines.append(f"{tally['attention']:,} file(s) failed or were read only in part:")
+            lines.append(f"{tally['attention']:,} file(s) are worth a look (a limit, a timeout or a crash):")
             for record in service.needs_attention(limit=20):
                 lines.append(f"    [{record.state.value}] {record.path}")
                 lines.append(f"        {record.error}")
             if tally["attention"] > 20:
                 lines.append(f"    ... and {tally['attention'] - 20:,} more (dugup status --attention)")
+        if tally.get("unreadable"):
+            lines.append(f"{tally['unreadable']:,} file(s) cannot be read (damaged, or need a password). Their names are "
+                         "searchable; nothing to do here. The list: dugup status --unreadable")
         for engine, count in sorted(service.old_ocr_pages().items()):
             lines.append(f"{count:,} page(s) were read by another OCR version ({engine or 'unknown'}).")
         lines.append("")

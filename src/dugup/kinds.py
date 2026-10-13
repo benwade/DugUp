@@ -30,6 +30,15 @@ def extension(path: str) -> str:
     return name[dot + 1:].lower()
 
 
+def is_lock_file(path: str) -> bool:
+    """The small file an office program keeps beside a document while it is open ("~$Report.docx",
+    ".~lock.Report.odt#"). It carries the document's ending and is not a document."""
+    name = path.replace("\\", "/").rsplit("/", 1)[-1]
+    return name.startswith("~$") or name.startswith(".~lock.")
+
+
 def classify(path: str, extensions: Optional[Mapping[str, FileKind]] = None) -> FileKind:
+    if is_lock_file(path):
+        return FileKind.OTHER
     table = DEFAULT_EXTENSIONS if extensions is None else extensions
     return table.get(extension(path), FileKind.OTHER)

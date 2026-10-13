@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .filesource import excluded
-from .kinds import classify
+from .kinds import classify, is_lock_file
 from .protocols import (OCR_FAILED, OCR_WAITING, Extraction, Extractor, FileEntry, FileSource, ScanRules, Skipped,
                         StopSignal, Store)
 from .settings import Settings
@@ -71,6 +71,20 @@ def note_with_ocr(store: Store, row_id: int, note: str) -> Tuple[FileState, str]
     others = [part for part in note.split("; ") if part and not is_ocr_note(part)]
     notes = ocr_notes(store.ocr_status(row_id), len(store.get_pages(row_id))) + others
     return (FileState.PARTIAL if notes else FileState.DONE), "; ".join(notes)
+
+
+def cannot_be_read(note: str) -> bool:
+    """True when everything a file's note says is "damaged" or "needs a password": the file is known, its
+    name is searchable, and nothing done here will read it. A limit that was reached, a timeout or a crash
+    is not that: a setting or another try may help, so those stay worth a look."""
+    parts = [part for part in note.split("; ") if part and not (part.endswith(OCR_WAIT))]
+    if not parts:
+        return False
+    for part in parts:
+        hopeless = ("corrupt:" in part or "password_protected:" in part) and "larger than the limit" not in part
+        if not hopeless:
+            return False
+    return True
 
 
 def only_waits_for_ocr(note: str) -> bool:
@@ -546,6 +560,8 @@ class Indexer:
 
     def _read(self, extractor, record: FileRecord, stop: Optional[StopSignal], patient: bool):
         """The reading half: no index, no counters, so several of these may run side by side."""
+        if is_lock_file(record.path):      # one recorded as a document before lock files were known
+            return Failure(FailureReason.UNSUPPORTED, "an editing lock file, not a document")
         patiently = getattr(extractor, "extract_patiently", None) if self.settings.retry_patience > 1.0 else None
         try:
             if patient and patiently is not None:

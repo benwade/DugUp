@@ -580,3 +580,30 @@ def test_only_the_chosen_roots_are_scanned(w):
     w.put("b.txt", "beta", root=other)
     report = w.run(roots=[other])
     assert [r.path for r in report.roots] == [other] and w.get("a.txt") is None
+
+
+def test_what_cannot_be_read_is_told_apart_from_what_is_worth_a_look():
+    from dugup.indexer import cannot_be_read
+    for note in ("corrupt: not a readable Office file (BadZipFile: File is not a zip file)",
+                 "password_protected: the PDF needs a password",
+                 "OCR failed on 1 of 1 page(s) (first: page 1, corrupt: the picture could not be opened (UnidentifiedImageError))",
+                 "2 of 3 page(s) wait for OCR; 1 page(s) could not be read (first: page 3, corrupt: bad object)"):
+        assert cannot_be_read(note), note
+    for note in ("timed_out: the job did not finish within 60 s and was ended", "crashed: the worker ended without an answer",
+                 "corrupt: word/document.xml is larger than the limit of 64,000,000 bytes", "out_of_memory: too much",
+                 "OCR failed on 1 of 1 page(s) (first: page 1, timed_out: the job did not finish)",
+                 "2 of 3 page(s) wait for OCR", "", "only the first part was read",
+                 "corrupt: bad; timed_out: slow"):
+        assert not cannot_be_read(note), note
+
+
+def test_an_editing_lock_file_is_listed_by_name_and_never_read(w):
+    from dugup.kinds import classify, is_lock_file
+    from dugup.shapes import FileKind
+    assert is_lock_file("C:\\Docs\\~$Report.docx") and is_lock_file("/d/.~lock.Report.odt#") and not is_lock_file("/d/Report~$.docx")
+    assert classify("G:\\x\\~$Curriculum.docx") is FileKind.OTHER
+    w.put("~$Report.txt", "alpha lock")
+    w.put("Report.txt", "alpha real")
+    w.run()
+    assert w.found("alpha") == ["Report.txt"] and w.get("~$Report.txt").state is FileState.SKIPPED
+    assert all("~$" not in path for path in w.reader.calls)
