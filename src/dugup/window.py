@@ -179,6 +179,7 @@ class App:
         self.tell = tell or (lambda title, text: messagebox.showinfo(title, text, parent=root))
         self.choose_folder = choose_folder or (lambda: filedialog.askdirectory(
             parent=root, mustexist=True, title="Choose a folder for DugUp to index", initialdir=os.path.expanduser("~")))
+        self.bar_mode = "part"        # "part": shows how far; "moving": slides while no total is known
         self.setting_up = False       # the first-run setup is going on: this window is kept out of the way
         self.place_queue: List[str] = []     # folders chosen in the setup wizard, each still to be looked through
         self.copy_text: Callable[[str], None] = self._to_clipboard
@@ -867,7 +868,7 @@ class App:
         self.stop_button.configure(state="normal")
         self.progress_text.set(f"Looking through {path} (no file is opened) ..." if what == "plan" else
                                f"Starting several readers for {path} ..." if what == "fast" else "Starting ...")
-        self.bar.configure(value=0.0)
+        self._bar_moving()                         # until there is a total to be a part of
         self.tabs.select(1)
         self.worker.start()
 
@@ -909,6 +910,21 @@ class App:
         self.drain()
         self._poll_id = self.root.after(POLL_MS, self._poll)
 
+    def _bar_moving(self) -> None:
+        """The bar slides back and forth: work is going on, and how much is left is not known yet."""
+        if self.bar_mode != "moving":
+            self.bar_mode = "moving"
+            self.bar.configure(mode="indeterminate", value=0.0)
+            self.bar.start(40)
+
+    def _bar_at(self, percent: float) -> None:
+        """The bar shows how far the work has got."""
+        if self.bar_mode != "part":
+            self.bar_mode = "part"
+            self.bar.stop()
+            self.bar.configure(mode="determinate")
+        self.bar.configure(value=max(0.0, min(100.0, percent)))
+
     def drain(self) -> None:
         """Take in everything the background run has reported. Only the newest progress line is shown."""
         latest: Optional[Progress] = None
@@ -924,7 +940,10 @@ class App:
                 finished.append(item)    # type: ignore[arg-type]
         if latest is not None and not finished:
             self.progress_text.set(progress_text(latest))
-            self.bar.configure(value=latest.percent if latest.phase in ("read", "ocr", "download") else 0.0)
+            if latest.phase in ("read", "ocr", "download", "record") and latest.total > 0:
+                self._bar_at(latest.percent)
+            elif latest.phase != "estimate":           # an estimate is a note on the side: the bar stays as it is
+                self._bar_moving()                     # no total yet (listing, unpacking, measuring): it moves
         for what, report in finished:
             if what == "ask":
                 self._understood(report)
@@ -938,7 +957,7 @@ class App:
         for button in self.run_buttons:
             button.configure(state="normal")
         self.stop_button.configure(state="disabled")
-        self.bar.configure(value=0.0)
+        self._bar_at(0.0)
         out = io.StringIO()
         if what == "plan":
             self._close_waiting()
@@ -1036,6 +1055,14 @@ class App:
         if self.closed:
             return
         self.closed = True
+        try:
+            self.bar.stop()
+        except Exception:
+            pass
+        try:
+            self.bar.stop()
+        except Exception:
+            pass
         self.stop.set()
         self._close_waiting()
         if self.picker is not None:

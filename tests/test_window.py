@@ -743,3 +743,47 @@ def test_read_a_folder_now_takes_over_from_a_run_that_is_going(tmp_path, monkeyp
         assert all(os.sep + "sub" + os.sep not in path for path in waiting), "everything in that folder was read"
     finally:
         bench.close()
+
+
+def test_the_bar_moves_while_no_total_is_known_and_shows_the_part_done_after(tmp_path):
+    from dugup.indexer import Progress
+    bench = Bench(tmp_path)
+    try:
+        app = bench.app
+        assert str(app.bar.cget("mode")) == "determinate"
+        app.events.put(Progress("scan", "x", 0, 0))
+        app.drain()
+        assert str(app.bar.cget("mode")) == "indeterminate", "listing files: no total yet, so the bar slides"
+        app.events.put(Progress("read", "x", 25, 100))
+        app.drain()
+        assert str(app.bar.cget("mode")) == "determinate" and float(app.bar.cget("value")) == 25.0
+        app.events.put(Progress("estimate", "x", 30, 100, projected_bytes=5e6))
+        app.drain()
+        assert float(app.bar.cget("value")) == 25.0, "an estimate does not send the bar back to nothing"
+        app.events.put(Progress("record", "x", 50, 100))
+        app.drain()
+        assert float(app.bar.cget("value")) == 50.0
+    finally:
+        bench.close()
+
+
+def test_the_bar_moves_while_no_total_is_known_and_shows_the_part_done_after(tmp_path):
+    from dugup.indexer import Progress
+    bench = Bench(tmp_path)
+    try:
+        app = bench.app
+        assert str(app.bar.cget("mode")) == "determinate"
+        app.events.put(Progress("scan", "x", 0, 0))
+        app.drain()
+        assert str(app.bar.cget("mode")) == "indeterminate", "listing files: no total yet, so the bar slides"
+        app.events.put(Progress("read", "x", 25, 100))
+        app.drain()
+        assert str(app.bar.cget("mode")) == "determinate" and float(app.bar.cget("value")) == 25.0
+        app.events.put(Progress("estimate", "x", 30, 100, projected_bytes=5e6))
+        app.drain()
+        assert float(app.bar.cget("value")) == 25.0, "an estimate does not send the bar back to nothing"
+        app.events.put(Progress("record", "x", 50, 100))
+        app.drain()
+        assert float(app.bar.cget("value")) == 50.0
+    finally:
+        bench.close()
