@@ -19,7 +19,9 @@ SKETCH = 128            # how many of the smallest hashes are kept for a folder
 BANDS = 12              # folders are compared when they share one of their first few hashes
 MIN_FILES = 20          # a handful of files with the same names means little
 MIN_SHARE = 0.8         # the share of files two folders must have in common
-MIN_OVERLAP = 0.3      # below this the estimate is too rough to say anything
+MIN_OVERLAP = 0.6      # the two must also be of a like size: a folder is not a "copy" of a much larger one that
+                       # merely holds a copy of it somewhere inside (found on a real drive: one package against a whole
+                       # environment). The pair that is alike is then the folder and that inner copy.
 MOST_PAIRS = 200
 
 _BACKUP = re.compile(r"(^|[^a-z])(backups?|bak|bkp|bkup)([^a-z]|$)|(^|[\s_\-(])copy( of\b|\s*\(?\d*\)?$)|^copy of ", re.IGNORECASE)
@@ -45,13 +47,28 @@ def _mark(name: str, size: int) -> int:
 
 
 def find(files: Iterable[Tuple[str, int]], min_files: int = MIN_FILES, min_share: float = MIN_SHARE,
-         stop=None) -> List[Pair]:
-    """`files` is (path below the root written with "/", size). Empty files are left out (they are all alike)."""
+         stop=None, skip: Iterable[str] = ()) -> List[Pair]:
+    """`files` is (path below the root written with "/", size). Empty files are left out (they are all alike).
+    `skip`: folders (same spelling) whose contents are not compared at all, such as tool data: every Python
+    environment looks like every other, and nobody needs telling."""
     marks: Dict[str, List[int]] = {}          # folder -> marks of every file below it
+    left_out = {key.casefold() for key in skip}
+    verdicts: Dict[str, bool] = {}            # folder (folded) -> is it inside something left out
+
+    def skipped(folder: str) -> bool:
+        key = folder.casefold()
+        known = verdicts.get(key)
+        if known is None:
+            known = key in left_out or ("/" in key and skipped(key.rsplit("/", 1)[0]))
+            verdicts[key] = known
+        return known
+
     for relative, size in files:
         if size <= 0 or "/" not in relative:
             continue
         folder, name = relative.rsplit("/", 1)
+        if left_out and skipped(folder):
+            continue
         mark = _mark(name, size)
         while True:
             marks.setdefault(folder, []).append(mark)

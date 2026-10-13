@@ -62,3 +62,22 @@ def test_the_command_lists_pairs_with_full_locations_and_changes_nothing(tmp_pat
     (docs / "Lone").mkdir()
     assert main(["roots", "copies", str(docs / "Lone"), "--data-dir", str(tmp_path / "data")], stdout=out) == 0
     assert "No folders here look like copies" in out.getvalue()
+
+
+def test_a_folder_is_paired_with_its_copy_and_not_with_the_larger_folder_that_holds_the_copy():
+    """Seen on a real drive: a project and the whole of "Other computers", which held a copy of it."""
+    listed = files("Project", 80) + files("Other/PC3/Project", 80) + files("Other/PC3/Rest", 400, start=2000) \
+        + files("Other/PC2/More", 300, start=5000)
+    found = copies.find(listed)
+    assert [(p.first, p.second) for p in found] == [("Other/PC3/Project", "Project")]
+
+
+def test_tool_data_is_not_compared_at_all():
+    """Every Python environment looks like every other; on a real drive that was all 200 pairs."""
+    package = lambda where: [(f"{where}/Lib/site-packages/torch/m{i}.py", 500 + i) for i in range(120)]
+    listed = [(f"/r/{rel}", size, False) for rel, size in
+              package("A/venv") + package("B/.venv") + package("C/env") + files("Docs", 60) + files("Docs copy", 60)]
+    assert len(copies.find([(path[3:], size) for path, size, _ in listed])) >= 1
+    tree = picker.build("/r", listed)
+    assert [(p.first, p.second) for p in tree.copies] == [("Docs", "Docs copy")], "only the folders a person made"
+    assert copies.find(package("A/venv") + package("B/venv"), skip=["A/venv", "b/VENV"]) == []

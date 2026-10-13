@@ -115,8 +115,7 @@ def build(root: str, files: Iterable[Tuple[str, int, bool]],
         _add(node.own, group, size, offline, in_tool)
     # A drive is named with its slash ("G:\\"): "G:" alone means "wherever I last was on G:", which is not a place.
     from . import copies
-    alike = copies.find((path[len(base) + 1:].replace("\\", "/"), size) for path, size in pairs)
-    alike = tuple(p for p in alike if not _in_tool(top, p.first) and not _in_tool(top, p.second))
+    alike = tuple(copies.find(((path[len(base) + 1:].replace("\\", "/"), size) for path, size in pairs), skip=keys))
     return Tree(root if base.endswith(":") else base, top, patterns, tool_files, alike)
 
 
