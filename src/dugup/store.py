@@ -1048,6 +1048,13 @@ class SqliteStore:
     def file_count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
 
+    def sample_text(self, count: int) -> List[Tuple[int, str, int, str]]:
+        """`count` pieces of text drawn at random: (segment id, file path, page, text). For measuring."""
+        rows = self.conn.execute(
+            "SELECT s.id, f.path, f.path_raw, s.page, s.text, s.z FROM segments s JOIN files f ON f.id = s.file_id "
+            "WHERE s.kind != 'name' AND f.missing_since IS NULL ORDER BY random() LIMIT ?", (max(0, count),))
+        return [(r["id"], decode_path(r["path"], r["path_raw"]), r["page"], unpack_text(r["text"], r["z"])) for r in rows]
+
     def segment_count(self, include_names: bool = False) -> int:
         clause = "" if include_names else "WHERE kind != 'name'"
         return self.conn.execute(f"SELECT COUNT(*) FROM segments {clause}").fetchone()[0]

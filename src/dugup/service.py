@@ -413,6 +413,16 @@ class LocalService:
 
         return cleanup.remove_extras(found, mover or trash.to_trash, gone, stop, tell)
 
+    def measure_meaning(self, pieces: int = 2000, choices: Sequence[str] = ("small", "larger"), gpu: Optional[bool] = None,
+                        questions: Sequence[str] = (), progress: Optional[Callable[[Progress], None]] = None,
+                        stop: Optional[StopSignal] = None):
+        """Measure searching by meaning on a sample of this index (meaning.measure). Fetches the models on
+        first use into the data folder. Stores nothing in the index."""
+        from . import meaning
+        from .sandbox import SubprocessSandbox
+        return meaning.measure(self.store, SubprocessSandbox, self.layout.models / "meaning", choices, pieces, gpu,
+                               questions, progress=progress, stop=stop)
+
     def copies(self, path: str, stop: Optional[StopSignal] = None):
         """Folders below `path` that look like copies of each other (copies.Pair, most files first), or a
         Failure. From names and sizes alone: nothing is opened, indexed or changed, and skip rules are not

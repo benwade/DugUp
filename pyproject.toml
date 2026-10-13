@@ -7,6 +7,7 @@ dependencies = ["platformdirs", "pypdfium2>=4.30", "tomli; python_version < '3.1
 
 [project.optional-dependencies]
 ocr = ["rapidocr", "onnxruntime", "pillow"]
+meaning = ["onnxruntime", "numpy", "tokenizers"]
 
 [project.scripts]
 dugup = "dugup.cli:main"

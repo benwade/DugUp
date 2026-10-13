@@ -14,6 +14,7 @@ from .shapes import Failure, FailureReason, FileKind, FileRecord, SegmentIn, Seg
 
 EXTRACT = "dugup.jobs:extract"
 CONTENT_MARK = "dugup.jobs:content_mark"
+EMBED = "dugup.jobs:embed"
 OCR = "dugup.jobs:ocr"
 PROBE = "dugup.jobs:probe_pictures"
 
@@ -85,6 +86,30 @@ def content_mark(payload: Mapping[str, Any]) -> Dict[str, Any]:
         return {"failure": FailureReason.UNREACHABLE.value, "detail": f"the file was not there ({type(exc).__name__})"}
     except OSError as exc:
         return {"failure": FailureReason.OTHER.value, "detail": f"the file could not be read ({type(exc).__name__})"}
+
+
+_embedders: Dict[str, Any] = {}
+
+
+def embed(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Sketches of meaning for a list of texts. Runs inside a worker; the model is loaded once per worker.
+    Payload: folder, choice, texts, kind ("document" | "query"), dims (0: the model's own), gpu, threads."""
+    from . import embedding
+    key = f"{payload.get('folder')}|{payload.get('choice')}|{bool(payload.get('gpu'))}|{int(payload.get('threads') or 0)}"
+    try:
+        if key not in _embedders:
+            _embedders.clear()
+            _embedders[key] = embedding.Embedder(str(payload["folder"]), embedding.SHAPES[str(payload["choice"])],
+                                                 bool(payload.get("gpu")), int(payload.get("threads") or 0))
+    except ImportError as exc:
+        return {"failure": FailureReason.NOT_INSTALLED.value, "detail": f"the embedding runtime is not installed ({exc})"}
+    except Exception as exc:
+        return {"failure": FailureReason.CRASHED.value, "detail": f"the model could not be loaded ({type(exc).__name__}: {exc})"}
+    embedder = _embedders[key]
+    texts = [str(t) for t in payload.get("texts") or []]
+    vectors = embedder.embed(texts, str(payload.get("kind") or "document"), int(payload.get("dims") or 0))
+    packed, rows, dims = embedding.pack(vectors)
+    return {"vectors": packed, "rows": rows, "dims": dims, "device": embedder.device}
 
 
 # ---- OCR ------------------------------------------------------------------------------------------------

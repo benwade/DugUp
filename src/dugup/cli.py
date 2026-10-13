@@ -112,6 +112,8 @@ def progress_text(p: Progress) -> str:
                 f"{p.rate:.1f} files/s  {left_text}")
         return line + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else "")
     if p.phase == "measure":
+        if p.current:
+            return f"[meaning] {p.root} on the {p.current}: {p.done:,} of {p.total:,} piece(s)"
         return f"[ocr] looking at the size of the pictures: {p.done:,} of {p.total:,}"
     left = p.remaining_seconds
     left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
@@ -314,6 +316,17 @@ def build_parser() -> argparse.ArgumentParser:
     dup.add_argument("--yes", action="store_true", help="with --remove: do not ask; answer yes")
     dup.add_argument("--try-trash", metavar="FILE", dest="try_trash",
                      help="move this one file to the trash and say where it went, to see how the trash behaves here")
+    meaning = sub.add_parser("meaning", parents=[common], help="searching by meaning (measured first)")
+    meaning_sub = meaning.add_subparsers(dest="meaning_command", required=True)
+    gauge = meaning_sub.add_parser("measure", parents=[common],
+                                   help="make sketches of a sample of the index with the pinned models and report speed, "
+                                        "disk, and what a few questions find (fetches the models; stores nothing)")
+    gauge.add_argument("--pieces", type=int, default=2000, help="how many pieces of text to sample (default 2000)")
+    gauge.add_argument("--model", choices=("small", "larger", "both"), default="both")
+    gauge.add_argument("--gpu", dest="gpu", action="store_true", default=None, help="the graphics card only")
+    gauge.add_argument("--no-gpu", dest="gpu", action="store_false", help="the processor only (default: both when the runtime can)")
+    gauge.add_argument("--ask", action="append", default=[], metavar="SENTENCE",
+                       help="a question to try on the sample, in plain words; may be repeated")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")
@@ -1311,6 +1324,66 @@ def cmd_window(args, env, out, environ) -> int:
     return 0
 
 
+def cmd_meaning(args, env, out, environ, stop: Optional[threading.Event] = None, install_signals: bool = True) -> int:
+    service = _service(args, environ, out, create=False)
+    if service is None:
+        return 1
+    stop = stop or threading.Event()
+    printer = ProgressPrinter(out)
+    previous = None
+
+    def on_interrupt(signum, frame):
+        if stop.is_set():
+            raise KeyboardInterrupt
+        stop.set()
+        printer.finish()
+        safe_write("Stopping.", out)
+
+    if install_signals and threading.current_thread() is threading.main_thread():
+        previous = signal.signal(signal.SIGINT, on_interrupt)
+    try:
+        with service:
+            choices = ("small", "larger") if args.model == "both" else (args.model,)
+            safe_write(f"Measuring searching by meaning on {args.pieces:,} piece(s) of this index's text, with the "
+                       f"{' and '.join(choices)} model(s). The models are fetched on first use (90 MB and 547 MB). "
+                       "Nothing is stored in the index. Ctrl+C stops.", out)
+            found = service.measure_meaning(args.pieces, choices, args.gpu, args.ask, printer, stop)
+            printer.finish()
+            if isinstance(found, Failure):
+                return _fail(found, out)
+            print_measurement(found, out)
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
+    return 0
+
+
+def print_measurement(found, out: TextIO) -> None:
+    from .embedding import SHAPES, SIZES
+    safe_write(f"Sample: {found.pieces:,} piece(s); the whole index holds {found.in_index:,}.", out)
+    for note in found.notes:
+        safe_write(f"  note: {note}", out)
+    safe_write("Speed (the model already loaded; the first load is given apart):", out)
+    for t in found.timings:
+        whole = found.in_index / t.per_second if t.per_second > 0 else 0.0
+        safe_write(f"  {t.choice:<7} {t.device:<24} {t.per_second:8,.1f} pieces/s   load {t.load_seconds:5.1f} s   "
+                   f"the whole index: about {format_seconds(whole)}", out)
+    safe_write("Disk for sketches of the whole index (4 bytes a number; a byte a number is also possible, at some cost in precision):", out)
+    for choice in sorted({t.choice for t in found.timings}):
+        full = SHAPES[choice].dims
+        sizes = [full] + ([d for d in sorted(SIZES.values(), reverse=True) if d < full] if SHAPES[choice].cuttable else [])
+        for dims in sizes:
+            safe_write(f"  {choice:<7} {dims:>4} numbers: {format_bytes(found.disk_for(dims))} (or {format_bytes(found.disk_for(dims, 1))} as bytes)", out)
+    if found.answers:
+        safe_write("What the questions found in the sample (the closest 5; a score near 1 is close):", out)
+        for answer in found.answers:
+            agree = found.agreement.get((answer.question, answer.dims))
+            tail = "" if agree is None else f"   (keeps {agree:.0%} of the top 10 at full size)"
+            safe_write(f"  \"{answer.question}\"  with {answer.choice}, {answer.dims} numbers{tail}", out)
+            for hit in answer.hits:
+                safe_write(f"     {hit.score:.2f}  {os.path.basename(hit.path)}" + (f" p.{hit.page}" if hit.page else "") + f"  | {hit.snippet}", out)
+
+
 def cmd_duplicates(args, env, out, environ, stop: Optional[threading.Event] = None, install_signals: bool = True,
                    answer: Optional[Callable[[str], str]] = None) -> int:
     from . import trash
@@ -1450,7 +1523,7 @@ def _remove_duplicates(found, service, args, out, environ, stop, install_signals
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "duplicates": cmd_duplicates, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
+            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

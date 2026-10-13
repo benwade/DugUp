@@ -194,6 +194,15 @@ folder; see `src/dugup/settings.py` for the names and defaults. The ones most li
     min_free_mb = 200          # a run stops when the drive has less than this free
     figure_fraction = 0.1      # a picture this share of a typed page gets the page read by OCR too; 0: off
 
+## Searching by meaning (being measured)
+
+`dugup meaning measure --ask "a sentence"` makes sketches of a sample of the index's text with two pinned
+embedding models (a small one, 90 MB, and a larger one, 547 MB, whose sketches can be cut short) on the
+processor and, where the OCR runtime can use one, the graphics card, and reports speed, the disk the whole
+index would take at each vector size, and what the questions find in the sample. It needs
+`pip install numpy tokenizers` beside the OCR runtime. Nothing is stored in the index yet: the numbers decide
+how searching by meaning is built.
+
 ## Clearing out copies
 
 A drive that several computers have backed up to, or that a sync dispute has left in a mess, ends up holding
