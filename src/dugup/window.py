@@ -30,6 +30,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from .cli import (format_bytes, format_date, format_seconds, megabytes, print_compacted, print_ocr_report, print_report,
                   progress_text)
 from .desktop import Desktop
+from .waitwindow import bring_to_front
 from .indexer import KEEP, REFUSE, REREAD, Progress
 from .shapes import (MAX_SORT_KEYS, WHERE_ANYWHERE, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind,
                      Root, SearchFilters, SearchRow)
@@ -178,6 +179,7 @@ class App:
         self.tell = tell or (lambda title, text: messagebox.showinfo(title, text, parent=root))
         self.choose_folder = choose_folder or (lambda: filedialog.askdirectory(
             parent=root, mustexist=True, title="Choose a folder for DugUp to index", initialdir=os.path.expanduser("~")))
+        self.setting_up = False       # the first-run setup is going on: this window is kept out of the way
         self.place_queue: List[str] = []     # folders chosen in the setup wizard, each still to be looked through
         self.copy_text: Callable[[str], None] = self._to_clipboard
         self.order = SortOrder()
@@ -705,7 +707,7 @@ class App:
         from .setup import SetupPlan
         from .setupwindow import SetupWizard
         if self.wizard is not None and not self.wizard.closed:
-            self.wizard.window.lift()
+            bring_to_front(self.wizard.window)
             return
         service = self.service
         plan = SetupPlan(service.settings, first_run=first_run, advanced=not first_run)
@@ -730,7 +732,26 @@ class App:
         if first_run:
             from . import places
             plan.offer(places.candidates())
-        self.wizard = SetupWizard(self.root, plan, look, save, choose_folder=self.choose_folder)
+            self.setting_up = True
+            try:
+                self.root.iconify()        # no use until setting up is over, so it is not in the way
+            except Exception:
+                pass
+        self.wizard = SetupWizard(self.root, plan, look, save, on_close=self._setup_step_over,
+                                  choose_folder=self.choose_folder)
+        bring_to_front(self.wizard.window)
+
+    def _setup_step_over(self) -> None:
+        """The wizard, a picker or a look has ended. When nothing of the first-run setup is left to come,
+        the main window is brought back."""
+        if not self.setting_up or self.closed or self.place_queue:
+            return
+        self.setting_up = False
+        try:
+            self.root.deiconify()
+        except Exception:
+            pass
+        bring_to_front(self.root)
 
     def next_place(self) -> None:
         """Look through the next folder chosen in the setup wizard and show the picker for it."""
@@ -787,9 +808,11 @@ class App:
                 self.root.after(0, self.next_place)
             elif not self.closed and self.service.list_roots() and not self.busy():
                 self.progress_text.set("Ready. Press \"Update the index\" to start reading.")
+            self._setup_step_over()
 
         self.picker = PickerDialog(self.root, material["plan"], material["rates"], take, bool(material["known"]),
                                    material["fresh"], on_close=closed)
+        bring_to_front(self.picker.window)
 
     def set_up_plain_words(self) -> None:
         """Show what would be downloaded and, on a yes, fetch it in the background."""
@@ -937,6 +960,7 @@ class App:
                     self.place_queue = []
                 elif self.place_queue:
                     self.root.after(0, self.next_place)      # one folder could not be looked at: on to the next
+                self._setup_step_over()
                 return
             self.progress_text.set("Choose what to index in the window that opened.")
             self._show_picker(report)

@@ -247,6 +247,7 @@ def test_the_wizard_opens_by_itself_on_a_first_start_and_finishing_saves_and_ask
     try:
         wizard = bench.app.wizard
         assert wizard is not None and not wizard.closed and wizard.plan.first_run
+        assert bench.app.setting_up and bench.root.state() != "normal", "the main window is out of the way while setting up"
         while wizard.looking is not None:
             wizard.looking.join(0.05)
             wizard.drain()
@@ -265,12 +266,26 @@ def test_the_wizard_opens_by_itself_on_a_first_start_and_finishing_saves_and_ask
         picker = bench.app.picker
         assert picker is not None and picker.where.get() == str(bench.docs), "no bare file box: the picker, for the folder chosen"
         assert "1 more folder(s) after this one" in bench.app.message.get()
+        assert bench.app.setting_up and bench.root.state() != "normal", "still setting up: folders are left to choose"
         picker.apply()
         assert str(bench.docs) in bench.app.folder_box.cget("values")
         bench.root.update()                        # closing the picker moves on to the next folder
         bench.finish_run()
         assert "could not be looked through" in bench.app.message.get() and bench.app.place_queue == []
         assert bench.app.worker is None
+        assert not bench.app.setting_up and bench.root.state() == "normal", "setting up is over: the main window is back"
+    finally:
+        bench.close()
+
+
+def test_closing_the_wizard_without_finishing_brings_the_main_window_back(tmp_path, monkeypatch):
+    from dugup import service as service_module
+    monkeypatch.setattr(service_module.LocalService, "look_at_machine", lambda self, stop=None, test_card=True: STRONG)
+    bench = Bench(tmp_path, setup=True)
+    try:
+        assert bench.app.setting_up and bench.root.state() != "normal"
+        bench.app.wizard.close()
+        assert not bench.app.setting_up and bench.root.state() == "normal"
     finally:
         bench.close()
 
