@@ -137,7 +137,8 @@ class PickerDialog:
         plan = self.plan
         inside = plan.ticked(node.rel)
         marks = tuple((IN if plan.has(node.rel, option) else OUT) if inside else "" for option in OPTIONS)
-        why = plan.reasons.get(node.rel.casefold(), "")
+        why = plan.reasons.get(node.rel.casefold(), "") if node.rel else \
+            "the folder itself: its files, and every folder inside that has no choice of its own"
         if not plan.own_tick(node.rel):
             why = why or "left out"
         elif not why and inside:
@@ -156,8 +157,12 @@ class PickerDialog:
     def fill(self) -> None:
         tree = self.tree
         tree.delete(*tree.get_children(""))
-        for child in self.plan.tree.top.sorted_children():
-            self._insert("", child)
+        # The first row is the folder itself. Its ticks apply to the files lying directly in it and to every
+        # folder inside that has no choice of its own, so "all of this, like so" is one row.
+        top = self.plan.tree.top
+        tree.insert("", "end", iid=self._iid(""), text=self.plan.tree.root, values=self._values(top), open=True)
+        for child in top.sorted_children():
+            self._insert(self._iid(""), child)
         self.refresh()
 
     def _opened(self, event=None) -> None:
@@ -211,8 +216,8 @@ class PickerDialog:
         rel = self._rel(self.tree.focus() or "")
         if rel is None or self.closed:
             return
-        why = self.plan.reasons.get(rel.casefold(), "")
-        name = rel.rsplit("/", 1)[-1]
+        why = self.plan.reasons.get(rel.casefold(), "") if rel else ""
+        name = rel.rsplit("/", 1)[-1] or "The whole folder"
         if why:
             self.message.set(f"{name}: {why}.")
         elif not self.plan.ticked(rel):
@@ -228,6 +233,9 @@ class PickerDialog:
         return "break"
 
     def toggle(self, rel: str) -> None:
+        if not rel:
+            self.message.set("This is the folder being chosen, so it stays in. To leave it out altogether, press Cancel.")
+            return
         self.plan.set_ticked(rel, not self.plan.own_tick(rel))
         self.plan.reasons.pop(rel.casefold(), None)       # the starting reason no longer describes the row
         self.refresh()
@@ -239,7 +247,7 @@ class PickerDialog:
             return
         self.plan.set_option(rel, option, not self.plan.has(rel, option))
         self.plan.reasons.pop(rel.casefold(), None)
-        name = rel.rsplit("/", 1)[-1]
+        name = rel.rsplit("/", 1)[-1] or "The whole folder"
         self.refresh()
         self.message.set(f"{name}: {label(self.plan.level(rel))}. Folders inside it follow, unless they have a choice of their own.")
 
@@ -251,7 +259,7 @@ class PickerDialog:
             return
         changed = self.plan.apply_to_everything_inside(rel)
         self.refresh()
-        name = rel.rsplit("/", 1)[-1]
+        name = rel.rsplit("/", 1)[-1] or "this folder"
         self.message.set(f"{changed} folder(s) inside {name} had their own choice and now follow it." if changed else
                          f"Every folder inside {name} already follows it.")
 
@@ -262,6 +270,9 @@ class PickerDialog:
             self.message.set("Select a folder first.")
             return
         name = rel.rsplit("/", 1)[-1]
+        if not rel:
+            self.message.set("This is the top folder: there is nothing above it to follow.")
+            return
         if not self.plan.differs(rel):
             self.message.set(f"{name} already follows the folder above.")
             return

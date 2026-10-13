@@ -59,7 +59,9 @@ def test_adding_a_folder_opens_the_picker_with_the_guesses_and_adds_nothing_yet(
     picker = open_picker(bench)
     assert bench.service.list_roots() == [], "nothing is added until Apply"
     assert picker.where.get() == str(bench.docs)
-    shown = [picker.tree.item(i, "text") for i in picker.tree.get_children("")]
+    assert picker.tree.get_children("") == ("n:",) and picker.tree.item("n:", "text") == str(bench.docs), \
+        "the first row is the folder itself"
+    shown = [picker.tree.item(i, "text") for i in picker.tree.get_children("n:")]
     assert set(shown) == {"Books", "Trash", "Proj", "Letters", "sub"} and ".venv" not in shown
     assert [str(picker.tree.heading(key, "text")) for key in ("tick", "words", "ocr", "meaning", "alike")] == \
         ["In", "Words", "Scans", "Meaning*", "Pictures alike*"]
@@ -190,3 +192,24 @@ def test_what_cannot_be_done_is_said(bench):
     assert not picker.closed and "disk is full" in picker.message.get(), "a refused Apply leaves the picker open"
     bench.app.close()
     assert picker.closed, "closing the main window closes the picker"
+
+
+def test_the_first_row_is_the_folder_itself_and_sets_everything_inside_that_has_no_choice_of_its_own(bench):
+    picker = open_picker(bench)
+    assert marks(picker, "") == "xxxx" and row(picker, "")["tick"] == IN and "the folder itself" in row(picker, "")["why"]
+    assert picker.tree.item("n:", "open"), "it starts opened, so the folders inside are in view"
+    picker.toggle_option("", "ocr")
+    assert marks(picker, "") == "x-xx" and marks(picker, "Letters") == "x-xx", "a folder with no choice of its own follows"
+    assert marks(picker, "Books") == "----", "a folder that started with its own guess keeps it"
+    assert "The whole folder: Words in documents, meaning, pictures alike." in picker.message.get()
+    picker.toggle("")
+    assert row(picker, "")["tick"] == IN and "stays in" in picker.message.get(), "the folder being chosen cannot be unticked"
+    picker.tree.focus("n:")
+    picker.follow_above()
+    assert "nothing above it to follow" in picker.message.get()
+    picker.apply_inside()
+    assert marks(picker, "Books") == "x-xx" and row(picker, "Trash")["tick"] == IN, "from the top row: every folder inside follows again"
+    assert "inside this folder had their own choice" in picker.message.get()
+    picker.apply()
+    root = bench.service.list_roots()[0]
+    assert root.levels == (("", "words+meaning+alike"),) and "/Trash" not in root.exclude
