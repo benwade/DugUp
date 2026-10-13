@@ -174,6 +174,10 @@ def _entries() -> Tuple[Entry, ...]:
           "and lists the others under it. Empty lets DugUp work it out: on Windows, the drive your own folders are on.",
           why="A file on your own drive and its backup on a cloud drive are one file to you; the one on your own "
               "drive is the one you work on, and the quickest to open."),
+        E("read_once", "speed", "Read the same file only once",
+          "A file whose content was already read in another place takes its text, and what was read from its "
+          "pictures, from there. It is not read again.",
+          why="Backups and copies then cost almost nothing to index. It needs the setting above it to be on.", choices=YES_NO),
         E("index_readers", "speed", "Files read side by side",
           "How many files are read at the same time when the index is updated. 0 lets DugUp work it out; 1 reads one at a time.",
           why="Side by side, one slow file (a large PDF, or one that must first come down from a cloud drive) does not "

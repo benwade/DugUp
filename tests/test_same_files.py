@@ -239,3 +239,148 @@ def test_the_main_place_is_the_setting_or_the_drive_of_the_home_folder():
     assert main_place(Settings(), home="C:\\Users\\ben") == "C:\\"
     assert main_place(Settings(), home="/home/ben") == "" and main_place(Settings(), home="\\\\server\\share\\ben") == ""
     assert main_place(Settings(main_place=" D:\\Work "), home="C:\\Users\\ben") == "D:\\Work"
+
+
+# ---- read once ----------------------------------------------------------------------------------------------
+
+def test_a_file_whose_content_was_read_before_takes_its_text_and_is_not_read_again(w):
+    w.put("Docs/report.txt", "alpha the same words")
+    w.put("Docs/mixed.txt", "!mixed beta pages")
+    w.run()
+    assert sorted(p.rsplit("/", 1)[-1] for p in w.reader.calls) == ["mixed.txt", "report.txt"]
+    w.put("Backup/report copy.txt", "alpha the same words")
+    w.put("Backup/mixed copy.txt", "!mixed beta pages")
+    w.put("Backup/new.txt", "alpha something new")
+    report = w.run()
+    assert [p.rsplit("/", 1)[-1] for p in w.reader.calls] == ["new.txt"], "only the new content went through a reader"
+    assert (report.read, report.copied, report.done, report.partial) == (3, 2, 2, 1)
+    assert w.found("alpha") == ["Backup/new.txt", "Docs/report.txt"] and w.copies("Docs/report.txt") == ["Backup/report copy.txt"]
+    copy, original = w.get("Backup/mixed copy.txt"), w.get("Docs/mixed.txt")
+    assert (copy.state, copy.error) == (original.state, original.error) and copy.state is FileState.PARTIAL
+    assert w.store.get_pages(copy.row_id) == w.store.get_pages(original.row_id), "the pages that wait for OCR wait here too"
+    from dugup.shapes import SearchFilters
+    both = w.store.search_words("beta", filters=SearchFilters(every_copy=True))
+    assert sorted(r.name for r in both.rows) == ["mixed copy.txt", "mixed.txt"], "the copy is found by the words, under its own name"
+    assert w.store.search_words("copy").total == 2, "and by its own name"
+
+
+def test_two_new_copies_in_one_run_and_read_once_switched_off(w):
+    for i in range(6):
+        w.put(f"d{i}/same.txt", "alpha all the same")
+    report = w.run()
+    assert report.done == 6 and report.copied == 5 and len(w.reader.calls) == 1, "one at a time: the first is read, the rest copied"
+    w.put("later/same.txt", "alpha all the same")
+    off = w.run(settings=Settings(read_once=False))
+    assert off.copied == 0 and len(w.reader.calls) == 1 and tuple(w.store.copy_counts()) == (7, 1, 6)
+
+
+def test_an_edited_copy_is_read_and_a_copy_of_a_failed_file_is_tried_itself(w):
+    w.put("a.txt", "alpha first")
+    w.put("locked.txt", "!password")
+    w.run()
+    w.put("b.txt", "alpha first")
+    w.put("locked again.txt", "!password")
+    report = w.run()
+    assert report.copied == 1 and w.get("locked again.txt").state is FileState.FAILED and len(w.reader.calls) == 1
+    w.put("b.txt", "alpha changed since")
+    again = w.run()
+    assert again.copied == 0 and [p.rsplit("/", 1)[-1] for p in w.reader.calls] == ["b.txt"]
+    assert w.found("changed") == ["b.txt"] and w.found("first") == ["a.txt"]
+
+
+def test_copying_what_was_read_copies_ocr_text_and_its_boxes(tmp_path):
+    from dugup.protocols import OcrLine, OcrResult, PageInfo, PageVerdict
+    from dugup.shapes import Box
+    for make in (lambda: FakeStore(), lambda: SqliteStore(tmp_path / "index.sqlite")):
+        store = make()
+        one = store.upsert_file(FileRecord("/r/scan.pdf", 5, 1.0, state=FileState.PARTIAL))
+        two = store.upsert_file(FileRecord("/r/Backup/scan (1).pdf", 5, 1.0))
+        pages = [PageInfo(1, PageVerdict.BORN_DIGITAL, False), PageInfo(2, PageVerdict.NO_LAYER, True), PageInfo(3, PageVerdict.NO_LAYER, True)]
+        store.replace_text(one, [SegmentIn(1, 0, SegmentKind.TEXT, "typed alpha")], pages)
+        store.save_ocr(one, 2, OcrResult((OcrLine("scanned beta", Box(1, 2, 30, 40), 0.9),), "engine", "1"))
+        store.copy_reading(one, two)
+        assert store.get_pages(two) == store.get_pages(one) and store.ocr_status(two) == store.ocr_status(one)
+        rows = {r.path: r for r in store.search_words("beta", filters=None).rows}
+        assert len(rows) == 2 and all(r.evidence[0].box == Box(1, 2, 30, 40) for r in rows.values()), "the line's box comes along"
+        assert [t.row_id for t in store.ocr_queue()] == [one, two] and all(t.page == 3 for t in store.ocr_queue())
+        store.save_ocr(one, 3, OcrResult((OcrLine("gamma last", Box(5, 6, 7, 8), 0.8),), "engine", "1"))
+        store.copy_page(one, two, 3)
+        assert [t.row_id for t in store.ocr_queue()] == [] and len(store.search_words("gamma").rows) == 2
+        store.fail_ocr(one, 3, "corrupt: bad")
+        store.copy_page(one, two, 3)
+        assert store.ocr_status(two) == store.ocr_status(one)
+        if hasattr(store, "check_word_index"):
+            store.check_word_index()
+        if hasattr(store, "close"):
+            store.close()
+
+
+# ---- OCR once -----------------------------------------------------------------------------------------------
+
+def test_the_same_page_in_several_files_is_read_by_ocr_once_and_used_for_each(tmp_path):
+    from dugup.ocrqueue import OcrRunner
+    from test_ocrqueue import ScriptedOcr, picture, scan, state
+    with SqliteStore(tmp_path / "index.sqlite") as store:
+        rows = {path: scan(store, path) for path in ("/r/Docs/scan.pdf", "/r/Backup/scan.pdf", "/r/PC 3/scan (1).pdf")}
+        for row in rows.values():
+            store.set_content(row, "samebytes")
+        other = scan(store, "/r/Docs/different.pdf")
+        store.set_content(other, "otherbytes")
+        photo, twin = picture(store, "/r/a photo.jpg"), picture(store, "/r/a photo copy.jpg")
+        store.set_content(photo, "photobytes")
+        store.set_content(twin, "photobytes")
+        ocr = ScriptedOcr(shapes={})
+        report = OcrRunner(store, ocr, Settings()).run()
+        assert report.total == 10 and report.read == 10 and report.copied == 5 and report.failed == 0
+        assert len(ocr.calls) == 5, "two pages of the scan, two of the other, one photo: each content once"
+        for path in rows:
+            assert state(store, path) == (FileState.DONE, ""), path
+        assert state(store, "/r/a photo copy.jpg") == (FileState.DONE, "")
+        from dugup.shapes import SearchFilters
+        every = store.search_words("words", filters=SearchFilters(every_copy=True, where="ocr"))
+        assert every.total == 6, "every copy is found by what OCR read"
+        assert all(r.evidence and r.evidence[0].box is not None for r in every.rows)
+        assert OcrRunner(store, ocr, Settings()).run().total == 0
+
+
+def test_a_page_that_fails_fails_for_each_copy_and_an_unreachable_copy_hands_over_to_another(tmp_path):
+    from dugup.ocrqueue import OcrRunner
+    from test_ocrqueue import ScriptedOcr, picture, state
+    with SqliteStore(tmp_path / "index.sqlite") as store:
+        for path in ("/r/bad.jpg", "/r/Backup/bad.jpg"):
+            store.set_content(picture(store, path), "badbytes")
+        for path in ("/r/away.jpg", "/r/Backup/here.jpg", "/r/Other/here too.jpg"):
+            store.set_content(picture(store, path), "awaybytes")
+        ocr = ScriptedOcr(shapes={}, answers={
+            ("/r/bad.jpg", 1): Failure(FailureReason.CORRUPT, "the picture could not be opened"),
+            ("/r/away.jpg", 1): Failure(FailureReason.UNREACHABLE, "the drive is away")})
+        report = OcrRunner(store, ocr, Settings()).run()
+        assert report.failed == 2 and "corrupt" in state(store, "/r/Backup/bad.jpg")[1], "the same bytes fail the same way"
+        assert ("/r/Backup/bad.jpg", 1) not in ocr.calls
+        assert state(store, "/r/Backup/here.jpg") == (FileState.DONE, "") and state(store, "/r/Other/here too.jpg") == (FileState.DONE, "")
+        assert state(store, "/r/away.jpg")[0] is FileState.PARTIAL and report.left == 1, "the one out of reach keeps waiting"
+        assert sorted(p for p, _ in ocr.calls) == ["/r/Backup/here.jpg", "/r/away.jpg", "/r/bad.jpg"]
+
+
+def test_read_once_off_reads_every_copy(tmp_path):
+    from dugup.ocrqueue import OcrRunner
+    from test_ocrqueue import ScriptedOcr, picture
+    with SqliteStore(tmp_path / "index.sqlite") as store:
+        for path in ("/r/a.jpg", "/r/b.jpg"):
+            store.set_content(picture(store, path), "same")
+        ocr = ScriptedOcr(shapes={})
+        report = OcrRunner(store, ocr, Settings(read_once=False)).run()
+        assert report.read == 2 and report.copied == 0 and len(ocr.calls) == 2
+
+
+def test_empty_files_are_not_copies_and_the_same_bytes_under_another_ending_are_read_for_themselves(w):
+    """Found by the generated tree: an empty text file is fine, an empty PDF is damaged, and both are no bytes."""
+    w.put("empty one.txt", "")
+    w.put("empty two.txt", "")
+    w.put("notes.txt", "alpha words")
+    w.run()
+    assert w.copies("empty one.txt") == [] and tuple(w.store.copy_counts())[1:] == (0, 0)
+    other_kind = w.put("notes.pdf", "alpha words")
+    report = w.run()
+    assert report.copied == 0 and [p.rsplit("/", 1)[-1] for p in w.reader.calls] == ["notes.pdf"], \
+        "a PDF with the bytes of a text file goes to the PDF reader, whatever the text reader made of them"

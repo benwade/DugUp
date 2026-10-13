@@ -69,6 +69,7 @@ class OcrReport:
     second_tries: int = 0          # pages that ran out of time and were given a second, longer try
     requeued: int = 0              # files with pages put back because another engine version read them
     left: int = 0                  # pages whose file could not be reached; they stay queued
+    copied: int = 0                # pages of files that hold the same content as another: read once, used for each
     held_back: int = 0             # pages in folders whose level stops short of OCR; not looked at
     readers: int = 1               # how many readers worked side by side
     device: str = ""               # what the pages were read on, when the reader says ("processor", "graphics card (...)")
@@ -189,6 +190,29 @@ class OcrRunner:
             asked = [task for task in waiting if self.wanted(task.path)]
             report.held_back = len(waiting) - len(asked)
             waiting = asked
+        # The same page of the same content, in several files, is read once: the first file's page goes to a
+        # reader, and what comes of it is given to the others ("followers") when it is stored.
+        followers: Dict[Tuple[int, int], List[OcrTask]] = {}
+        if self.settings.content_marks and self.settings.read_once:
+            leaders: Dict[tuple, OcrTask] = {}
+            marks: Dict[int, Optional[str]] = {}
+            first_of_each = []
+            for task in waiting:
+                if task.row_id not in marks:
+                    marks[task.row_id] = self.store.content_of(task.row_id)
+                mark = marks[task.row_id]
+                key = (mark, task.kind, task.page)
+                leader = leaders.get(key) if mark else None
+                if leader is None:
+                    if mark:
+                        leaders[key] = task
+                    first_of_each.append(task)
+                else:
+                    followers.setdefault((leader.row_id, leader.page), []).append(task)
+            everything = len(waiting)
+            waiting = first_of_each
+        else:
+            everything = len(waiting)
         tasks = self._measure(waiting, stop)
         if isinstance(tasks, Failure):
             report.stopped = True
@@ -196,7 +220,7 @@ class OcrRunner:
             return report
         tiny = self.settings.ocr_tiny_pixels
         tasks.sort(key=lambda t: (priority(t, tiny), t.row_id, t.page))
-        report.total = len(tasks)
+        report.total = everything
         in_a_row = 0
         queue = list(tasks)
         if self.first:      # one folder was asked for first: its pages go ahead of the rest, each part in its own order
@@ -218,6 +242,12 @@ class OcrRunner:
                 with self.store.transaction():
                     self.store.save_ocr(task.row_id, task.page, result)
                     self.refresh_file(task.path)
+                    for other in followers.pop((task.row_id, task.page), ()):
+                        self.store.copy_page(task.row_id, other.row_id, task.page)
+                        self.refresh_file(other.path)
+                        report.read += 1
+                        report.copied += 1
+                        report.with_words += 1 if result.lines else 0
                 report.read += 1
                 report.with_words += 1 if result.lines else 0
                 in_a_row = 0
@@ -232,6 +262,11 @@ class OcrRunner:
                 return True
             if result.reason is FailureReason.UNREACHABLE:
                 report.left += 1          # the file or its drive is away: the page keeps its place in the queue
+                others = followers.pop((task.row_id, task.page), [])
+                if others:                # another file with the same content may be within reach: it is tried instead
+                    queue.append(others[0])
+                    if others[1:]:
+                        followers[(others[0].row_id, others[0].page)] = others[1:]
                 return False
             reason = f"{result.reason.value}: {result.detail}".replace(";", ",")
             if result.reason is FailureReason.TIMED_OUT and not task.retry and self.settings.retry_patience > 1.0:
@@ -243,6 +278,10 @@ class OcrRunner:
                 with self.store.transaction():
                     self.store.fail_ocr(task.row_id, task.page, reason)
                     self.refresh_file(task.path)
+                    for other in followers.pop((task.row_id, task.page), ()):     # the same bytes fail the same way
+                        self.store.fail_ocr(other.row_id, other.page, reason)
+                        self.refresh_file(other.path)
+                        report.failed += 1
                 report.failed += 1
                 log.info("ocr failed: row %s page %s reason %s", task.row_id, task.page, result.reason.value)
             if result.reason in SUSPECT:

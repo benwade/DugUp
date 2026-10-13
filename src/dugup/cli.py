@@ -623,6 +623,9 @@ def print_report(report: IndexReport, out: TextIO, retention_days: float) -> Non
                f"{report.done:,} done, {report.partial:,} partial, {report.failed:,} failed, {report.skipped:,} skipped", out)
     if report.second_tries:
         safe_write(f"{report.second_tries:,} file(s) ran out of time and were read again, last, with more time.", out)
+    if report.copied:
+        safe_write(f"{report.copied:,} of the file(s) read hold the same content as a file read before: their text was taken "
+                   "from that file, and they were not read again.", out)
     if report.marked:
         safe_write(f"{report.marked:,} file(s) read earlier were given a content mark, so the same file in several "
                    "places is now known for one file.", out)
@@ -756,6 +759,9 @@ def print_ocr_report(report, out: TextIO) -> None:
                f"({report.rate * 60:.1f} pages/min): {report.with_words:,} with words, "
                f"{report.read - report.with_words:,} with none, {report.failed:,} failed"
                + (f" [{report.readers} readers side by side]" if getattr(report, "readers", 1) > 1 else ""), out)
+    if getattr(report, "copied", 0):
+        safe_write(f"{report.copied:,} of those page(s) belong to files that hold the same content as another file: "
+                   "each such page was read once and the result used for every copy.", out)
     if report.second_tries:
         safe_write(f"{report.second_tries:,} page(s) ran out of time and were read again, last, with more time.", out)
     device = getattr(report, "device", "")

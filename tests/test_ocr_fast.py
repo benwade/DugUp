@@ -143,7 +143,8 @@ def sh(tmp_path, monkeypatch):
     made = Shell(tmp_path, monkeypatch, ScriptedOcr(shapes={}))
     (made.docs / "Sub").mkdir()
     for name in ("d.png", "e.png"):
-        (made.docs / "Sub" / name).write_bytes((made.docs / "a.png").read_bytes())
+        # not the same bytes as a.png: a copy would take its text from a.png and never reach a reader
+        (made.docs / "Sub" / name).write_bytes((made.docs / "a.png").read_bytes() + name.encode("ascii"))
     made.extra = []
 
     def more(self, count, gpu=False):

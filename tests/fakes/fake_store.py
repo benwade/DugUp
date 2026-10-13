@@ -181,6 +181,48 @@ class FakeStore:
                 out[row_id] = others
         return out
 
+    def read_marks(self):
+        read = (FileState.DONE, FileState.PARTIAL)
+        return sorted({(m, self.files[i].kind.value) for i, m in self._marked().items() if self.files[i].state in read})
+
+    def read_twin(self, mark, not_row, kind):
+        read = (FileState.DONE, FileState.PARTIAL)
+        found = sorted((self.files[i].state is not FileState.DONE, i) for i, m in self._marked().items()
+                       if m == mark and i != not_row and self.files[i].state in read and self.files[i].kind is kind)
+        return copy.copy(self.files[found[0][1]]) if found else None
+
+    def _copy_segments(self, from_row, to_row, wanted):
+        for seg, seg_id in zip(list(self.segments[from_row]), list(self.segment_ids[from_row])):
+            if wanted(seg):
+                self.segments[to_row].append(seg)
+                self.segment_ids[to_row].append(self.next_segment)
+                if seg_id in self.lines:
+                    self.lines[self.next_segment] = list(self.lines[seg_id])
+                self.next_segment += 1
+
+    def copy_reading(self, from_row, to_row) -> None:
+        for row in (from_row, to_row):
+            if row not in self.files:
+                raise StoreError(f"no file with id {row}")
+        self.replace_segments(to_row, [])
+        self._copy_segments(from_row, to_row, lambda seg: True)
+        self.pages[to_row] = list(self.pages.get(from_row, []))
+        self._forget_ocr(to_row)
+        for (row, page), entry in list(self.ocr.items()):
+            if row == from_row:
+                self.ocr[(to_row, page)] = dict(entry)
+
+    def copy_page(self, from_row, to_row, page) -> None:
+        source, index = self._page_index(from_row, page), self._page_index(to_row, page)
+        self._drop_ocr_text(to_row, page)
+        self._copy_segments(from_row, to_row, lambda seg: seg.kind is SegmentKind.OCR and seg.page == page)
+        was = self.pages[from_row][source]
+        info = self.pages[to_row][index]
+        self.pages[to_row][index] = PageInfo(info.page, info.verdict, was.needs_ocr, info.unread_reason)
+        entry = dict(self._ocr_entry(from_row, page))
+        mine = self._ocr_entry(to_row, page)
+        mine.update(state=entry["state"], reason=entry["reason"], engine=entry["engine"])
+
     def unmarked(self, prefix=None, limit=None, after_row=0, case_insensitive=None):
         read = (FileState.DONE, FileState.PARTIAL, FileState.FAILED)
         every = getattr(self, "contents", {})

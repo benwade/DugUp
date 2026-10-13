@@ -691,8 +691,8 @@ def fast_bench(tmp_path, monkeypatch):
     monkeypatch.setattr(service_module.LocalService, "_more_readers", more)
     bench = Bench(tmp_path, settings=Settings(ocr_after_index=False, ocr_fast_readers=3))
     bench.extra = made
-    for name in ("one.png", "two.png", "three.png"):
-        (bench.docs / "sub" / name).write_bytes(build_png())
+    for seed, name in enumerate(("one.png", "two.png", "three.png"), start=1):
+        (bench.docs / "sub" / name).write_bytes(build_png(seed=seed))      # three pictures, not one in three places
     return bench
 
 

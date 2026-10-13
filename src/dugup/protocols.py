@@ -255,6 +255,18 @@ class Store(Protocol):
     def copy_counts(self) -> Tuple[int, int, int]:
         """(files with a mark, sets of files with the same content, files that are an extra copy)."""
 
+    def read_marks(self) -> Sequence[Tuple[str, str]]:
+        """(content mark, kind) for the files that have been read and were there at the last scan."""
+
+    def read_twin(self, mark: str, not_row: int, kind: FileKind) -> Optional[FileRecord]:
+        """A file of this kind with this content that has been read, other than `not_row`; a fully read one first."""
+
+    def copy_reading(self, from_row: int, to_row: int) -> None:
+        """Give one file everything read from another with the same content (text, pages, OCR)."""
+
+    def copy_page(self, from_row: int, to_row: int, page: int) -> None:
+        """Give one file what OCR made of a page of another with the same content."""
+
     def remove_files(self, row_ids: Sequence[int]) -> int:
         """Take these files out of the index (text and page records too). Returns how many were there."""
 

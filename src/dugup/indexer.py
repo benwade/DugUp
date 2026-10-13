@@ -152,6 +152,8 @@ class IndexReport:
     skipped: int = 0
     vanished: int = 0                # gone between the scan and the read; left for the next scan
     second_tries: int = 0            # files that ran out of time and were read again, last, with more time
+    copied: int = 0                  # files whose content was already read in another place: its text was taken
+                                     # from there, and the file itself was not read again
     marked: int = 0                  # files read before content marks existed that were given one this run
     paused: str = ""                 # why the run paused itself (a run of reader failures, or a full drive)
     compacted: Optional[Dict[str, int]] = None   # the index's size before and after, when it was compacted at the end
@@ -446,6 +448,9 @@ class Indexer:
         done = failed = in_a_row = 0
         later: List[FileRecord] = []
         cursor = 0
+        # The marks of content that has been read already. A reader that meets one of them does not read the
+        # file: its text is taken from the copy. (Readers only look in this set; this thread alone adds to it.)
+        self._known_marks = set(self.store.read_marks()) if self.settings.content_marks and self.settings.read_once else set()
         readers = _Readers((self.extractor, *self.extra_extractors)) if self.extra_extractors else None
         ended: List[bool] = []            # what ended the run early, when something did
 
@@ -587,6 +592,9 @@ class Indexer:
                 if _stopped(stop):
                     break
                 self._tell(Progress("mark", root.path, done, total, 0, self.timer() - started, record.path))
+                if record.size <= 0:
+                    keep(record, None)
+                    continue
                 if readers is None:
                     try:
                         keep(record, self.extractor.content_mark(record, stop))
@@ -606,6 +614,7 @@ class Indexer:
         return not _stopped(stop)
 
     _last_reason: Optional[FailureReason] = None
+    _known_marks: set = frozenset()    # type: ignore[assignment]
 
     def read_one(self, record: FileRecord, report: IndexReport, stop: Optional[StopSignal] = None,
                  patient: bool = False) -> Optional[FileState]:
@@ -623,6 +632,12 @@ class Indexer:
         mark = self._mark(extractor, record, stop)
         if isinstance(mark, Failure):      # stopped, or the file is gone: there is nothing to read either
             return mark, None
+        if mark is not None and (mark, record.kind.value) in self._known_marks:
+            return SAME_AS_ANOTHER, mark
+        return self._read_itself(extractor, record, stop, patient, mark)
+
+    def _read_itself(self, extractor, record: FileRecord, stop: Optional[StopSignal], patient: bool, mark=None):
+        """The file's own reader at work, whatever is known of its content."""
         patiently = getattr(extractor, "extract_patiently", None) if self.settings.retry_patience > 1.0 else None
         try:
             if patient and patiently is not None:
@@ -639,7 +654,7 @@ class Indexer:
         """The content mark of a file, None when there is none to be had, or a Failure that ends the read
         (a stop, or a file that is no longer there)."""
         marker = getattr(extractor, "content_mark", None) if self.settings.content_marks else None
-        if marker is None:
+        if marker is None or record.size <= 0:      # empty files are all alike, and are not copies of each other
             return None
         try:
             mark = marker(record, stop)
@@ -652,10 +667,36 @@ class Indexer:
     def _keep(self, record: FileRecord, result, report: IndexReport, patient: bool) -> Optional[FileState]:
         """The storing half: always on the indexer's own thread. `result` is what _read returned."""
         result, mark = result if isinstance(result, tuple) else (result, None)
-        state = self._keep_result(record, result, report, patient)
+        if result is SAME_AS_ANOTHER:
+            state = self._keep_copy(record, mark, report)
+            if state is None:              # the copy it was to be taken from is gone since: read it after all
+                result, _ = self._read_itself(self.extractor, record, None, patient)
+                state = self._keep_result(record, result, report, patient)
+        else:
+            state = self._keep_result(record, result, report, patient)
+        if mark and state in (FileState.DONE, FileState.PARTIAL):
+            self._known_marks.add((mark, record.kind.value))
         if state is not None and state is not FileState.PENDING and self.settings.content_marks:
             # a file that was read and gave no mark gets one of its own, so it is not asked again every run
             self.store.set_content(record.row_id, mark or f"!{record.row_id}")
+        return state
+
+    def _keep_copy(self, record: FileRecord, mark: str, report: IndexReport) -> Optional[FileState]:
+        """Take a file's text from another file with the same content. None when there is no such file now."""
+        self._last_reason = None
+        twin = self.store.read_twin(mark, record.row_id, record.kind)
+        if twin is None:
+            return None
+        with self.store.transaction():
+            self.store.copy_reading(twin.row_id, record.row_id)
+            state, note = note_with_ocr(self.store, record.row_id, twin.error)
+            self.store.set_state(record.row_id, state, note)
+        report.read += 1
+        report.copied += 1
+        if state is FileState.DONE:
+            report.done += 1
+        else:
+            report.partial += 1
         return state
 
     def _keep_result(self, record: FileRecord, result, report: IndexReport, patient: bool) -> Optional[FileState]:
@@ -697,6 +738,9 @@ class Indexer:
     def _tell(self, progress: Progress) -> None:
         if self.progress is not None:
             self.progress(progress)
+
+
+SAME_AS_ANOTHER = object()     # what a reader answers for a file whose content has been read in another place
 
 
 def _safely(call, *args):

@@ -691,6 +691,61 @@ class SqliteStore:
                 found.setdefault(r["one"], []).append(decode_path(r["path"], r["path_raw"]))
         return found
 
+    def read_marks(self) -> List[Tuple[str, str]]:
+        """(content mark, kind of file) for the files that have been read (done, or partial) and were there at
+        the last scan. The kind belongs to it: the same bytes under another ending go to another reader."""
+        return [(r[0], r[1]) for r in self.conn.execute(
+            "SELECT DISTINCT content, kind FROM files WHERE content IS NOT NULL AND missing_since IS NULL AND state IN (?,?)",
+            (FileState.DONE.value, FileState.PARTIAL.value))]
+
+    def read_twin(self, mark: str, not_row: int, kind: FileKind) -> Optional[FileRecord]:
+        """A file of this kind with this content that has been read, other than `not_row`; a fully read one first."""
+        row = self.conn.execute(
+            "SELECT * FROM files WHERE content=? AND kind=? AND id<>? AND missing_since IS NULL AND state IN (?,?) "
+            "ORDER BY (state<>?), id LIMIT 1",
+            (mark, kind.value, not_row, FileState.DONE.value, FileState.PARTIAL.value, FileState.DONE.value)).fetchone()
+        return None if row is None else self._record(row)
+
+    def _copy_segments(self, from_row: int, to_row: int, where: str, args: Sequence[object]) -> None:
+        name = _clean(self.conn.execute("SELECT name FROM files WHERE id=?", (to_row,)).fetchone()[0])
+        rows = self.conn.execute(f"SELECT id, page, ord, kind, text, z FROM segments WHERE file_id=? AND {where} ORDER BY id",
+                                 [from_row] + list(args)).fetchall()
+        for r in rows:
+            cur = self.conn.execute("INSERT INTO segments(file_id, page, ord, kind, text, z) VALUES(?,?,?,?,?,?)",
+                                    (to_row, r["page"], r["ord"], r["kind"], r["text"], r["z"]))
+            self.conn.execute("INSERT INTO fts(rowid, name, body) VALUES(?,?,?)",
+                              (cur.lastrowid, name, unpack_text(r["text"], r["z"])))
+            self.conn.execute(
+                "INSERT INTO regions(segment_id, engine, label, x0, y0, x1, y1, confidence, text) "
+                "SELECT ?, engine, label, x0, y0, x1, y1, confidence, text FROM regions WHERE segment_id=? ORDER BY id",
+                (cur.lastrowid, r["id"]))
+
+    def copy_reading(self, from_row: int, to_row: int) -> None:
+        """Give one file everything that was read from another with the same content: its text, its page
+        records, and what OCR read or still has to read. The file's own name stays its own."""
+        with self.transaction():
+            for row in (from_row, to_row):
+                if self.conn.execute("SELECT 1 FROM files WHERE id=?", (row,)).fetchone() is None:
+                    raise StoreError(f"no file with id {row}")
+            self._delete_segments(to_row, keep_name=True)
+            self._copy_segments(from_row, to_row, "kind != ?", (SegmentKind.NAME.value,))
+            self.conn.execute("DELETE FROM pages WHERE file_id=?", (to_row,))
+            self.conn.execute(
+                "INSERT INTO pages(file_id, page, verdict, needs_ocr, reason, ocr, ocr_reason, width, height, camera, ocr_engine) "
+                "SELECT ?, page, verdict, needs_ocr, reason, ocr, ocr_reason, width, height, camera, ocr_engine "
+                "FROM pages WHERE file_id=?", (to_row, from_row))
+
+    def copy_page(self, from_row: int, to_row: int, page: int) -> None:
+        """Give one file what OCR made of a page of another with the same content (read, or failed and why)."""
+        with self.transaction():
+            self._page_row(from_row, page)
+            self._page_row(to_row, page)
+            self._delete_ocr_segments(to_row, page)
+            self._copy_segments(from_row, to_row, "page=? AND kind=?", (page, SegmentKind.OCR.value))
+            self.conn.execute(
+                "UPDATE pages SET (needs_ocr, ocr, ocr_reason, ocr_engine) = (SELECT needs_ocr, ocr, ocr_reason, ocr_engine "
+                "FROM pages WHERE file_id=? AND page=?) WHERE file_id=? AND page=?", (from_row, page, to_row, page))
+
     def unmarked(self, prefix: Optional[str] = None, limit: Optional[int] = None, after_row: int = 0,
                  case_insensitive: Optional[bool] = None) -> List[FileRecord]:
         """Files that were read (done, partial or failed) and have no content mark yet, in row order."""
