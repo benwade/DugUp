@@ -136,6 +136,25 @@ def test_marks_are_taken_side_by_side_too(tmp_path):
         assert sum(1 for reader in (w.reader, *w.more) if reader.marked) > 1
 
 
+def test_empty_files_marked_alike_by_the_first_version_are_set_apart_on_opening(tmp_path):
+    path = tmp_path / "index.sqlite"
+    conn = sqlite3.connect(path)
+    for name, function in (("dugup_text", lambda t, z: t), ("dugup_clean", lambda t: t)):
+        conn.create_function(name, -1, function)
+    for number, migration in enumerate(MIGRATIONS[:7], start=1):
+        migration(conn)
+        conn.execute(f"PRAGMA user_version={number}")
+    empty = contentmark.of_bytes(b"")
+    for name, size, mark in (("e1.txt", 0, empty), ("e2.txt", 0, empty), ("a.txt", 5, "abc"), ("b.txt", 5, "abc")):
+        conn.execute("INSERT INTO files(path, name, folder, size, modified, kind, state, content) VALUES(?,?,?,?,?,?,?,?)",
+                     (f"/r/{name}", name, "/r", size, 1.0, "text", "done", mark))
+    conn.commit()
+    conn.close()
+    with SqliteStore(path) as store:
+        assert tuple(store.copy_counts()) == (4, 1, 1), "the two real copies are one set; the two empty files are not"
+        assert store.unmarked() == [], "and the empty files are not asked for a mark again"
+
+
 def test_an_index_from_before_marks_opens_and_takes_them(tmp_path):
     path = tmp_path / "index.sqlite"
     conn = sqlite3.connect(path)

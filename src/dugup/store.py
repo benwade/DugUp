@@ -226,8 +226,14 @@ def _migration_7(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX files_content ON files(content) WHERE content IS NOT NULL")
 
 
+def _migration_8(conn: sqlite3.Connection) -> None:
+    """Empty files are not copies of each other. The first marking gave them all the mark of "no bytes";
+    each gets a mark of its own instead, which is what an empty file is given from now on."""
+    conn.execute("UPDATE files SET content = '!' || id WHERE size <= 0 AND content IS NOT NULL")
+
+
 MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3, _migration_4,
-                                                          _migration_5, _migration_6, _migration_7]
+                                                          _migration_5, _migration_6, _migration_7, _migration_8]
 OCR_ORDER = 1_000_000   # the order number of a page's OCR text, after anything a text layer gave
 SCHEMA_VERSION = len(MIGRATIONS)  # informational; the live value is len(MIGRATIONS)
 
