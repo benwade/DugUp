@@ -595,9 +595,31 @@ class FakeStore:
             rows.append(FakeSearchRow(row_id, rec.path, name, folder, rec.size, rec.modified, rec.kind.value,
                                       rec.state.value, len(hits), self._rank(row_id, query, len(hits)), evidence,
                                       rec.missing_since))
+        if not (filters is not None and getattr(filters, "every_copy", False)):
+            rows = self._one_of_each(rows)
         if len(keys) == 1:
             return self._page(rows, keys[0][0], keys[0][1], limit, offset)
         return self._page_by(rows, keys, limit, offset)
+
+    def _one_of_each(self, rows):
+        """Of the matching files with the same content, the one to show, with the other places listed."""
+        every = getattr(self, "contents", {})
+
+        def standing(row):
+            low = row.path.lower()
+            named = any(word in low for word in ("backup", "- copy", "copy of ", "(copy)"))
+            return (row.missing_since is not None, named, row.path.count("/") + row.path.count("\\"), len(row.path), row.file_id)
+
+        best = {}
+        for row in rows:
+            key = every.get(row.file_id) or f"#{row.file_id}"
+            if key not in best or standing(row) < standing(best[key]):
+                best[key] = row
+        kept = sorted(best.values(), key=lambda r: r.file_id)
+        others = self.copies_of([r.file_id for r in kept])
+        for row in kept:
+            row.also_at = tuple(others.get(row.file_id, ()))
+        return kept
 
     def _rank(self, row_id: int, query: str, hits: int) -> float:
         """Smaller is better: closeness first (a whole step apart), then the number of matching pieces."""

@@ -13,7 +13,7 @@ pytest.importorskip("pypdfium2", reason="the PDF reader pypdfium2 is not install
 from corpus.tree import build_tree
 from dugup.datadir import DataLayout
 from dugup.service import LocalService
-from dugup.shapes import FileState, Root
+from dugup.shapes import FileState, Root, SearchFilters
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 TESTS = str(Path(__file__).resolve().parent)
@@ -38,7 +38,8 @@ def picture(service, tree):
 
 
 def found(service, word):
-    return {r.path for r in service.search(word, limit=1000).rows}
+    """Every file with the word, copies of the same file included."""
+    return {r.path for r in service.search(word, limit=1000, filters=SearchFilters(every_copy=True)).rows}
 
 
 @pytest.fixture
@@ -73,9 +74,11 @@ def test_duplicates_are_all_found_and_each_name_is_searchable(world):
     service, tree, rows = world
     service.run_indexing()
     assert len(found(service, "duplicatedword")) == 4
+    once = service.search("duplicatedword", limit=1000)
+    assert once.total == 1 and len(once.rows[0].also_at) == 3, "the usual search shows the file once, with its three other places"
     for row in rows:
         stem = Path(row.relative).name
-        assert full(tree, row.relative) in {r.path for r in service.search(f'"{stem}"', limit=1000).rows} or \
+        assert full(tree, row.relative) in {r.path for r in service.search(f'"{stem}"', limit=1000, filters=SearchFilters(every_copy=True)).rows} or \
             full(tree, row.relative) in found(service, stem), f"{row.relative}: not found by its own name"
 
 

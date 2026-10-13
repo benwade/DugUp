@@ -84,7 +84,8 @@ ALL_FOLDERS = "All indexed folders"
 
 
 def build_filters(folder: str = "", where: str = WHERE_ANYWHERE, kinds: Sequence[str] = (), after: str = "",
-                  before: str = "", smallest: str = "", largest: str = "", exact: bool = False) -> SearchFilters:
+                  before: str = "", smallest: str = "", largest: str = "", exact: bool = False,
+                  every_copy: bool = False) -> SearchFilters:
     """The filters a filled-in form stands for. Raises ValueError with a sentence for the person who typed."""
     low, high = parse_size(smallest), parse_size(largest)
     start, end = parse_day(after), parse_day(before, end_of_day=True)
@@ -95,7 +96,8 @@ def build_filters(folder: str = "", where: str = WHERE_ANYWHERE, kinds: Sequence
     every = {value for _, value in KIND_LABELS}
     chosen = tuple(k for k in kinds if k in every)
     return SearchFilters(folder=folder or None, kinds=() if set(chosen) == every else chosen, where=where,
-                         modified_after=start, modified_before=end, min_size=low, max_size=high, exact=bool(exact))
+                         modified_after=start, modified_before=end, min_size=low, max_size=high, exact=bool(exact),
+                         every_copy=bool(every_copy))
 
 
 COLUMNS = (("name", "Name", 190), ("folder", "Folder", 195), ("kind", "Type", 60), ("size", "Size", 85),
@@ -224,6 +226,7 @@ class App:
         self.smallest, self.largest = tk.StringVar(), tk.StringVar()
         self.kinds: Dict[str, object] = {value: tk.BooleanVar(value=True) for _, value in KIND_LABELS}
         self.exact = tk.BooleanVar(value=False)
+        self.every_copy = tk.BooleanVar(value=False)
 
         self.sentence = tk.StringVar()
         self.asker: Optional[threading.Thread] = None
@@ -255,6 +258,8 @@ class App:
             ttk.Checkbutton(form, text=label, variable=self.kinds[value]).grid(row=1, column=4 + at, padx=2)
         ttk.Checkbutton(form, text="Exact form", variable=self.exact).grid(row=1, column=8, padx=(14, 2))
         ttk.Label(form, text="(off: education also finds educate)").grid(row=1, column=9, columnspan=2, sticky="w")
+        ttk.Checkbutton(form, text="Every copy", variable=self.every_copy).grid(row=1, column=11, padx=(14, 2))
+        ttk.Label(form, text="(off: a file kept in several places is shown once)").grid(row=1, column=12, sticky="w")
 
         narrow = ttk.Frame(form)
         narrow.grid(row=2, column=0, columnspan=11, sticky="w", pady=2)
@@ -402,7 +407,8 @@ class App:
         if not kinds:
             raise ValueError("No kind of file is ticked, so nothing can be found. Tick at least one.")
         return build_filters("" if folder == ALL_FOLDERS else folder, where, kinds, self.after_day.get(),
-                             self.before_day.get(), self.smallest.get(), self.largest.get(), self.exact.get())
+                             self.before_day.get(), self.smallest.get(), self.largest.get(), self.exact.get(),
+                             self.every_copy.get())
 
     def clear_filters(self) -> None:
         self.folder.set(ALL_FOLDERS)
@@ -412,6 +418,7 @@ class App:
         for variable in self.kinds.values():
             variable.set(True)    # type: ignore[attr-defined]
         self.exact.set(False)
+        self.every_copy.set(False)
 
     def ask_in_plain_words(self) -> None:
         """Hand the sentence to the model, in the background; the answer fills in the form (see _understood)."""
@@ -535,11 +542,15 @@ class App:
             note += f". Not at this path at the last scan; kept in the index until {format_date(row.missing_since + keep)[:10]}"
         elif row.unavailable:
             note += ". Its folder is not available right now; the file is kept in the index"
+        if row.also_at:
+            note += f". The same file is in {len(row.also_at):,} more place(s), listed below"
         self.note_text.set(note)
         self.places, self.places_shown = None, 0
         hits = self.hits
         hits.configure(state="normal")
         hits.delete("1.0", "end")
+        if row.also_at:
+            hits.insert("end", "The same file is also at:\n" + "".join(f"    {place}\n" for place in row.also_at) + "\n")
         shown = self._insert_places(row, row.evidence)
         if not shown:
             hits.insert("end", "The passages are no longer in the index (the file was read again). Search again.")

@@ -172,3 +172,44 @@ def test_the_real_reader_marks_files_in_a_worker(tmp_path):
         service.set_root(Root(str(docs)))
         assert service.run_indexing().done == 3
         assert tuple(service.store.copy_counts()) == (3, 1, 1)
+
+
+def test_a_search_shows_the_same_file_once_with_its_other_places(w):
+    from dugup.shapes import SearchFilters
+    w.put("Docs/report.txt", "alpha the same words")
+    w.put("Backup/Docs/report.txt", "alpha the same words")
+    w.put("Other computers/PC 3/Docs/report.txt", "alpha the same words")
+    w.put("Docs/notes.txt", "alpha different words")
+    w.run()
+    page = w.store.search_words("alpha")
+    assert page.total == 2 and sorted(r.path[len(w.root) + 1:] for r in page.rows) == ["Docs/notes.txt", "Docs/report.txt"], \
+        "the copy highest up and not in a backup folder is the one shown"
+    shown = next(r for r in page.rows if r.path.endswith("report.txt"))
+    assert [p[len(w.root) + 1:] for p in shown.also_at] == ["Backup/Docs/report.txt", "Other computers/PC 3/Docs/report.txt"]
+    assert next(r for r in page.rows if r.path.endswith("notes.txt")).also_at == ()
+    every = w.store.search_words("alpha", filters=SearchFilters(every_copy=True))
+    assert every.total == 4 and len(every.rows) == 4 and all(r.also_at == () for r in every.rows)
+    assert w.store.search_words("alpha", limit=1).total == 2 and len(w.store.search_words("alpha", limit=1, offset=1).rows) == 1
+
+
+def test_a_search_in_one_folder_shows_the_copy_that_is_there(w):
+    from dugup.shapes import SearchFilters
+    w.put("Docs/report.txt", "alpha the same words")
+    w.put("Archive/deep/down/report.txt", "alpha the same words")
+    w.run()
+    inside = w.store.search_words("alpha", filters=SearchFilters(folder=w.root + "/Archive", case_insensitive=False))
+    assert inside.total == 1 and inside.rows[0].path.endswith("Archive/deep/down/report.txt")
+    assert [p[len(w.root) + 1:] for p in inside.rows[0].also_at] == ["Docs/report.txt"], "and still says where else it is"
+
+
+def test_a_copy_found_by_its_own_name_is_shown_and_a_missing_copy_gives_way(w):
+    w.put("Docs/report.txt", "alpha the same words")
+    w.put("Docs/sub/quarterly.txt", "alpha the same words")
+    w.run()
+    page = w.store.search_words("quarterly")
+    assert page.total == 1 and page.rows[0].path.endswith("quarterly.txt"), "only this copy has the word, in its name"
+    w.h.delete(w.root, "Docs/report.txt")
+    w.run()
+    page = w.store.search_words("alpha")
+    assert page.total == 1 and page.rows[0].path.endswith("quarterly.txt") and page.rows[0].also_at == (), \
+        "the copy that is still there is the one shown; a missing one is not listed as a place"

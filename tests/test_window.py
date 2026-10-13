@@ -787,3 +787,24 @@ def test_the_bar_moves_while_no_total_is_known_and_shows_the_part_done_after(tmp
         assert float(app.bar.cget("value")) == 50.0
     finally:
         bench.close()
+
+
+def test_a_file_kept_in_several_places_is_shown_once_with_its_places_and_every_copy_shows_all(bench):
+    (bench.docs / "Backup").mkdir()
+    (bench.docs / "letter.txt").write_text("needle in a letter", encoding="utf-8")
+    (bench.docs / "Backup" / "letter.txt").write_text("needle in a letter", encoding="utf-8")
+    (bench.docs / "other.txt").write_text("needle elsewhere", encoding="utf-8")
+    bench.ready()
+    names = bench.find("needle")
+    assert names.count("letter.txt") == 1 and "other.txt" in names
+    bench.app.tree.selection_set(str(names.index("letter.txt")))
+    bench.app.show_selected()
+    row = bench.app.selected()
+    assert row.path == str(bench.docs / "letter.txt") and row.also_at == (str(bench.docs / "Backup" / "letter.txt"),)
+    assert "The same file is in 1 more place(s)" in bench.app.note_text.get()
+    shown = bench.text(bench.app.hits)
+    assert shown.startswith("The same file is also at:") and str(bench.docs / "Backup" / "letter.txt") in shown
+    bench.app.every_copy.set(True)
+    assert bench.find("needle").count("letter.txt") == 2 and bench.app.filters().every_copy is True
+    bench.app.clear_filters()
+    assert bench.app.every_copy.get() is False and bench.find("needle").count("letter.txt") == 1

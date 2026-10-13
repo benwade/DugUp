@@ -26,6 +26,9 @@ __all__ = ["SqliteStore", "StoreError", "StoreVersionError", "SearchPage", "Sear
            "MIGRATIONS", "TOKENIZER", "build_match", "encode_path", "decode_path", "fts5_available"]
 
 TOKENIZER = "porter unicode61 remove_diacritics 2 categories 'L* N* Co M*'"
+# For choosing which of several copies to show: a path that says backup, and how deep a path lies.
+_BACKUP_SQL = "(f.path LIKE '%backup%' OR f.path LIKE '%- copy%' OR f.path LIKE '%copy of %' OR f.path LIKE '%(copy)%')"
+_DEPTH_SQL = "(length(f.path) - length(replace(replace(f.path, '/', ''), char(92), '')))"
 SORT_COLUMNS = {
     "name": "f.name COLLATE NOCASE",
     "folder": "f.folder COLLATE NOCASE",
@@ -1021,8 +1024,10 @@ class SqliteStore:
         if match is None:
             return SearchPage([], 0, offset, limit)
         match, seg_clause, seg_args, file_clause, file_args, terms = self._narrow(match, filters, query)
+        grouped = not (filters is not None and filters.every_copy)
+        counted = f"COALESCE(f.content, '#' || f.id)" if grouped else "s.file_id"
         total = self.conn.execute(
-            "SELECT COUNT(DISTINCT s.file_id) FROM fts CROSS JOIN segments s ON s.id = fts.rowid "
+            f"SELECT COUNT(DISTINCT {counted}) FROM fts CROSS JOIN segments s ON s.id = fts.rowid "
             f"CROSS JOIN files f ON f.id = s.file_id WHERE fts MATCH ?{seg_clause}{file_clause}",
             [match] + seg_args + file_args,
         ).fetchone()[0]
@@ -1042,13 +1047,21 @@ class SqliteStore:
         order = ", ".join(by(key, down) for key, down in keys)
         # The score is read from FTS5's `rank` column (bm25 by default). Unlike the bm25() function it is an
         # ordinary column value, so it can be grouped and sorted on every SQLite version.
-        sql = (
+        per_file = (
             "SELECT f.id, f.path, f.path_raw, f.name, f.folder, f.size, f.modified, f.kind, f.state, "
-            f"f.missing_since, COUNT(*) AS matches, MIN(fts.rank) AS rank, {tier} AS tier "
+            f"f.missing_since, f.content, COUNT(*) AS matches, MIN(fts.rank) AS rank, {tier} AS tier "
             "FROM fts CROSS JOIN segments s ON s.id = fts.rowid CROSS JOIN files f ON f.id = s.file_id "
-            f"WHERE fts MATCH ?{seg_clause}{file_clause} GROUP BY f.id "
-            f"ORDER BY {order}, f.id ASC LIMIT ? OFFSET ?"
+            f"WHERE fts MATCH ?{seg_clause}{file_clause} GROUP BY f.id"
         )
+        if grouped:
+            # Of the matching files with the same content, one is shown: one that is still there, not in a folder
+            # named like a backup, highest up in the folders, with the shortest path. (The inner query is named
+            # f so that the sort columns, written for the files table, read the same out here.)
+            sql = (f"SELECT * FROM (SELECT f.*, ROW_NUMBER() OVER (PARTITION BY COALESCE(f.content, '#' || f.id) ORDER BY "
+                   f"(f.missing_since IS NOT NULL), {_BACKUP_SQL}, {_DEPTH_SQL}, length(f.path), f.id) AS place "
+                   f"FROM ({per_file}) AS f) AS f WHERE place = 1 ORDER BY {order}, f.id ASC LIMIT ? OFFSET ?")
+        else:
+            sql = f"{per_file} ORDER BY {order}, f.id ASC LIMIT ? OFFSET ?"
         rows = [
             SearchRow(r["id"], decode_path(r["path"], r["path_raw"]), r["name"], r["folder"], r["size"],
                       r["modified"], r["kind"], r["state"], r["matches"], r["rank"],
@@ -1056,6 +1069,10 @@ class SqliteStore:
             for r in self.conn.execute(sql, tier_args + [match] + seg_args + file_args + [limit, offset])
         ]
         self._attach_evidence(rows, match, seg_clause, seg_args, terms)
+        if grouped and rows:
+            others = self.copies_of([row.file_id for row in rows])
+            for row in rows:
+                row.also_at = tuple(others.get(row.file_id, ()))
         return SearchPage(rows, total, offset, limit)
 
     @staticmethod

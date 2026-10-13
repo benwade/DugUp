@@ -291,6 +291,8 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--desc", action="store_true", help="largest (or last) first")
     search.add_argument("--exact", action="store_true",
                         help="only the very word forms typed: education then does not find educate")
+    search.add_argument("--every-copy", action="store_true",
+                        help="list every file; the usual is to show a file kept in several places once, with its other places")
     search.add_argument("--context", type=int, default=60, help="characters shown on each side of a match")
 
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
@@ -846,6 +848,9 @@ def _flags(row: SearchRow, retention_days: float) -> List[str]:
     return notes
 
 
+ALSO_AT_SHOWN = 8
+
+
 def print_results(page: SearchPage, query: str, service: LocalService, context: int, out: TextIO) -> None:
     if page.total == 0:
         safe_write(f"No files found for: {query}", out)
@@ -859,6 +864,12 @@ def print_results(page: SearchPage, query: str, service: LocalService, context: 
         safe_write(f"     {row.folder}", out)
         for note in _flags(row, service.settings.missing_retention_days):
             safe_write(f"     ! {note}", out)
+        if row.also_at:
+            safe_write(f"     the same file is also at ({len(row.also_at):,} more place(s)):", out)
+            for place in row.also_at[:ALSO_AT_SHOWN]:
+                safe_write(f"       {place}", out)
+            if len(row.also_at) > ALSO_AT_SHOWN:
+                safe_write(f"       ... and {len(row.also_at) - ALSO_AT_SHOWN:,} more (--every-copy lists every one)", out)
         shown_lines: List[str] = []
         for evidence in row.evidence:
             passage = service.get_evidence(evidence, context)
@@ -894,7 +905,7 @@ def cmd_search(args, env, out, environ) -> int:
         return 1
     query = " ".join(args.words)
     with service:
-        filters = SearchFilters(exact=True) if args.exact else None
+        filters = SearchFilters(exact=args.exact, every_copy=args.every_copy) if (args.exact or args.every_copy) else None
         page = service.search(query, max(0, args.limit), max(0, args.offset), args.sort, args.desc, filters)
         if isinstance(page, Failure):
             return _fail(page, out)
@@ -948,6 +959,14 @@ def cmd_status(args, env, out, environ) -> int:
         for engine, count in sorted(service.old_ocr_pages().items()):
             safe_write(f"{count:,} page(s) were read by another OCR version ({engine or 'unknown'}). "
                        "To read them again with the one installed now: dugup ocr --reread-old", out)
+        marked, sets, extra = service.store.copy_counts()
+        if extra:
+            safe_write(f"{extra:,} file(s) are an extra copy of another ({sets:,} file(s) kept in two or more places). "
+                       "A search shows each once, with its other places.", out)
+        waiting_marks = len(service.store.unmarked())
+        if waiting_marks and service.settings.content_marks:
+            safe_write(f"{waiting_marks:,} file(s) read earlier have no content mark yet, so copies among them are not "
+                       "known. The next `dugup index` marks them (each is read once more; Ctrl+C stops and it goes on later).", out)
         if args.unreadable or args.save:
             records = service.unreadable_files()
             if args.save:

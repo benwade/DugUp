@@ -120,9 +120,12 @@ def test_a_passage_held_by_two_overlapping_pieces_is_shown_once(sh):
 
 def test_a_truncated_list_says_so_and_pages_on(sh):
     for i in range(7):
-        (sh.docs / f"n{i}.txt").write_text("commonword", encoding="utf-8")
+        (sh.docs / f"n{i}.txt").write_text(f"commonword in file {i}", encoding="utf-8")
+    (sh.docs / "n0 again.txt").write_text("commonword in file 0", encoding="utf-8")    # the same file as n0.txt
     sh.ready()
     code, text = sh.run("search", "commonword", "--limit", "3", "--sort", "name")
+    assert "the same file is also at (1 more place(s)):" in text and "n0 again.txt" in text
+    assert "of 8 file(s)" in sh.run("search", "commonword", "--every-copy")[1]
     assert "Showing 1 to 3 of 7 file(s)" in text and "--offset 3" in text and "n0.txt" in text and "n3.txt" not in text
     code, text = sh.run("search", "commonword", "--limit", "3", "--offset", "6", "--sort", "name")
     assert "Showing 7 to 7 of 7 file(s)" in text and "n6.txt" in text and "More:" not in text

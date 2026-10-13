@@ -169,6 +169,8 @@ class SearchFilters:
     case_insensitive: Optional[bool] = None  # how `folder` is compared; None means the platform's rule
     exact: bool = False                     # only the very word forms asked for: "education" then does not
                                             # find "educate" (case and accents still do not matter)
+    every_copy: bool = False                # show every file; the usual is to show a file that is kept in
+                                            # several places once, with its other places listed (SearchRow.also_at)
 
     def __post_init__(self) -> None:
         if self.where not in WHERE_CHOICES:
@@ -211,6 +213,7 @@ class SearchRow:
     evidence: Tuple[Evidence, ...] = ()        # where the words were found, best first
     missing_since: Optional[float] = None      # set when the file was gone at the last scan
     unavailable: bool = False                  # set by the Service when the file's folder cannot be reached now
+    also_at: Tuple[str, ...] = ()              # the same file (the same content) in other places, shortest path first
 
 
 @dataclass
