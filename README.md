@@ -132,6 +132,16 @@ level asks for it, as one run with one Stop. `ocr_after_index = false` in `confi
 `dugup index` does the same; `dugup index --no-ocr` stops once the index is up to date, and `dugup ocr`
 reads what waits at any time.
 
+The same file kept in several places (a backup, another computer's copy) is known for one file: each file
+read gets a mark of its exact content, and a search shows such a file once with "the same file is also at"
+and the full path of every other copy. `dugup search ... --every-copy`, or "Every copy" in the window, lists
+them all. `dugup status` says how many files are extra copies. `content_marks = false` in `config.toml`
+turns this off. An index made before marks existed is marked by the next `dugup index` (each file is read
+once more, nothing is parsed again). `dugup roots copies PATH` lists whole folders that look like copies of
+each other, from names and sizes alone, before anything is indexed. `dugup status --unreadable` lists files
+that are damaged or need a password, and `--save FILE` writes that list to a file. DugUp never deletes or
+changes a file.
+
 Updating the index reads several files side by side, each in a worker of its own, so one slow file (a
 large PDF, or one that must first come down from a cloud drive) does not hold up the rest. The number is
 worked out from the processor cores and free memory, at most 8; `index_readers` in `config.toml` sets it
