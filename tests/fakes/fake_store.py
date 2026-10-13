@@ -181,6 +181,24 @@ class FakeStore:
                 out[row_id] = others
         return out
 
+    def same_content(self, prefix=None, case_insensitive=None):
+        marked = self._marked()
+        ids = set(self.files) if prefix is None else set(self._below(prefix, case_insensitive))
+        sets = {}
+        for row_id in sorted(self.files):
+            mark = marked.get(row_id)
+            if row_id in ids and mark and not mark.startswith("!"):
+                sets.setdefault(mark, []).append(copy.copy(self.files[row_id]))
+        return [members for members in sets.values() if len(members) > 1]
+
+    def files_in_folders(self, folders):
+        counts = {}
+        for rec in self.files.values():
+            if rec.missing_since is None:
+                folder, _ = _split(rec.path)
+                counts[folder] = counts.get(folder, 0) + 1
+        return {f: counts.get(f, 0) for f in folders}
+
     def read_marks(self):
         read = (FileState.DONE, FileState.PARTIAL)
         return sorted({(m, self.files[i].kind.value) for i, m in self._marked().items() if self.files[i].state in read})

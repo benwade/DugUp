@@ -169,6 +169,11 @@ def _entries() -> Tuple[Entry, ...]:
           "whatever they are called and wherever they lie.",
           why="A search then shows such a file once, with its other places listed. It costs reading each file one "
               "more time from start to end, which is quick next to reading its words.", choices=YES_NO),
+        E("cleanup_protect", "search", "Folders never proposed for removal",
+          "Folders, separated by \";\", whose files the duplicates report (dugup duplicates) never proposes removing. "
+          "A live backup of this computer on a cloud drive belongs here: removing a file there can remove it here too.",
+          why="The report only lists; you do the removing. But it should never point you at a folder where a removal "
+              "reaches further than you can see."),
         E("main_place", "search", "Where your own copy of a file is",
           "When the same file is in several places, a search shows the one below this folder or drive (for example C:\\) "
           "and lists the others under it. Empty lets DugUp work it out: on Windows, the drive your own folders are on.",

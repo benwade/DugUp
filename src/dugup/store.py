@@ -697,6 +697,34 @@ class SqliteStore:
                 found.setdefault(r["one"], []).append(decode_path(r["path"], r["path_raw"]))
         return found
 
+    def same_content(self, prefix: Optional[str] = None, case_insensitive: Optional[bool] = None) -> List[List[FileRecord]]:
+        """Files below `prefix` (or anywhere) that share their exact content with another file there, in sets
+        of two or more, each set in row order. Files not there at the last scan are left out."""
+        clauses, args = ["content IS NOT NULL", "substr(content, 1, 1) <> '!'", "missing_since IS NULL"], []
+        if prefix is not None:
+            clause, more = _under_clause(prefix, case_insensitive)
+            clauses.append(clause)
+            args.extend(more)
+        where = " AND ".join(clauses)
+        sql = (f"SELECT * FROM files WHERE {where} AND content IN (SELECT content FROM files WHERE {where} "
+               f"GROUP BY content HAVING COUNT(*) > 1) ORDER BY content, id")
+        sets: Dict[str, List[FileRecord]] = {}
+        for r in self.conn.execute(sql, args + args):
+            sets.setdefault(r["content"], []).append(self._record(r))
+        return [members for members in sets.values() if len(members) > 1]
+
+    def files_in_folders(self, folders: Sequence[str]) -> Dict[str, int]:
+        """How many files (there at the last scan) lie directly in each of these folders, by the folder's spelling."""
+        found: Dict[str, int] = {}
+        wanted = [encode_path(f)[0] for f in folders]
+        for at in range(0, len(wanted), 400):
+            chunk = wanted[at:at + 400]
+            marks = ",".join("?" * len(chunk))
+            for r in self.conn.execute(f"SELECT folder, COUNT(*) FROM files WHERE folder IN ({marks}) AND missing_since IS NULL "
+                                       "GROUP BY folder", chunk):
+                found[r[0]] = int(r[1])
+        return {f: found.get(encode_path(f)[0], 0) for f in folders}
+
     def read_marks(self) -> List[Tuple[str, str]]:
         """(content mark, kind of file) for the files that have been read (done, or partial) and were there at
         the last scan. The kind belongs to it: the same bytes under another ending go to another reader."""

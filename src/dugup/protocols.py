@@ -255,6 +255,12 @@ class Store(Protocol):
     def copy_counts(self) -> Tuple[int, int, int]:
         """(files with a mark, sets of files with the same content, files that are an extra copy)."""
 
+    def same_content(self, prefix: Optional[str] = None, case_insensitive: Optional[bool] = None) -> Sequence[Sequence[FileRecord]]:
+        """Sets of two or more files below `prefix` with the same exact content (not missing), in row order."""
+
+    def files_in_folders(self, folders: Sequence[str]) -> Mapping[str, int]:
+        """How many files lie directly in each of these folders (by that spelling)."""
+
     def read_marks(self) -> Sequence[Tuple[str, str]]:
         """(content mark, kind) for the files that have been read and were there at the last scan."""
 

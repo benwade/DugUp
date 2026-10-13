@@ -142,7 +142,11 @@ its pictures, is taken from that file, and a page is read by OCR once for all it
 turns this off). Empty files are never counted as copies of each other, and the same bytes under another
 ending are read for themselves. Of several copies, a search shows the one on your own drive (`main_place`;
 on Windows it is worked out as the drive your own folders are on). `dugup roots copies PATH` lists whole folders that look like copies of
-each other, from names and sizes alone, before anything is indexed. `dugup status --unreadable` lists files
+each other, from names and sizes alone, before anything is indexed. `dugup duplicates G:\\` lists the same file kept in several places on one drive, from the
+content marks, each set with the copy to keep marked (the one in the larger set of files, then the one higher
+up) and every other copy's full path; `--save FILE` writes the whole report; folders in `cleanup_protect`
+(or `--protect FOLDER`) are never proposed, for a live backup of this computer on a cloud drive. It lists;
+you do the removing. `dugup status --unreadable` lists files
 that are damaged or need a password, and `--save FILE` writes that list to a file. DugUp never deletes or
 changes a file.
 

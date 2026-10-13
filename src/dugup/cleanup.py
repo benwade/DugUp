@@ -1,0 +1,94 @@
+"""A report of the same file kept in several places on one drive, with the copy to keep marked.
+
+Nothing here changes a file. DugUp never deletes. The report is for a person to act on, and it says for
+every copy where it is.
+
+  report()   the sets of exact copies on a drive, the keeper of each chosen, and the totals
+  Keeper rule (Ben's): the copy that is part of the larger set of files first, that is, the one whose folder
+  holds more files; then the copy higher up in the folders; then the one seen first. The date a file was made
+  is not kept by the index (and a copy gets a new one when it is made), so it does not decide.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
+
+from .shapes import FileRecord
+
+
+@dataclass(frozen=True)
+class Copy:
+    record: FileRecord
+    folder_files: int          # files lying in the same folder: the size of the set this copy is part of
+    protected: bool = False    # in a folder that is never proposed (a live backup of this computer)
+
+
+@dataclass
+class Same:
+    """One file, kept in several places."""
+    keep: Copy
+    extra: List[Copy]          # the other copies, the ones a person might remove
+    aside: List[Copy] = field(default_factory=list)   # copies in protected folders: shown, never proposed
+
+    @property
+    def size(self) -> int:
+        return self.keep.record.size
+
+    @property
+    def wasted(self) -> int:
+        return self.size * len(self.extra)
+
+
+@dataclass
+class Report:
+    drive: str
+    protected: Tuple[str, ...]
+    sets: List[Same]
+
+    @property
+    def extra_files(self) -> int:
+        return sum(len(s.extra) for s in self.sets)
+
+    @property
+    def wasted_bytes(self) -> int:
+        return sum(s.wasted for s in self.sets)
+
+
+def _under(path: str, folder: str, fold: Callable[[str], str]) -> bool:
+    base = folder.rstrip("/\\")
+    p = fold(path)
+    return p == fold(base) or p.startswith(fold(base) + "/") or p.startswith(fold(base) + "\\")
+
+
+def folder_of(path: str) -> str:
+    """The folder part of a path, whichever separator it uses (an index made on Windows is read anywhere)."""
+    cut = max(path.rfind("/"), path.rfind("\\"))
+    return path[:cut] if cut > 0 else ""
+
+
+def _depth(path: str) -> int:
+    return path.count("/") + path.count("\\")
+
+
+def report(store, drive: str, protected: Sequence[str] = (), case_insensitive: Optional[bool] = None) -> Report:
+    """The sets of exact copies below `drive` (a drive or any folder). Copies in a protected folder are shown
+    beside their set and never proposed; a set with fewer than two copies left is not a set."""
+    if case_insensitive is None:
+        case_insensitive = os.name == "nt"
+    fold = (lambda t: t.lower()) if case_insensitive else (lambda t: t)
+    sets = store.same_content(drive, case_insensitive)
+    folders = sorted({folder_of(r.path) for members in sets for r in members})
+    counts = store.files_in_folders(folders)
+    found: List[Same] = []
+    for members in sets:
+        copies = [Copy(r, counts.get(folder_of(r.path), 0), any(_under(r.path, p, fold) for p in protected))
+                  for r in members]
+        open_ones = [c for c in copies if not c.protected]
+        if len(open_ones) < 2:
+            continue
+        ranked = sorted(open_ones, key=lambda c: (-c.folder_files, _depth(c.record.path), len(c.record.path), c.record.row_id or 0))
+        found.append(Same(ranked[0], ranked[1:], [c for c in copies if c.protected]))
+    found.sort(key=lambda s: (-s.wasted, s.keep.record.path.lower()))
+    return Report(drive, tuple(protected), found)

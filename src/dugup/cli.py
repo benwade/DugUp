@@ -297,6 +297,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="list every file; the usual is to show a file kept in several places once, with its other places")
     search.add_argument("--context", type=int, default=60, help="characters shown on each side of a match")
 
+    dup = sub.add_parser("duplicates", parents=[common],
+                         help="the same file kept in several places on one drive, with the copy to keep marked (changes nothing)")
+    dup.add_argument("drive", help="the drive or folder to look in, for example G:\\ (copies on other drives are not duplicates)")
+    dup.add_argument("--protect", action="append", default=[], metavar="FOLDER",
+                     help="a folder never proposed for removal (as well as the setting cleanup_protect); may be repeated")
+    dup.add_argument("--rows", type=int, default=50, help="how many sets to show, most space first (default 50)")
+    dup.add_argument("--save", metavar="FILE", help="write the whole report to a text file (keep or extra, path, size, files in its folder)")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")
@@ -928,6 +935,26 @@ def cmd_search(args, env, out, environ) -> int:
     return 0
 
 
+def save_lines(target: str, lines, args, environ) -> str:
+    """Write lines as UTF-8 (with a mark, so spreadsheets read it). Returns "" when done, else why not. Never into
+    a folder the program must not write to or one that looks cloud-synced, and never over a file that is there."""
+    from .datadir import check_allowed
+    path = os.path.abspath(os.path.expanduser(target))
+    try:
+        check_allowed(path, list(args.never_write) + never_write_from_env(environ), args.allow_synced)
+    except DataDirError as exc:
+        return f"The list was not written: {path} is {exc}."
+    if os.path.exists(path):
+        return f"The list was not written: {path} is there already. Give another name."
+    try:
+        with open(path, "x", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n") as handle:
+            for line in lines:
+                handle.write(line + "\n")
+    except OSError as exc:
+        return f"The list was not written: {type(exc).__name__}: {exc}"
+    return ""
+
+
 def save_file_list(target: str, records, args, environ) -> str:
     """Write "path<TAB>reason" lines as UTF-8. Returns "" when done, else why not. Never into a folder the
     program must not write to or one that looks cloud-synced, and never over a file that is there already."""
@@ -1274,8 +1301,46 @@ def cmd_window(args, env, out, environ) -> int:
     return 0
 
 
+def cmd_duplicates(args, env, out, environ) -> int:
+    service = _service(args, environ, out, create=False)
+    if service is None:
+        return 1
+    with service:
+        found = service.duplicates(args.drive, args.protect)
+        safe_write(f"The same file in several places below {found.drive} (from the index; nothing is changed, DugUp never deletes).", out)
+        for folder in found.protected:
+            safe_write(f"  never proposed: {folder}", out)
+        if not found.sets:
+            safe_write("No file below there is kept in two or more places (among the files whose content is known).", out)
+            return 0
+        safe_write(f"{found.extra_files:,} extra copy(ies) of {len(found.sets):,} file(s), taking about {format_bytes(found.wasted_bytes)}. "
+                   "'keep' is the copy in the larger set of files (then the one higher up); every other copy is 'extra'.", out)
+        if args.save:
+            lines = []
+            for same in found.sets:
+                for word, item in [("keep", same.keep)] + [("extra", c) for c in same.extra] + [("protected", c) for c in same.aside]:
+                    lines.append(f"{word}\t{item.record.path}\t{item.record.size}\t{item.folder_files}")
+                lines.append("")
+            problem = save_lines(args.save, lines, args, environ)
+            if problem:
+                safe_write(problem, out)
+                return 1
+            safe_write(f"The whole report is in {args.save} (keep or extra, a tab, the path, the size, the files in its folder).", out)
+            return 0
+        for same in found.sets[:max(1, args.rows)]:
+            safe_write(f"  {format_bytes(same.size)} each, {len(same.extra)} extra: {format_bytes(same.wasted)}", out)
+            safe_write(f"      keep   {same.keep.record.path}   ({same.keep.folder_files:,} files in its folder)", out)
+            for item in same.extra:
+                safe_write(f"      extra  {item.record.path}   ({item.folder_files:,} files in its folder)", out)
+            for item in same.aside:
+                safe_write(f"      kept aside (protected)  {item.record.path}", out)
+        if len(found.sets) > args.rows:
+            safe_write(f"  ... and {len(found.sets) - max(1, args.rows):,} more set(s); --rows N shows more, --save FILE writes all", out)
+    return 0
+
+
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
+            "status": cmd_status, "duplicates": cmd_duplicates, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

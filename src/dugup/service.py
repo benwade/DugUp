@@ -50,6 +50,14 @@ def _under(path: str, folder: str, fold: Callable[[str], str]) -> bool:
     return path == base or path.startswith(base + "/") or path.startswith(base + "\\")
 
 
+def _place(path: str) -> str:
+    """A path as given, made absolute; a Windows drive path is left as it is wherever this runs."""
+    path = os.path.expanduser(path.strip())
+    if len(path) >= 2 and path[0].isalpha() and path[1] == ":":
+        return path
+    return os.path.abspath(path)
+
+
 def main_place(settings: Settings, home: Optional[str] = None) -> str:
     """The folder or drive whose copy of a file a search shows first: the setting, or on Windows the drive
     the person's own folders are on ("C:\\"). Elsewhere there is no such thing as a drive, so none."""
@@ -381,6 +389,13 @@ class LocalService:
                                       int(counts.get(FileState.DONE.value, 0)), self.store.segment_count())
         return surveying.survey(target, ((e.path, e.size, e.offline) for e in listing.entries),
                                 self.settings.extensions, rates)
+
+    def duplicates(self, drive: str, protected: Sequence[str] = ()):
+        """The same file kept in several places below `drive`, from the content marks in the index (cleanup.Report).
+        Changes nothing. `protected`: folders never proposed, on top of the setting cleanup_protect."""
+        from . import cleanup
+        kept = [p.strip() for p in self.settings.cleanup_protect.split(";") if p.strip()] + [p for p in protected if p.strip()]
+        return cleanup.report(self.store, _place(drive), [_place(p) for p in kept], self.case_insensitive)
 
     def copies(self, path: str, stop: Optional[StopSignal] = None):
         """Folders below `path` that look like copies of each other (copies.Pair, most files first), or a
