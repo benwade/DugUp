@@ -217,7 +217,7 @@ def test_the_service_reads_in_a_worker_by_default_and_ends_it_when_closed(tmp_pa
     (docs / "scan.pdf").write_bytes(build_pdf([PdfPage("born_digital", "pdfword here"), PdfPage("none")]))
     data = tmp_path / "data"
     data.mkdir()
-    service = LocalService(DataLayout(data).ensure())
+    service = LocalService(DataLayout(data).ensure(), Settings(index_readers=1))
     assert isinstance(service.extractor, SandboxedExtractor)
     service.set_root(Root(str(docs)))
     report = service.run_indexing()
@@ -234,3 +234,26 @@ def test_isolation_can_be_switched_off(tmp_path):
     data.mkdir()
     with LocalService(DataLayout(data).ensure(), Settings(isolate_readers=False)) as service:
         assert not isinstance(service.extractor, SandboxedExtractor)
+
+
+def test_several_readers_each_get_a_worker_and_all_are_ended(tmp_path):
+    docs = tmp_path / helpers.AWKWARD_FOLDER
+    docs.mkdir()
+    for i in range(12):
+        (docs / f"{helpers.CAFE} {i}.txt").write_text(f"sideword number{i}", encoding="utf-8")
+    data = tmp_path / "data"
+    data.mkdir()
+    service = LocalService(DataLayout(data).ensure(), Settings(index_readers=4))
+    assert service.index_readers() == 4
+    service.set_root(Root(str(docs)))
+    report = service.run_indexing()
+    assert (report.done, report.failed) == (12, 0) and service.search("sideword").total == 12
+    pids = service.extractor.sandbox.worker_pids()
+    assert len(pids) == 1, "the service's own reader is the first one used"
+    # (on Linux a worker ends with the thread that started it, and is started afresh when next needed)
+    again = service.run_indexing()
+    assert not isinstance(again, Failure) and again.failed == 0 and service.search("sideword").total == 12
+    (docs / "later.txt").write_text("sideword afterwards", encoding="utf-8")
+    assert service.run_indexing().done == 1 and service.search("afterwards").total == 1, "a reader works again in a later run"
+    service.close()
+    wait_gone(service.extractor.sandbox.worker_pids(), "the reader's worker to end when the service closes")

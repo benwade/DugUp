@@ -155,4 +155,6 @@ def test_trouble_with_the_readers_still_pauses_the_run(store):
     for i in range(40):
         side.put(f"f{i:02d}.txt", "alpha")
     report = side.run()
-    assert "in a row" in report.paused and dict(side.store.state_counts()).get("pending", 0) > 0
+    states = dict(side.store.state_counts())
+    assert "in a row" in report.paused and states.get("pending", 0) > 0
+    assert states.get("failed", 0) >= 15, "five for each of the three readers: a cluster of slow files is not trouble yet"

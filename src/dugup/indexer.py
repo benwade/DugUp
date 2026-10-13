@@ -456,7 +456,9 @@ class Indexer:
                     estimate_at = estimate_at * ESTIMATE_STEP if estimate_at * ESTIMATE_STEP < total else 0
                 failed += state is FileState.FAILED
             in_a_row = in_a_row + 1 if self._last_reason in SUSPECT else 0
-            limit = self.settings.reader_failures_in_a_row
+            # Side by side, slow files come in clusters (a folder of large files keeps every reader busy at
+            # once), so "in a row" is counted for each reader: the setting times the number of readers.
+            limit = self.settings.reader_failures_in_a_row * (1 + len(self.extra_extractors))
             if limit and in_a_row >= limit:
                 report.paused = (f"{in_a_row} files in a row crashed their reader or ran out of time (the last one: "
                                  f"{self._last_reason.value.replace('_', ' ')}), which looks like trouble with the "
@@ -472,6 +474,9 @@ class Indexer:
                 answer = after(record, self._keep(record, result, report, patient))
                 if answer is not None:
                     ended.append(answer)
+            if wait:        # the line stays alive while files are slow, and names the one that has taken longest
+                self._tell(Progress("read", root.path, done, max(total, done), failed, self.timer() - started,
+                                    readers.longest()))
 
         def one(record: FileRecord, patient: bool) -> Optional[bool]:
             answer = before(record)
@@ -599,6 +604,9 @@ def _stopped(stop: Optional[StopSignal]) -> bool:
     return stop is not None and stop.is_set()
 
 
+WAIT_TICK = 1.0         # seconds between two progress lines while every reader is busy
+
+
 class _Readers:
     """Several extractors at work side by side. Each reads one file at a time on a thread of its own; what
     they read is handed back to the thread that asked, which is the only one that touches the index."""
@@ -606,7 +614,8 @@ class _Readers:
     def __init__(self, extractors: Sequence[Extractor]) -> None:
         import queue
         from concurrent.futures import ThreadPoolExecutor
-        self._idle = list(extractors)
+        self._idle = list(reversed(extractors))    # taken from the end: the first reader given is used first
+        self._at_work: List[FileRecord] = []       # the files being read now, the longest-running first
         self._count = len(self._idle)
         self._done: "queue.Queue[tuple]" = queue.Queue()
         self._pool = ThreadPoolExecutor(max_workers=self._count, thread_name_prefix="dugup-reader")
@@ -619,6 +628,7 @@ class _Readers:
 
     def start(self, read: Callable[[Extractor], object], record: FileRecord, patient: bool) -> None:
         extractor = self._idle.pop()
+        self._at_work.append(record)
 
         def work() -> None:
             try:
@@ -630,19 +640,23 @@ class _Readers:
         self._pool.submit(work)
 
     def finished(self, wait: bool) -> List[tuple]:
-        """(record, patient, result) for every read that has ended; with `wait`, not before one has."""
+        """(record, patient, result) for every read that has ended. With `wait`, up to a moment is spent
+        waiting for the first; an empty answer then means every reader is still at work."""
         import queue
         out = []
         while self.busy() or not self._done.empty():
             try:
-                extractor, record, patient, result = self._done.get(timeout=0.2) if wait and not out else self._done.get_nowait()
+                extractor, record, patient, result = self._done.get(timeout=WAIT_TICK) if wait and not out else self._done.get_nowait()
             except queue.Empty:
-                if wait and not out and self.busy():
-                    continue
-                break
+                break                          # nothing yet: the caller says so and asks again
             self._idle.append(extractor)
+            self._at_work = [r for r in self._at_work if r is not record]
             out.append((record, patient, result))
         return out
+
+    def longest(self) -> str:
+        """The file that has been in a reader the longest, for the progress line."""
+        return self._at_work[0].path if self._at_work else ""
 
     def close(self) -> None:
         self._pool.shutdown(wait=True)

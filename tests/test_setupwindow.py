@@ -354,7 +354,7 @@ def test_the_folders_page_lists_places_with_reasons_and_explains_the_cost(stage)
     assert s.plan.chosen_places() == [added], "a cancelled folder box adds nothing"
     s.wizard.at = len(s.wizard.sequence()) - 1
     s.wizard.show()
-    assert "Folders to index\n  /data/Archive" in s.wizard.summary_text and "looks through this folder (opening no file)" in s.wizard.summary_text
+    assert f"Folders to index\n  {added}" in s.wizard.summary_text and "looks through this folder (opening no file)" in s.wizard.summary_text
 
 
 def test_finishing_with_no_folder_says_what_to_do_next(stage):
