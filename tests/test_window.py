@@ -160,8 +160,9 @@ class Bench:
         self.asked = []
         self.answer = None
         self.folder_to_add = str(self.docs)
+        self.told = []
         self.app = w.App(self.root, self.service, self.desktop, ask=self._ask, choose_folder=lambda: self.folder_to_add,
-                         pick=pick, setup=setup)
+                         pick=pick, setup=setup, tell=lambda title, text: self.told.append((title, text)))
         self.copied = []
         self.app.copy_text = self.copied.append     # the tests leave the real clipboard alone
 

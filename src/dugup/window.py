@@ -157,7 +157,8 @@ class App:
     """`root` is a tkinter root (or Toplevel). `service` is a LocalService. The rest can be replaced in tests."""
 
     def __init__(self, root, service, desktop: Optional[Desktop] = None, ask=None, choose_folder=None,
-                 pick: bool = True, setup: bool = True) -> None:
+                 pick: bool = True, setup: bool = True, tell=None) -> None:
+        self.waiting = None           # the small window shown while a folder is looked through
         self.pick = pick              # show the folder picker when a folder is added (False: add it whole, at once)
         self.setup_on_first_start = setup    # open the setup wizard by itself when there is no folder yet
         self.wizard = None            # the setup wizard or Settings window while it is open
@@ -173,6 +174,8 @@ class App:
         self.service = service
         self.desktop = desktop or Desktop()
         self.ask = ask or (lambda title, text: messagebox.askyesnocancel(title, text, parent=root))
+        # something a person must not miss is said in a box of its own, not in a line at the foot of the window
+        self.tell = tell or (lambda title, text: messagebox.showinfo(title, text, parent=root))
         self.choose_folder = choose_folder or (lambda: filedialog.askdirectory(
             parent=root, mustexist=True, title="Choose a folder for DugUp to index", initialdir=os.path.expanduser("~")))
         self.place_queue: List[str] = []     # folders chosen in the setup wizard, each still to be looked through
@@ -831,6 +834,10 @@ class App:
             events.put((what, report))
 
         self.job, self.job_path, self.job_started = what, path, time.monotonic()
+        if what == "plan":
+            from .waitwindow import WaitWindow
+            self._close_waiting()
+            self.waiting = WaitWindow(self.root, "Looking through a folder", self.looking_text(), self.stop_work)
         self.worker = threading.Thread(target=work, name=f"dugup-window-{what}", daemon=True)
         for button in self.run_buttons:
             button.configure(state="disabled")
@@ -845,6 +852,11 @@ class App:
         if self.busy():
             self.stop.set()
             self.progress_text.set("Stopping. What is not finished stays queued.")
+
+    def _close_waiting(self) -> None:
+        if self.waiting is not None:
+            self.waiting.close()
+            self.waiting = None
 
     def looking_text(self) -> str:
         """What to say while a folder is being looked through for the picker: how far, and for how long."""
@@ -864,7 +876,10 @@ class App:
         if self.closed:
             return
         if self.busy() and getattr(self, "job", "") == "plan":
-            self.progress_text.set(self.looking_text())
+            text = self.looking_text()
+            self.progress_text.set(text)
+            if self.waiting is not None:
+                self.waiting.say(text)
         self.drain()
         self._poll_id = self.root.after(POLL_MS, self._poll)
 
@@ -899,6 +914,8 @@ class App:
         self.stop_button.configure(state="disabled")
         self.bar.configure(value=0.0)
         out = io.StringIO()
+        if what == "plan":
+            self._close_waiting()
         if self.waiting_fast and what in ("index", "ocr", "fast"):
             # a folder was asked for "now": the run that was going has stopped, so that one starts
             folder, self.waiting_fast = self.waiting_fast, ""
@@ -914,6 +931,8 @@ class App:
                 self.progress_text.set("Stopped." if stopped else "That folder could not be looked through.")
                 if not stopped:
                     self.say(f"That folder could not be looked through: {report.detail}")
+                    self.tell("A folder could not be looked through", f"{self.job_path}\n\n{report.detail}"
+                              + (f"\n\n{len(self.place_queue)} more folder(s) will be looked through next." if self.place_queue else ""))
                 if stopped:
                     self.place_queue = []
                 elif self.place_queue:
@@ -991,6 +1010,7 @@ class App:
             return
         self.closed = True
         self.stop.set()
+        self._close_waiting()
         if self.picker is not None:
             self.picker.close()
         if self.wizard is not None:

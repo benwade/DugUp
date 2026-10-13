@@ -232,8 +232,40 @@ def test_a_look_through_a_folder_says_how_far_it_has_got(bench, monkeypatch):
     text = bench.app.looking_text()
     assert "48,213 file(s) seen" in text and "no file is opened" in text and "A whole drive can take a few minutes" in text
     assert str(bench.docs) in text and "The picker opens when this is done" in text
+    waiting = bench.app.waiting
+    assert waiting is not None and not waiting.closed, "a wait is shown in a window of its own, not only in a line"
+    assert waiting.window.title() == "Looking through a folder" and str(bench.docs) in waiting.text.get()
+    bench.app._poll()
+    assert "48,213 file(s) seen" in waiting.text.get(), "and it is kept up to date"
     monkeypatch.setattr(type(bench.service), "looking_at", lambda self: {"files": 48213, "sorting": True})
     assert "Sorting them into folders" in bench.app.looking_text()
     release.set()
     bench.finish_run()
+    assert waiting.closed and bench.app.waiting is None, "it goes away when the look is done"
     assert bench.app.picker is not None and not bench.app.picker.closed
+
+
+def test_stop_in_the_waiting_window_stops_the_look_and_a_failure_is_said_in_a_box(bench, monkeypatch):
+    import threading
+    started = threading.Event()
+    real = type(bench.service).plan_folder
+
+    def held(self, path, stop=None):
+        started.set()
+        assert stop.wait(30)                    # the look goes on until it is asked to stop
+        return real(self, path, stop)
+
+    monkeypatch.setattr(type(bench.service), "plan_folder", held)
+    bench.app.add_folder()
+    assert started.wait(30)
+    bench.app.waiting.stop()
+    assert bench.app.stop.is_set() and bench.app.waiting.text.get() == "Stopping ..."
+    bench.finish_run()
+    assert bench.app.waiting is None and bench.app.picker is None and bench.told == [], "stopping is not a failure"
+
+    monkeypatch.setattr(type(bench.service), "plan_folder", real)
+    bench.folder_to_add = str(bench.docs / "missing")
+    bench.app.add_folder()
+    bench.finish_run()
+    assert len(bench.told) == 1 and bench.told[0][0] == "A folder could not be looked through"
+    assert str(bench.docs / "missing") in bench.told[0][1], "what must not be missed is said in a box of its own"
