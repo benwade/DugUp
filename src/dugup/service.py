@@ -246,6 +246,25 @@ class LocalService:
     def list_roots(self) -> Sequence[Root]:
         return list(self.store.list_roots())
 
+    def _lister(self):
+        """A way to list a folder for looking only. The index wants each file's id, which on Windows costs an
+        extra question per file (a whole drive took four times as long with them); a look does not."""
+        from .dirscan import DirectoryScan
+        source = self.source
+        if isinstance(source, DirectoryScan) and source.collect_ids:
+            source = DirectoryScan(collect_ids=False, scandir=source._scandir, stat=source._stat)
+        self._looking = source
+        return source
+
+    def looking_at(self) -> Mapping[str, object]:
+        """How far a look through a folder has got: {"files": seen so far, "sorting": True once the listing is
+        complete and is being sorted into folders}. Safe to ask from the window's thread while the look runs."""
+        now = getattr(self, "_looking", None)
+        if isinstance(now, dict):
+            return now
+        stats = getattr(now, "last_stats", None) or {}
+        return {"files": int(stats.get("files", 0)), "sorting": False}
+
     def plan_folder(self, path: str, stop: Optional[StopSignal] = None) -> "Mapping[str, object] | Failure":
         """Look through a folder (no file is opened, nothing is changed) and return the picker's material:
         {"plan": picker.Plan, "rates": survey.Rates, "known": is it already indexed, "fresh": a function that
@@ -272,9 +291,10 @@ class LocalService:
         own_data = (str(self.layout.root),)
         base = target.rstrip("/\\")
         extra = tuple(f[len(base) + 1:].replace("\\", "/") for f in own_data if f.startswith(base + "/") or f.startswith(base + "\\"))
-        listing = self.source.scan(target, ScanRules((), extra), stop)
+        listing = self._lister().scan(target, ScanRules((), extra), stop)
         if isinstance(listing, Failure):
             return listing
+        self._looking = {"files": len(listing.entries), "sorting": True}
         tree = picker.build(target, ((e.path, e.size, e.offline) for e in listing.entries), self.settings.extensions)
         settings = self.settings
         plan = picker.plan_from_root(tree, known) if known else picker.plan_from_guess(tree, settings)
@@ -343,7 +363,7 @@ class LocalService:
         already indexed are NOT applied: the point is to see everything, skipped or not."""
         from . import survey as surveying
         target = os.path.abspath(os.path.expanduser(path))
-        listing = self.source.scan(target, ScanRules(), stop)
+        listing = self._lister().scan(target, ScanRules(), stop)
         if isinstance(listing, Failure):
             return listing
         counts = dict(self.store.state_counts())

@@ -213,3 +213,27 @@ def test_the_first_row_is_the_folder_itself_and_sets_everything_inside_that_has_
     picker.apply()
     root = bench.service.list_roots()[0]
     assert root.levels == (("", "words+meaning+alike"),) and "/Trash" not in root.exclude
+
+
+def test_a_look_through_a_folder_says_how_far_it_has_got(bench, monkeypatch):
+    import threading
+    started, release = threading.Event(), threading.Event()
+    real = type(bench.service).plan_folder
+
+    def held(self, path, stop=None):
+        started.set()
+        assert release.wait(30)                 # the look is held until the test has read the progress line
+        return real(self, path, stop)
+
+    monkeypatch.setattr(type(bench.service), "plan_folder", held)
+    monkeypatch.setattr(type(bench.service), "looking_at", lambda self: {"files": 48213, "sorting": False})
+    bench.app.add_folder()
+    assert started.wait(30)
+    text = bench.app.looking_text()
+    assert "48,213 file(s) seen" in text and "no file is opened" in text and "A whole drive can take a few minutes" in text
+    assert str(bench.docs) in text and "The picker opens when this is done" in text
+    monkeypatch.setattr(type(bench.service), "looking_at", lambda self: {"files": 48213, "sorting": True})
+    assert "Sorting them into folders" in bench.app.looking_text()
+    release.set()
+    bench.finish_run()
+    assert bench.app.picker is not None and not bench.app.picker.closed

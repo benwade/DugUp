@@ -277,3 +277,29 @@ def test_the_estimate_counts_each_choice(tree):
     assert plan.cost(rates, "Pics") == names + pics.to_ocr * rates.vector
     plan.set_option("Pics", "ocr", True)
     assert plan.cost(rates, "Pics") == names + pics.to_ocr * (rates.vector + rates.picture) + pics.readable * rates.read
+
+
+def test_a_whole_drive_keeps_its_slash_and_is_sorted_in_one_pass():
+    """Seen on Windows: "G:" without the slash means "wherever I last was on G:", which is not the drive."""
+    files = [("G:\\Docs\\a.pdf", 1, False), ("G:\\Docs\\Old\\b.pdf", 1, False), ("G:\\Tools\\.git\\x", 1, False),
+             ("G:\\Tools\\.git\\y", 1, False), ("G:\\top.txt", 1, False)]
+    tree = build("G:\\", files)
+    assert tree.root == "G:\\" and set(tree.top.children) == {"docs", "tools"} and tree.top.own.files == 1
+    assert tree.tool_files == 2 and tree.tool_patterns == ("Tools/.git",) or tree.tool_patterns == (".git",)
+    plan = Plan(tree)
+    plan.set_ticked("Docs/Old", False)
+    root = plan.to_root()
+    assert root.path == "G:\\" and "/Docs/Old" in root.exclude
+    assert level_for(root, "G:\\Docs\\a.pdf") == LEVEL_MEANING
+    assert build("D:\\Stuff\\", [("D:\\Stuff\\a.pdf", 1, False)]).root == "D:\\Stuff", "an ordinary folder is named without the slash"
+
+
+def test_looking_does_not_ask_for_file_ids_and_reports_how_far_it_is(world):
+    from dugup.dirscan import DirectoryScan
+    assert isinstance(world.source, DirectoryScan) and world.source.collect_ids, "the index's own scanner does ask"
+    asked = []
+    world.source._stat = lambda *a, **k: asked.append(a) or __import__("os").stat(*a, **k)
+    material = world.plan_folder(str(world.docs))
+    assert asked == [], "a look asks nothing extra about each file (on Windows that made a drive four times slower)"
+    assert world.looking_at() == {"files": 6, "sorting": True}
+    assert material["plan"].tree.top.total.files == 6

@@ -24,6 +24,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .cli import (format_bytes, format_date, format_seconds, megabytes, print_compacted, print_ocr_report, print_report,
@@ -163,6 +164,7 @@ class App:
         self.picker = None            # the picker's window while it is open
         self.carried = ""             # the report of an index update that went straight on into OCR
         self.waiting_fast = ""        # a folder to read fast as soon as the run now going has stopped
+        self.job, self.job_path, self.job_started = "", "", 0.0    # what the background run is doing
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
 
@@ -828,6 +830,7 @@ class App:
                 report = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
             events.put((what, report))
 
+        self.job, self.job_path, self.job_started = what, path, time.monotonic()
         self.worker = threading.Thread(target=work, name=f"dugup-window-{what}", daemon=True)
         for button in self.run_buttons:
             button.configure(state="disabled")
@@ -843,9 +846,25 @@ class App:
             self.stop.set()
             self.progress_text.set("Stopping. What is not finished stays queued.")
 
+    def looking_text(self) -> str:
+        """What to say while a folder is being looked through for the picker: how far, and for how long."""
+        try:
+            seen = self.service.looking_at()
+        except Exception:
+            seen = {}
+        took = format_seconds(max(0.0, time.monotonic() - self.job_started))
+        files = int(seen.get("files", 0) or 0)
+        if seen.get("sorting"):
+            return (f"Looked through {self.job_path}: {files:,} file(s) found. Sorting them into folders ({took} so far) ... "
+                    "The picker opens when this is done.")
+        return (f"Looking through {self.job_path} (no file is opened): {files:,} file(s) seen, {took} so far. "
+                "A whole drive can take a few minutes. The picker opens when this is done.")
+
     def _poll(self) -> None:
         if self.closed:
             return
+        if self.busy() and getattr(self, "job", "") == "plan":
+            self.progress_text.set(self.looking_text())
         self.drain()
         self._poll_id = self.root.after(POLL_MS, self._poll)
 

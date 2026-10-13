@@ -203,6 +203,19 @@ def safe_folders(root: str, files: Iterable[Tuple[str, int]],
     return [key for key, _ in _walk(everything, lambda key: _judge_safe(key, everything[key]))]
 
 
+def safe_skips(root: str, files: Iterable[Tuple[str, int]],
+               extensions: Optional[Mapping[str, FileKind]] = None) -> Tuple[List[str], List[str]]:
+    """(the folders that are safe to skip, the skip rules that leave them all out), from one pass over the
+    listing. The rules are what `suggest_excludes` would offer in its safe group; this is the quick way to
+    them for a listing as large as a whole drive."""
+    everything = _tree(root, list(files), extensions)
+    found = _walk(everything, lambda key: _judge_safe(key, everything[key]))
+    spelling: Dict[str, str] = {}
+    for _, (pattern, _group, _reason) in found:
+        spelling.setdefault(pattern.casefold(), pattern)
+    return [key for key, _ in found], list(spelling.values())
+
+
 def suggest_excludes(root: str, files: Iterable[Tuple[str, int]],
                      extensions: Optional[Mapping[str, FileKind]] = None) -> List[Suggestion]:
     """Candidates for --exclude, the safest and largest first. `files` is (path, size) for every file below root.

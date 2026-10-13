@@ -24,7 +24,7 @@ from .filesource import ScanRules, excluded
 from .shapes import (LEVEL_MEANING, LEVEL_NAMES, LEVEL_OCR, LEVEL_WORDS, LEVELS, OPTION_ALIKE, OPTION_MEANING, OPTION_OCR,
                      OPTION_WORDS, OPTIONS, POLICY_NAMES_ONLY, FileKind, Root, level_of, level_words, normalize_level,
                      options_of)
-from .suggest import SAFE, suggest_excludes, safe_folders
+from .suggest import safe_skips
 from .survey import CODE, DOCUMENTS, MEDIA, OTHER, PICTURES, TEXT, Rates, Row, group_of
 
 LEVEL_LABELS = {LEVEL_NAMES: "Names only", LEVEL_WORDS: "Words", LEVEL_OCR: "Words and scans", LEVEL_MEANING: "Everything"}
@@ -89,8 +89,9 @@ def build(root: str, files: Iterable[Tuple[str, int, bool]],
     files = list(files)
     base = root.rstrip("/\\")
     pairs = [(path, size) for path, size, _ in files]
-    safe = {key.casefold() for key in safe_folders(root, pairs, extensions)}
-    patterns = tuple(s.pattern for s in suggest_excludes(root, pairs, extensions) if s.group == SAFE)
+    keys, rules = safe_skips(root, pairs, extensions)
+    safe = {key.casefold() for key in keys}
+    patterns = tuple(rules)
     top = Node(base.replace("\\", "/").rsplit("/", 1)[-1] or base, "")
     tool_files = 0
     for path, size, offline in files:
@@ -111,7 +112,8 @@ def build(root: str, files: Iterable[Tuple[str, int, bool]],
         for above in chain:
             _add(above.total, group, size, offline, in_tool)
         _add(node.own, group, size, offline, in_tool)
-    return Tree(base, top, patterns, tool_files)
+    # A drive is named with its slash ("G:\\"): "G:" alone means "wherever I last was on G:", which is not a place.
+    return Tree(root if base.endswith(":") else base, top, patterns, tool_files)
 
 
 @dataclass(frozen=True)
