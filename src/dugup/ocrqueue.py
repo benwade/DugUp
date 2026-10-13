@@ -72,6 +72,7 @@ class OcrReport:
     copied: int = 0                # pages of files that hold the same content as another: read once, used for each
     held_back: int = 0             # pages in folders whose level stops short of OCR; not looked at
     readers: int = 1               # how many readers worked side by side
+    chose_fast: int = 0            # above 0: the run went fast by itself because this many pages waited
     device: str = ""               # what the pages were read on, when the reader says ("processor", "graphics card (...)")
     gpu_asked: bool = False        # a graphics card was asked for (it may not have been there to use)
     stopped: bool = False

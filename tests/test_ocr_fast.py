@@ -263,3 +263,31 @@ def test_the_doctor_says_whether_a_card_can_be_used():
 def _doctor(env):
     from dugup import doctor
     return [(check.name, check.status, check.detail) for check in doctor.run_checks(env)]
+
+
+def test_a_long_wait_goes_fast_by_itself_and_a_short_one_or_gentle_does_not(sh):
+    """Ben's night: the run after `dugup index` read one page at a time and projected 17 hours."""
+    sh.ready()
+    assert sh.run("config", "set", "ocr_fast_pages", "4")[0] == 0
+    code, text = sh.run("ocr")
+    assert code == 0 and "OCR read 5 of 5 waiting page(s)" in text, text
+    assert "Several readers were used because 5 page(s) waited" in text and "--gentle" in text
+    assert sh.extra and sh.ocr.calls == [], "the fast run's readers did the work (as many as this machine allows)"
+    sub = str(sh.docs / "Sub")
+    code, text = sh.run("ocr", "--folder", sub, "--again")
+    assert code == 0 and "Several readers" not in text and len(sh.ocr.calls) == 2, "two pages: below the mark, gentle"
+    sh.extra = []
+    assert sh.run("config", "set", "ocr_fast_pages", "1")[0] == 0
+    code, text = sh.run("ocr", "--folder", sub, "--again", "--gentle")
+    assert code == 0 and "Several readers" not in text and sh.extra == [] and len(sh.ocr.calls) == 4, "told gentle"
+    assert sh.run("config", "set", "ocr_fast_pages", "0")[0] == 0
+    code, text = sh.run("ocr", "--folder", sub, "--again")
+    assert code == 0 and "Several readers" not in text and sh.extra == [], "0: never by itself"
+
+
+def test_the_run_after_indexing_says_it_goes_fast(sh):
+    assert sh.run("config", "set", "ocr_fast_pages", "3")[0] == 0
+    assert sh.run("roots", "add", str(sh.docs))[0] == 0
+    code, text = sh.run("index")
+    assert code == 0 and "Now reading 5 picture(s)" in text and "Fast, with several readers, since 5 pages is a lot" in text
+    assert "Several readers were used" in text and sh.extra and sh.ocr.calls == []

@@ -238,6 +238,8 @@ def build_parser() -> argparse.ArgumentParser:
     ocr.add_argument("--fast", action="store_true",
                      help="several readers side by side; the computer is busier while it runs")
     ocr.add_argument("--readers", type=int, default=0, metavar="N", help="fast, with exactly N readers")
+    ocr.add_argument("--gentle", action="store_true",
+                     help="one page at a time, even when many wait (the usual run goes fast from ocr_fast_pages pages)")
     ocr.add_argument("--gpu", action="store_true", default=None,
                      help="read on the graphics card, when the OCR runtime can use one (see dugup doctor)")
     ocr.add_argument("--no-gpu", dest="gpu", action="store_false", help="read on the processor even if config.toml says ocr_gpu = true")
@@ -710,7 +712,10 @@ def cmd_index(args, env, out, environ, stop: Optional[threading.Event] = None, i
             if not waiting:
                 return 0
             # the same run goes on to the pictures and scans the folders ask for; Ctrl+C stops it as before
-            safe_write(f"Now reading {waiting:,} picture(s) and scanned page(s) (OCR). Ctrl+C stops; what is done is kept "
+            threshold = service.settings.ocr_fast_pages
+            way = (f" Fast, with several readers, since {waiting:,} pages is a lot: the computer will be busier until this ends."
+                   if threshold > 0 and waiting >= threshold else "")
+            safe_write(f"Now reading {waiting:,} picture(s) and scanned page(s) (OCR).{way} Ctrl+C stops; what is done is kept "
                        "and `dugup ocr` continues later. (`dugup index --no-ocr` leaves this step out.)", out)
             pages = service.run_ocr(stop, printer, roots)
             printer.finish()
@@ -759,6 +764,9 @@ def print_ocr_report(report, out: TextIO) -> None:
                f"({report.rate * 60:.1f} pages/min): {report.with_words:,} with words, "
                f"{report.read - report.with_words:,} with none, {report.failed:,} failed"
                + (f" [{report.readers} readers side by side]" if getattr(report, "readers", 1) > 1 else ""), out)
+    if getattr(report, "chose_fast", 0):
+        safe_write(f"Several readers were used because {report.chose_fast:,} page(s) waited (the setting ocr_fast_pages); "
+                   "`dugup ocr --gentle` reads one page at a time.", out)
     if getattr(report, "copied", 0):
         safe_write(f"{report.copied:,} of those page(s) belong to files that hold the same content as another file: "
                    "each such page was read once and the result used for every copy.", out)
@@ -826,7 +834,8 @@ def cmd_ocr(args, env, out, environ, stop: Optional[threading.Event] = None, ins
                 safe_write(f"Fast: {count} reader(s) side by side" + (", sharing the graphics card" if on_card else "")
                            + ". The computer will be busier until this ends.", out)
             report = service.run_ocr(stop, printer, roots, budget, args.retry_failed, args.reread_old,
-                                     folder=args.folder, fast=bool(args.fast or args.readers), again=args.again,
+                                     folder=args.folder, fast=False if args.gentle else (True if (args.fast or args.readers) else None),
+                                     again=args.again,
                                      gpu=args.gpu)
             printer.finish()
             if isinstance(report, Failure):

@@ -151,7 +151,10 @@ large PDF, or one that must first come down from a cloud drive) does not hold up
 worked out from the processor cores and free memory, at most 8; `index_readers` in `config.toml` sets it
 (1 reads one file at a time). The pause for "files in a row that crashed or ran out of time" counts per reader.
 
-OCR normally reads one page at a time so the computer stays pleasant to use. `dugup ocr --fast` runs
+OCR reads one page at a time when little waits, so the computer stays pleasant to use, and goes fast by
+itself (several readers) once at least `ocr_fast_pages` pages wait (200; 0 means never by itself). That holds
+for the run that follows `dugup index` and for the plain `dugup ocr`; `dugup ocr --gentle` reads one page at a
+time whatever waits. `dugup ocr --fast` runs
 several readers side by side (about half the processor cores, limited by free memory; `--readers N` sets the
 number), and `--folder "D:\Some Folder\Scans"` reads just one folder. `--again` with `--folder` reads that
 folder afresh. In the window, "Read a folder now, fast..." does the same and takes over from a run that is

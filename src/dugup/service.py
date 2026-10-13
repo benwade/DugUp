@@ -627,19 +627,20 @@ class LocalService:
     def run_ocr(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
                 roots: Optional[Sequence[str]] = None, budget_seconds: Optional[float] = None,
                 retry_failed: bool = False, reread_old: bool = False, folder: Optional[str] = None,
-                fast: bool = False, again: bool = False, gpu: Optional[bool] = None) -> "OcrReport | Failure":
+                fast: Optional[bool] = None, again: bool = False, gpu: Optional[bool] = None) -> "OcrReport | Failure":
         """Read the pages and pictures that wait for OCR, in the calling thread, until done or stopped.
         It writes to the index, so it takes the same lock as an indexing run: one or the other, never both.
 
         `folder`: only what lies in this folder (an indexed folder or any folder inside one).
-        `fast`: several readers side by side (see fast_readers); the machine is busier while it runs.
+        `fast`: several readers side by side (see fast_readers); the machine is busier while it runs. None: fast
+        when at least `ocr_fast_pages` pages wait (and that is above 0), else gentle.
         `again`: with `folder`, read its pictures and scans afresh even where that was done before.
         `gpu`: read on a graphics card (None: as the setting ocr_gpu says). Where the OCR runtime cannot use
         one, the processor is used and the report says so."""
         return self._tidy(self._run_ocr(stop, progress, roots, budget_seconds, retry_failed, reread_old, folder, fast,
                                         again, gpu))
 
-    def _run_ocr(self, stop, progress, roots, budget_seconds, retry_failed, reread_old, folder=None, fast=False,
+    def _run_ocr(self, stop, progress, roots, budget_seconds, retry_failed, reread_old, folder=None, fast=None,
                  again=False, gpu=None) -> "OcrReport | Failure":
         gpu = self.settings.ocr_gpu if gpu is None else bool(gpu)
         if folder is not None:
@@ -677,6 +678,13 @@ class LocalService:
                         owner = next((r for r in all_roots if _under(file_path, r.path, self._fold)), None)
                         return owner is None or level_reaches(level_for(owner, file_path, self.case_insensitive), LEVEL_OCR)
 
+                    chose_fast = 0
+                    if fast is None:     # not told: a long wait deserves the fast way, a short one the gentle
+                        threshold = self.settings.ocr_fast_pages
+                        waiting = sum(1 for t in store.ocr_queue(folder, self.case_insensitive) if asks_for_ocr(t.path)
+                                      and any(_under(t.path, r, self._fold) for r in here)) if threshold > 0 else 0
+                        fast = threshold > 0 and waiting >= threshold
+                        chose_fast = waiting if fast else 0
                     # in fast mode every reader is one of the limited ones: the usual reader lets its engine take
                     # every core, and one such reader beside the others would crowd them all (seen on Windows)
                     # On a graphics card a few readers are enough: the card does the heavy part one page after another.
@@ -691,6 +699,7 @@ class LocalService:
                                            extra_backends=extra)
                         report = runner.run(stop, here, budget_seconds, retry_failed, reread_old)
                         report.gpu_asked = gpu
+                        report.chose_fast = chose_fast
                         report.device = next((d for d in (getattr(r, "last_device", "") for r in [lead] + extra) if d), "")
                     finally:
                         for reader in extra + ([lead] if lead is not self.ocr_backend else []):

@@ -88,6 +88,7 @@ class Settings:
     # -- file kinds: extension (no dot, lower case) -> kind name
     extensions: Mapping[str, FileKind] = field(default_factory=lambda: dict(DEFAULT_EXTENSIONS))
 
+    ocr_fast_pages: int = 200              # a run not told fast or gentle goes fast when at least this many pages wait; 0: never
     ocr_fast_readers: int = 0              # readers side by side in fast mode; 0 works it out from cores and free memory
     ocr_reader_threads: int = 2            # processor threads each of them may use
     ocr_reader_memory_mb: int = 1500       # memory allowed for when counting how many fit [a guess; the engine is hungry]

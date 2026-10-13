@@ -183,6 +183,12 @@ def _entries() -> Tuple[Entry, ...]:
           why="Side by side, one slow file (a large PDF, or one that must first come down from a cloud drive) does not "
               "hold up the rest. More readers make the computer busier while the index is updated.",
           everyday=True, low=0, high=32, unit="readers", suggest=_index_readers, zero="worked out by DugUp"),
+        E("ocr_fast_pages", "speed", "Go fast from this many pages",
+          "When pictures and scans are read without saying fast or gentle (after an index update, or the plain command), "
+          "the run goes fast once at least this many pages wait. 0 means never by itself.",
+          why="A gentle run reads one page at a time and keeps the computer pleasant, but a drive's worth of pages would "
+              "take it all night. Fast is several times quicker and is what a long wait deserves.",
+          everyday=True, low=0, high=1_000_000, unit="pages", zero="never by itself"),
         E("ocr_fast_readers", "speed", "Readers in a fast run",
           "How many picture readers work side by side in a fast run. 0 lets DugUp work it out.",
           why="More readers finish sooner and make the computer busier while they run. The usual, gentle run uses one.",
