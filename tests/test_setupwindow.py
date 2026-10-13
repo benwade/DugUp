@@ -1,5 +1,6 @@
 """The setup wizard's window (setupwindow.py) and its place in the main window."""
 
+import os
 import gc
 import threading
 
@@ -346,10 +347,11 @@ def test_the_folders_page_lists_places_with_reasons_and_explains_the_cost(stage)
     assert "No folder is ticked" in s.wizard.message.get()
     s.folder_to_add = "/data/Archive"
     s.wizard.add_place()
-    assert s.plan.chosen_places() == ["/data/Archive"] and s.wizard.place_boxes["/data/Archive"].get() is True
+    added = os.path.normpath("/data/Archive")          # the path is put in this system's own form
+    assert s.plan.chosen_places() == [added] and s.wizard.place_boxes[added].get() is True
     s.folder_to_add = ""
     s.wizard.add_place()
-    assert s.plan.chosen_places() == ["/data/Archive"], "a cancelled folder box adds nothing"
+    assert s.plan.chosen_places() == [added], "a cancelled folder box adds nothing"
     s.wizard.at = len(s.wizard.sequence()) - 1
     s.wizard.show()
     assert "Folders to index\n  /data/Archive" in s.wizard.summary_text and "looks through this folder (opening no file)" in s.wizard.summary_text
