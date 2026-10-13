@@ -66,6 +66,7 @@ class Tree:
     top: Node
     tool_patterns: Tuple[str, ...]             # skip rules that leave out all tool data found
     tool_files: int
+    copies: Tuple = ()                         # copies.Pair: folders that look like copies of each other
 
 
 def _add(row: Row, group: str, size: int, offline: bool, tool: bool) -> None:
@@ -113,7 +114,21 @@ def build(root: str, files: Iterable[Tuple[str, int, bool]],
             _add(above.total, group, size, offline, in_tool)
         _add(node.own, group, size, offline, in_tool)
     # A drive is named with its slash ("G:\\"): "G:" alone means "wherever I last was on G:", which is not a place.
-    return Tree(root if base.endswith(":") else base, top, patterns, tool_files)
+    from . import copies
+    alike = copies.find((path[len(base) + 1:].replace("\\", "/"), size) for path, size in pairs)
+    alike = tuple(p for p in alike if not _in_tool(top, p.first) and not _in_tool(top, p.second))
+    return Tree(root if base.endswith(":") else base, top, patterns, tool_files, alike)
+
+
+def _in_tool(top: Node, rel: str) -> bool:
+    node = top
+    for part in rel.split("/"):
+        node = node.children.get(part.casefold())
+        if node is None:
+            return False
+        if node.tool:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -167,6 +182,7 @@ class Plan:
         self.unticked: Dict[str, str] = {}     # folded rel -> rel
         self.levels: Dict[str, Tuple[str, str]] = {}   # folded rel -> (rel, level)
         self.reasons: Dict[str, str] = {}      # folded rel -> why it started the way it did
+        self.copies: List[tuple] = []          # (copies.Pair, the one left out or ""): what the guess found
         self._nodes = {node.rel.casefold(): node for node in tree.top.walk()}
 
     # -- reading
@@ -334,6 +350,24 @@ def plan_from_guess(tree: Tree, settings=None) -> Plan:
             plan.set_ticked(child.rel, False)
         else:
             plan.set_level(child.rel, made.level)
+    from . import copies
+    for pair in tree.copies:
+        if not (plan.ticked(pair.first) and plan.ticked(pair.second)):
+            continue                                   # one of the two is left out already
+        about = f"about {pair.share:.0%} of the same file names and sizes"
+        backup = copies.the_copy(pair)
+        if backup:
+            other = pair.second if backup == pair.first else pair.first
+            plan.set_ticked(backup, False)
+            plan.reasons[backup.casefold()] = (f"looks like a backup of \"{other}\" ({about}), so it is left out; "
+                                               "tick it if you want both")
+            before = plan.reasons.get(other.casefold(), "")
+            plan.reasons[other.casefold()] = (before + "; " if before else "") + f"\"{backup}\" looks like a backup of this and is left out"
+        else:
+            for one, two in ((pair.first, pair.second), (pair.second, pair.first)):
+                plan.reasons[one.casefold()] = (f"looks like a copy of \"{two}\" ({about}); both are included, "
+                                                "untick one if you do not need both")
+        plan.copies.append((pair, backup))
     return plan
 
 

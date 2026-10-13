@@ -282,3 +282,17 @@ def test_a_folder_that_is_not_included_shows_everything_inside_it_as_not_include
     assert "A folder above this one is not included" in picker.message.get() and row(picker, "Letters/2019")["tick"] == OUT
     picker.toggle("Letters")
     assert row(picker, "Letters")["tick"] == IN and row(picker, "Letters/2019")["tick"] == IN
+
+
+def test_a_folder_that_looks_like_a_backup_is_left_out_shown_and_said(bench):
+    for folder in ("Stuff", "Keep/Backup/Stuff"):
+        (bench.docs / folder).mkdir(parents=True)
+        for i in range(25):
+            (bench.docs / folder / f"note{i}.txt").write_text("x" * (i + 1), encoding="utf-8")
+    picker = open_picker(bench)
+    assert picker.tree.exists("n:Keep/Backup/Stuff"), "the row is brought into view without being asked for"
+    assert row(picker, "Keep/Backup/Stuff")["tick"] == OUT and 'looks like a backup of "Stuff"' in row(picker, "Keep/Backup/Stuff")["why"]
+    assert row(picker, "Stuff")["tick"] == IN and "looks like a backup of this" in row(picker, "Stuff")["why"]
+    assert "1 folder(s) look like copies" in picker.message.get() and "1 named like a backup are left out" in picker.message.get()
+    picker.toggle("Keep/Backup/Stuff")
+    assert row(picker, "Keep/Backup/Stuff")["tick"] == IN, "and it can be put back"

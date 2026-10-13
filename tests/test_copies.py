@@ -1,0 +1,42 @@
+"""Folders that look like copies of other folders, from names and sizes alone."""
+
+from dugup import copies, picker
+
+
+def files(folder, count, start=0, size=1000):
+    return [(f"{folder}/sub{i % 3}/file{i}.txt", size + i) for i in range(start, start + count)]
+
+
+def test_names_that_say_backup_and_names_that_do_not():
+    for name in ("Backup", "backups", "docs_bak", "Photos - Copy", "Copy of Taxes", "Taxes copy", "Work (copy)", "My Backup 2021", "Letters - Copy (2)"):
+        assert copies.backup_name(name), name
+    for name in ("Old", "Archive", "Bakery", "Copywriting", "Photocopy shop", "Backupper", "Documents"):
+        assert not copies.backup_name(name), name
+
+
+def test_a_folder_with_the_same_names_and_sizes_is_found_once_at_the_top():
+    found = copies.find(files("Docs", 60) + files("Backup/Docs", 60) + files("Other", 60, start=500))
+    assert [(p.first, p.second) for p in found] == [("Backup/Docs", "Docs")], "not the sub-folders too, and not Backup itself"
+    assert found[0].share > 0.95 and found[0].files == 60
+    assert copies.the_copy(found[0]) == "Backup/Docs", "a folder above it is named like a backup"
+
+
+def test_an_older_backup_with_fewer_files_is_still_found_and_different_sizes_are_not():
+    found = copies.find(files("Docs", 300) + files("Docs old", 250))
+    assert len(found) == 1 and found[0].share >= 0.8 and copies.the_copy(found[0]) == "", "no name says which is the backup"
+    assert copies.find(files("Docs", 60) + files("Edited", 60, size=5000)) == [], "same names, other sizes: not copies"
+    assert copies.find(files("A", 10) + files("B", 10)) == [], "a handful of files says too little"
+    assert copies.find([("Only/one/deep.txt", 5)] * 1 + files("Only", 40)) == [], "a folder is not a copy of one inside it"
+
+
+def test_the_picker_leaves_out_what_is_named_a_backup_and_only_notes_the_rest():
+    listed = [(f"/r/{rel}", size, False) for rel, size in
+              files("Docs", 60) + files("Backup/Docs", 60) + files("Photos", 60, start=900) + files("Photos2", 60, start=900)]
+    tree = picker.build("/r", listed)
+    plan = picker.plan_from_guess(tree)
+    assert not plan.ticked("Backup/Docs") and plan.ticked("Docs") and plan.ticked("Backup")
+    assert 'looks like a backup of "Docs"' in plan.reasons["backup/docs"] and "tick it if you want both" in plan.reasons["backup/docs"]
+    assert plan.ticked("Photos") and plan.ticked("Photos2"), "no name says which is the backup: both stay, with a note"
+    assert 'looks like a copy of "Photos2"' in plan.reasons["photos"] and 'looks like a copy of "Photos"' in plan.reasons["photos2"]
+    assert len(plan.copies) == 2
+    assert "/Backup/Docs" in plan.to_root().exclude

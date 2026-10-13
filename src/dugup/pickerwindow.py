@@ -163,7 +163,26 @@ class PickerDialog:
         tree.insert("", "end", iid=self._iid(""), text=self.plan.tree.root, values=self._values(top), open=True)
         for child in top.sorted_children():
             self._insert(self._iid(""), child)
+        self.show_copies()
         self.refresh()
+
+    def show_copies(self) -> None:
+        """Folders that look like copies of others are brought into view (the first few) and counted in the
+        message, so the guess is seen and can be undone."""
+        found = getattr(self.plan, "copies", [])
+        if not found:
+            return
+        for pair, _ in found[:10]:
+            for rel in (pair.first, pair.second):
+                parts = rel.split("/")
+                for depth in range(1, len(parts)):
+                    above = "/".join(parts[:depth])
+                    if self.tree.exists(self._iid(above)):
+                        self.open(above)
+        left_out = sum(1 for _, backup in found if backup)
+        self.message.set(f"{len(found)} folder(s) look like copies of other folders (same file names and sizes; no file "
+                         f"was opened). {left_out} named like a backup are left out, the rest are included. "
+                         "See the Notes column; change anything that does not fit.")
 
     def _opened(self, event=None) -> None:
         self.open(self._rel(self.tree.focus()) or "")
