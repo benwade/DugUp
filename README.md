@@ -110,11 +110,21 @@ turns it off for new text). Searching is unaffected: the word index is built fro
 index from an earlier version is converted the first time it is opened, which can take a minute on a
 large one; run `dugup space --compact` afterwards to hand the freed space back to the disk.
 
+On a first start (no folder indexed yet) the window opens a setup wizard in front, with the main window
+minimized until setting up is over: it looks at the computer, suggests settings with the reason for each,
+lists likely folders with why each is ticked or not, and then shows the picker for each folder chosen.
+"Settings..." opens the same pages later with every setting. While a folder is looked through, a small
+window in the middle of the screen says why, how far it has got, and offers Stop.
+
 In the window, "Add folder..." looks through the folder (opening no file) and shows a picker: a box to take
 each subfolder in or out, how far to go in each, what it holds, and what it would add to the index. It
 starts from guesses (tool data and trash out, picture folders without OCR, folders named like a book
 library by name only), each with its reason, and nothing changes until Apply. "Choose what to index..."
-opens it again for a folder that is already indexed. The guesses can be tuned in `config.toml`
+opens it again for a folder that is already indexed. Each row has an "Include" box and a box for each
+thing to do there (Words, Scans, and two that are remembered for later: Meaning, Pictures alike); a folder
+inside one that is not included shows as not included. Folders that look like copies of other folders are
+pointed out (same file names and sizes; no file is opened): one named like a backup starts not included,
+with the reason, and otherwise both stay in with a note. The guesses can be tuned in `config.toml`
 (`book_folders`, `book_folder_level`, `picture_heavy_fraction`, `picture_heavy_min`).
 
 "Update the index" in the window goes straight on to reading pictures and scans (OCR) in the folders whose
@@ -122,11 +132,18 @@ level asks for it, as one run with one Stop. `ocr_after_index = false` in `confi
 `dugup index` does the same; `dugup index --no-ocr` stops once the index is up to date, and `dugup ocr`
 reads what waits at any time.
 
+Updating the index reads several files side by side, each in a worker of its own, so one slow file (a
+large PDF, or one that must first come down from a cloud drive) does not hold up the rest. The number is
+worked out from the processor cores and free memory, at most 8; `index_readers` in `config.toml` sets it
+(1 reads one file at a time). The pause for "files in a row that crashed or ran out of time" counts per reader.
+
 OCR normally reads one page at a time so the computer stays pleasant to use. `dugup ocr --fast` runs
 several readers side by side (about half the processor cores, limited by free memory; `--readers N` sets the
 number), and `--folder "D:\Some Folder\Scans"` reads just one folder. `--again` with `--folder` reads that
 folder afresh. In the window, "Read a folder now, fast..." does the same and takes over from a run that is
-going on: that run stops cleanly, and what it had not finished stays queued.
+going on: that run stops cleanly, and what it had not finished stays queued. Without `--folder`,
+`dugup ocr --fast` reads everything that waits; with many thousands of pages waiting it is the one to use
+(the run that follows `dugup index` by itself is the gentle one).
 
 OCR runs on the processor by default. A graphics card is an option: `dugup ocr --gpu`, or `ocr_gpu = true`
 in `config.toml`. It needs an OCR runtime that can use the card; on Windows that is `onnxruntime-directml`
