@@ -459,8 +459,11 @@ def closeness_matches(query: str, near_words: int) -> Optional[Tuple[str, str]]:
 # ---- the store -------------------------------------------------------------
 
 class SqliteStore:
-    def __init__(self, path: os.PathLike | str, near_words: int = 15, compress_text: bool = True) -> None:
+    def __init__(self, path: os.PathLike | str, near_words: int = 15, compress_text: bool = True,
+                 prefer_under: str = "") -> None:
         self.path = Path(path)
+        # Of several copies of one file, the one below this folder (or on this drive) is the one a search shows.
+        self.prefer_under = prefer_under
         self.compress_text = compress_text     # for text stored from now on; text already stored is read either way
         self.near_words = near_words     # how close words must stand to rank above the same words far apart
         if not self.path.parent.is_dir():
@@ -1058,7 +1061,7 @@ class SqliteStore:
             # named like a backup, highest up in the folders, with the shortest path. (The inner query is named
             # f so that the sort columns, written for the files table, read the same out here.)
             sql = (f"SELECT * FROM (SELECT f.*, ROW_NUMBER() OVER (PARTITION BY COALESCE(f.content, '#' || f.id) ORDER BY "
-                   f"(f.missing_since IS NOT NULL), {_BACKUP_SQL}, {_DEPTH_SQL}, length(f.path), f.id) AS place "
+                   f"(f.missing_since IS NOT NULL), {self._elsewhere_sql()}, {_BACKUP_SQL}, {_DEPTH_SQL}, length(f.path), f.id) AS place "
                    f"FROM ({per_file}) AS f) AS f WHERE place = 1 ORDER BY {order}, f.id ASC LIMIT ? OFFSET ?")
         else:
             sql = f"{per_file} ORDER BY {order}, f.id ASC LIMIT ? OFFSET ?"
@@ -1074,6 +1077,14 @@ class SqliteStore:
             for row in rows:
                 row.also_at = tuple(others.get(row.file_id, ()))
         return SearchPage(rows, total, offset, limit)
+
+    def _elsewhere_sql(self) -> str:
+        """0 for a path below the preferred folder, 1 for any other; 0 for all when none is preferred."""
+        prefix, _ = encode_path(self.prefer_under) if self.prefer_under else ("", None)
+        if not prefix:
+            return "0"
+        quoted = prefix.lower().replace("'", "''")
+        return f"(lower(substr(f.path, 1, {len(prefix)})) <> '{quoted}')"
 
     @staticmethod
     def _span(r: sqlite3.Row, is_name: bool, terms: Sequence[str]) -> Optional[Tuple[int, int]]:

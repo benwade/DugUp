@@ -169,6 +169,11 @@ def _entries() -> Tuple[Entry, ...]:
           "whatever they are called and wherever they lie.",
           why="A search then shows such a file once, with its other places listed. It costs reading each file one "
               "more time from start to end, which is quick next to reading its words.", choices=YES_NO),
+        E("main_place", "search", "Where your own copy of a file is",
+          "When the same file is in several places, a search shows the one below this folder or drive (for example C:\\) "
+          "and lists the others under it. Empty lets DugUp work it out: on Windows, the drive your own folders are on.",
+          why="A file on your own drive and its backup on a cloud drive are one file to you; the one on your own "
+              "drive is the one you work on, and the quickest to open."),
         E("index_readers", "speed", "Files read side by side",
           "How many files are read at the same time when the index is updated. 0 lets DugUp work it out; 1 reads one at a time.",
           why="Side by side, one slow file (a large PDF, or one that must first come down from a cloud drive) does not "

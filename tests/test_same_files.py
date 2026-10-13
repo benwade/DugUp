@@ -8,7 +8,7 @@ import pytest
 from dugup import contentmark
 from dugup.indexer import Indexer
 from dugup.settings import Settings
-from dugup.shapes import Failure, FailureReason, FileRecord, FileState, Root
+from dugup.shapes import Failure, FailureReason, FileRecord, FileState, Root, SegmentIn, SegmentKind
 from dugup.store import MIGRATIONS, SqliteStore
 
 from fakes.fake_store import FakeStore
@@ -213,3 +213,29 @@ def test_a_copy_found_by_its_own_name_is_shown_and_a_missing_copy_gives_way(w):
     page = w.store.search_words("alpha")
     assert page.total == 1 and page.rows[0].path.endswith("quarterly.txt") and page.rows[0].also_at == (), \
         "the copy that is still there is the one shown; a missing one is not listed as a place"
+
+
+def test_the_copy_on_your_own_drive_is_the_one_shown(tmp_path):
+    """Ben's case: a file on C: and its backup on a cloud drive are one file, and C: is where he works."""
+    with SqliteStore(tmp_path / "index.sqlite", prefer_under="C:\\") as store:
+        rows = {}
+        for path in ("G:\\My Drive\\Docs\\mottos.txt", "C:\\Users\\ben\\Documents\\Deep\\Down\\mottos.txt",
+                     "G:\\Other computers\\PC (3)\\Docs\\mottos.txt", "G:\\It's\\notes.txt"):
+            rows[path] = store.upsert_file(FileRecord(path, 5, 1.0, state=FileState.DONE))
+            store.replace_segments(rows[path], [SegmentIn(0, 0, SegmentKind.TEXT, "alpha words")])
+            store.set_content(rows[path], "other" if path.endswith("notes.txt") else "same")
+        page = store.search_words("alpha")
+        shown = next(r for r in page.rows if r.name == "mottos.txt")
+        assert page.total == 2 and shown.path.startswith("C:\\"), "deeper down, and still the one shown"
+        assert shown.also_at == ("G:\\My Drive\\Docs\\mottos.txt", "G:\\Other computers\\PC (3)\\Docs\\mottos.txt")
+        store.prefer_under = "G:\\It's"                 # a quote in a folder name is only a character
+        assert store.search_words("alpha").total == 2
+        store.prefer_under = ""
+        assert next(r for r in store.search_words("alpha").rows if r.name == "mottos.txt").path == "G:\\My Drive\\Docs\\mottos.txt"
+
+
+def test_the_main_place_is_the_setting_or_the_drive_of_the_home_folder():
+    from dugup.service import main_place
+    assert main_place(Settings(), home="C:\\Users\\ben") == "C:\\"
+    assert main_place(Settings(), home="/home/ben") == "" and main_place(Settings(), home="\\\\server\\share\\ben") == ""
+    assert main_place(Settings(main_place=" D:\\Work "), home="C:\\Users\\ben") == "D:\\Work"

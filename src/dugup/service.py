@@ -50,6 +50,15 @@ def _under(path: str, folder: str, fold: Callable[[str], str]) -> bool:
     return path == base or path.startswith(base + "/") or path.startswith(base + "\\")
 
 
+def main_place(settings: Settings, home: Optional[str] = None) -> str:
+    """The folder or drive whose copy of a file a search shows first: the setting, or on Windows the drive
+    the person's own folders are on ("C:\\"). Elsewhere there is no such thing as a drive, so none."""
+    if settings.main_place.strip():
+        return settings.main_place.strip()
+    home = home if home is not None else os.path.expanduser("~")
+    return home[:2] + "\\" if len(home) >= 2 and home[0].isalpha() and home[1] == ":" else ""
+
+
 class LocalService:
     def __init__(self, layout: DataLayout, settings: Optional[Settings] = None,
                  source: Optional[FileSource] = None, extractor: Optional[Extractor] = None,
@@ -68,7 +77,8 @@ class LocalService:
         else:
             self.extractor = default_extractors(self.settings)
         self._open_store = open_store or (lambda: SqliteStore(layout.index, near_words=self.settings.near_words,
-                                                                compress_text=self.settings.text_compression != "none"))
+                                                                compress_text=self.settings.text_compression != "none",
+                                                                prefer_under=main_place(self.settings)))
         self.clock = clock
         self.case_insensitive = (os.name == "nt") if case_insensitive is None else case_insensitive
         self._fold: Callable[[str], str] = (lambda t: t.lower()) if self.case_insensitive else (lambda t: t)
