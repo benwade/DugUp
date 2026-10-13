@@ -29,7 +29,7 @@ from .kinds import classify
 from .protocols import (OCR_FAILED, OCR_WAITING, Extraction, Extractor, FileEntry, FileSource, ScanRules, Skipped,
                         StopSignal, Store)
 from .settings import Settings
-from .shapes import (LEVEL_NAMES, POLICY_NAMES_ONLY, level_for, Failure, FailureReason, FileRecord, FileState, Root)
+from .shapes import (LEVEL_NAMES, OPTION_WORDS, POLICY_NAMES_ONLY, level_for, wants, Failure, FailureReason, FileRecord, FileState, Root)
 
 log = logging.getLogger("dugup.indexer")
 
@@ -279,7 +279,7 @@ class Indexer:
         return ScanRules(tuple(root.include), tuple(root.exclude) + tuple(extra))
 
     def _fresh(self, root: Root, entry: FileEntry) -> Tuple[FileState, str]:
-        if level_for(root, entry.path, self.case_insensitive) == LEVEL_NAMES:
+        if not wants(level_for(root, entry.path, self.case_insensitive), OPTION_WORDS):   # nothing here asks for the text
             return FileState.SKIPPED, POLICY_NOTE
         if entry.offline:
             return FileState.SKIPPED, OFFLINE_NOTE

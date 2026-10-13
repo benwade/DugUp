@@ -35,7 +35,7 @@ from .sandbox import SubprocessSandbox
 from .settings import Settings
 from dataclasses import replace
 
-from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, level_for, level_reaches, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
+from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, OPTION_WORDS, level_for, level_reaches, level_words, normalize_level, wants, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
                      Passage, Root, SearchPage)
 from .store import SqliteStore
 from .suggest import Suggestion, suggest_excludes
@@ -358,7 +358,7 @@ class LocalService:
         Returns (files whose text was removed, files put in the queue)."""
         purged = queued = 0
         for record in self.store.list_files(prefix=below or root.path, case_insensitive=self.case_insensitive):
-            names_only = level_for(root, record.path, self.case_insensitive) == LEVEL_NAMES
+            names_only = not wants(level_for(root, record.path, self.case_insensitive), OPTION_WORDS)
             held = record.state is FileState.SKIPPED and record.error == POLICY_NOTE
             if names_only and not held:
                 self.store.replace_segments(record.row_id, ())
@@ -376,8 +376,13 @@ class LocalService:
         Lowering to "names" removes the text kept for that folder now; raising from it queues the files
         for the next `index` run. "words" keeps OCR text that was already read and reads no more.
         Returns {"root", "folder", "level", "purged", "queued"}."""
-        if level is not None and level not in LEVELS:
-            return Failure(FailureReason.UNSUPPORTED, f"unknown level {level!r}; choose one of {', '.join(LEVELS)}")
+        if level is not None:
+            spelled = normalize_level(level)
+            if spelled is None:
+                return Failure(FailureReason.UNSUPPORTED,
+                               f"{level!r} is not a choice. Use names, or any of words, ocr, meaning, alike joined by +, "
+                               "for example words+ocr")
+            level = spelled
         wanted = os.path.abspath(os.path.expanduser(path))
         root = next((r for r in self.store.list_roots()
                      if self._fold(r.path) == self._fold(wanted) or _under(wanted, r.path, self._fold)), None)

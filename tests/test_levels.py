@@ -13,7 +13,8 @@ from dugup.protocols import PageInfo, PageVerdict
 from dugup.service import LocalService
 from dugup.settings import Settings
 from dugup.shapes import (LEVEL_MEANING, LEVEL_NAMES, LEVEL_OCR, LEVEL_WORDS, LEVELS, POLICY_NAMES_ONLY, Failure, FileKind,
-                          FileRecord, FileState, Root, SegmentIn, SegmentKind, level_for, level_reaches)
+                          FileRecord, FileState, Root, SegmentIn, SegmentKind, level_for, level_of, level_reaches,
+                          level_words, normalize_level, options_of, wants)
 from dugup.store import SqliteStore
 from fakes.fake_store import FakeStore
 
@@ -149,7 +150,8 @@ def test_the_root_itself_can_be_given_a_level_and_other_changes_keep_the_levels(
 
 
 def test_wrong_requests_are_stated_failures(world, tmp_path):
-    assert world.service.set_level(str(world.docs), "everything").reason.value == "unsupported"
+    refused = world.service.set_level(str(world.docs), "words+telepathy")
+    assert refused.reason.value == "unsupported" and "words+ocr" in refused.detail
     outside = world.service.set_level(str(tmp_path / "elsewhere"), LEVEL_WORDS)
     assert isinstance(outside, Failure) and "dugup roots add" in outside.detail
     assert world.service.list_roots()[0].levels == ()
@@ -216,14 +218,18 @@ def test_level_command(tmp_path):
     run("roots", "add", str(docs))
     run("index")
     code, text = run("roots", "level", str(docs / "Books"), "names")
-    assert code == 0 and "level names" in text and "1 file(s) was removed" in text and "names stay searchable" in text
-    assert "level names: Books" in run("roots", "list")[1]
+    assert code == 0 and "Books: file names only" in text and "1 file(s) was removed" in text and "names stay searchable" in text
+    assert "Books: file names only" in run("roots", "list")[1]
     assert "novel.txt" not in run("search", "whale")[1] and "note.txt" in run("search", "whale")[1]
     code, text = run("roots", "level", str(docs / "Books"), "words")
     assert "1 file(s) now wait to be read" in text and "dugup index" in text and "no longer read" in text
     code, text = run("roots", "level", str(docs / "Books"), "inherit")
-    assert code == 0 and "follows the folder above" in text and "level meaning" in text
-    assert "level" not in run("roots", "list")[1].split("policy")[1].split("\n", 1)[1].split("skipping")[0]
+    assert code == 0 and "follows the folder above" in text and "everything" in text
+    assert "Books:" not in run("roots", "list")[1]
+    code, text = run("roots", "level", str(docs / "Books"), "words+alike")
+    assert code == 0 and "words in documents, pictures alike" in text and "no longer read" in text
+    code, text = run("roots", "level", str(docs / "Books"), "telepathy")
+    assert code == 1 and "is not a choice" in text
     code, text = run("roots", "level", str(tmp_path / "nowhere"), "names")
     assert code == 1 and "not inside an indexed folder" in text
 
@@ -246,3 +252,40 @@ def test_the_service_holds_ocr_back_by_level(tmp_path):
         assert len(reader.seen) == 1 and "Scans" in str(reader.seen[0])
         service.set_level(str(docs / "Covers"), LEVEL_OCR)
         assert service.run_ocr().read == 1, "raised again: the page that waited is read"
+
+
+# ---- the choices are separate, not a ladder --------------------------------------------------------------------
+
+def test_a_level_is_a_set_of_choices_with_one_spelling():
+    assert LEVELS == ("names", "words", "words+ocr", "words+ocr+meaning+alike")
+    assert normalize_level("Alike + words") == "words+alike" and normalize_level("words, ocr") == "words+ocr"
+    assert normalize_level("names") == "names" and normalize_level(" NAMES ") == "names"
+    assert normalize_level("alike") == "alike", "pictures by what they show needs no text"
+    assert normalize_level("ocr+alike") == "words+ocr+alike" and level_of(["meaning"]) == "words+meaning", \
+        "scans and meaning work on text, so each brings words with it"
+    for wrong in ("", "telepathy", "words+telepathy", "names+words", None, 3):
+        assert normalize_level(wrong) is None, wrong
+    assert options_of("words+alike") == {"words", "alike"} and options_of("names") == frozenset()
+    assert wants("words+alike", "alike") and not wants("words+alike", "ocr")
+
+
+def test_the_older_single_words_still_mean_what_they_meant():
+    assert normalize_level("ocr") == LEVEL_OCR and normalize_level("meaning") == LEVEL_MEANING and normalize_level("words") == LEVEL_WORDS
+    old = Root("/r", levels=(("Scans", "ocr"), ("All", "meaning"), ("Text", "words")))     # as an earlier version stored them
+    assert level_for(old, "/r/Scans/a.png") == "words+ocr" and level_for(old, "/r/All/a") == LEVEL_MEANING
+    assert level_for(old, "/r/Text/a") == "words"
+    assert level_for(Root("/r", levels=(("X", "garbage"),)), "/r/X/a") == LEVEL_MEANING, "an unreadable level falls back to the root's"
+
+
+def test_a_photo_folder_can_ask_for_pictures_alike_without_scans():
+    photos = "words+alike"
+    assert not level_reaches(photos, LEVEL_OCR), "no OCR is done there"
+    assert level_reaches(LEVEL_MEANING, photos) and level_reaches(photos, LEVEL_WORDS)
+    assert level_words(photos) == "words in documents, pictures alike" and level_words("names") == "file names only"
+    assert level_words(LEVEL_MEANING) == "everything" and level_words("alike") == "pictures alike"
+
+
+def test_a_folder_that_asks_only_for_pictures_alike_has_its_documents_listed_by_name(world):
+    result = world.service.set_level(str(world.docs / "Books"), "alike")
+    assert result["level"] == "alike" and result["purged"] == 2, "no words are wanted, so the text is not kept"
+    assert world.names("whale") == ["top.txt"] and world.names("novel") == ["novel.txt"]

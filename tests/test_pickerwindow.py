@@ -5,7 +5,6 @@ import gc
 import pytest
 
 import helpers
-from dugup.picker import LEVEL_LABELS
 from dugup.pickerwindow import IN, OUT, PLACEHOLDER
 from dugup.shapes import LEVEL_MEANING, LEVEL_NAMES, LEVEL_WORDS
 from test_window import Bench
@@ -47,7 +46,13 @@ def open_picker(bench):
 
 
 def row(picker, rel):
-    return dict(zip(("tick", "level", "holds", "cost", "why"), picker.tree.item("n:" + rel, "values")))
+    return dict(zip(("tick", "words", "ocr", "meaning", "alike", "holds", "cost", "why"), picker.tree.item("n:" + rel, "values")))
+
+
+def marks(picker, rel):
+    """The four choices of a row as a string of ticks, for example "x-xx"."""
+    r = row(picker, rel)
+    return "".join("x" if r[key] == IN else "-" if r[key] == OUT else " " for key in ("words", "ocr", "meaning", "alike"))
 
 
 def test_adding_a_folder_opens_the_picker_with_the_guesses_and_adds_nothing_yet(bench):
@@ -56,51 +61,74 @@ def test_adding_a_folder_opens_the_picker_with_the_guesses_and_adds_nothing_yet(
     assert picker.where.get() == str(bench.docs)
     shown = [picker.tree.item(i, "text") for i in picker.tree.get_children("")]
     assert set(shown) == {"Books", "Trash", "Proj", "Letters", "sub"} and ".venv" not in shown
-    assert row(picker, "Trash")["tick"] == OUT and "trash" in row(picker, "Trash")["why"] and row(picker, "Trash")["level"] == ""
-    assert row(picker, "Books")["tick"] == IN and row(picker, "Books")["level"] == LEVEL_LABELS[LEVEL_NAMES]
+    assert [str(picker.tree.heading(key, "text")) for key in ("tick", "words", "ocr", "meaning", "alike")] == \
+        ["In", "Words", "Scans", "Meaning*", "Pictures alike*"]
+    assert row(picker, "Trash")["tick"] == OUT and "trash" in row(picker, "Trash")["why"] and marks(picker, "Trash") == "    "
+    assert row(picker, "Books")["tick"] == IN and marks(picker, "Books") == "----", "a book library: names only"
     assert "book library" in row(picker, "Books")["why"]
-    assert row(picker, "Letters")["level"] == LEVEL_LABELS[LEVEL_MEANING] and "1 file(s)" in row(picker, "Letters")["holds"]
+    assert marks(picker, "Letters") == "xxxx" and "1 file(s)" in row(picker, "Letters")["holds"]
     assert "1 file(s)" in str(picker.tool_box.cget("text")) and picker.skip_tool.get() is True
     assert "4 folder(s) in, 1 out" in picker.total.get() and "rough estimate" in picker.total.get()
-    assert "starting guesses" in picker.message.get()
+    assert "starting guesses" in picker.message.get() and "remembered now" in picker.note.get()
     assert "Choose what to index" in bench.app.progress_text.get()
 
 
-def test_ticks_levels_and_the_total_follow_clicks(bench):
+def test_ticks_choices_and_the_total_follow_clicks(bench):
     picker = open_picker(bench)
     before = picker.total.get()
     picker.toggle("Letters")
     assert row(picker, "Letters")["tick"] == OUT and row(picker, "Letters")["cost"] == "" and "3 folder(s) in, 2 out" in picker.total.get()
     assert "out" in picker.tree.item("n:Letters", "tags")
-    picker.step_level("Letters")
-    assert "Tick its box first" in picker.message.get() and row(picker, "Letters")["level"] == ""
+    picker.toggle_option("Letters", "ocr")
+    assert "Tick its \"In\" box first" in picker.message.get() and marks(picker, "Letters") == "    "
     picker.toggle("Letters")
     assert picker.total.get() == before
-    picker.step_level("Books")
-    assert row(picker, "Books")["level"] == LEVEL_LABELS[LEVEL_WORDS] and row(picker, "Books")["why"] == "", \
-        "once changed by hand, the starting reason no longer describes the row"
+    picker.toggle_option("Books", "alike")
+    assert marks(picker, "Books") == "---x" and "Books: Pictures alike." in picker.message.get()
+    assert "differs from the folder above" in row(picker, "Books")["why"], "once changed by hand, the row says it has its own choice"
+    picker.toggle_option("Books", "ocr")
+    assert marks(picker, "Books") == "xx-x", "Scans brings Words with it"
+    picker.toggle_option("Books", "words")
+    assert marks(picker, "Books") == "---x", "without Words there are no Scans"
     picker.tree.focus("n:Trash")
     picker._selected()
     assert picker.message.get() == "Trash: a trash folder."
-    picker.tree.focus("n:Books")
-    picker._selected()
-    assert picker.message.get() == "Books: Words.", "the full reason, or the present choice, of the selected row"
     picker.skip_tool.set(False)
     picker._tool_changed()
     assert picker.plan.skip_tool is False
 
 
-def test_folders_inside_are_drawn_when_opened_and_follow_the_folder_above(bench):
+def test_folders_inside_follow_the_folder_above_until_one_is_changed(bench):
     picker = open_picker(bench)
     assert picker.tree.get_children("n:Letters") == (PLACEHOLDER + "n:Letters",)
     assert picker.tree.get_children("n:Trash") == (), "nothing inside to open"
     picker.open("Letters")
     assert picker.tree.get_children("n:Letters") == ("n:Letters/2019",)
-    assert "(as above)" in row(picker, "Letters/2019")["level"]
-    picker.step_level("Letters/2019")
-    assert row(picker, "Letters/2019")["level"] == LEVEL_LABELS[LEVEL_NAMES], "Everything steps round to Names only"
+    assert row(picker, "Letters/2019")["why"] == "follows the folder above" and marks(picker, "Letters/2019") == "xxxx"
+    picker.toggle_option("Letters", "ocr")                      # the whole folder, and so the folder inside
+    assert marks(picker, "Letters") == "x-xx" and marks(picker, "Letters/2019") == "x-xx"
+    picker.toggle_option("Letters/2019", "ocr")                 # then just the one inside
+    assert marks(picker, "Letters/2019") == "xxxx" and marks(picker, "Letters") == "x-xx"
+    assert "its own choice" in row(picker, "Letters/2019")["why"]
+
+    picker.tree.focus("n:Letters/2019")
+    picker.follow_above()
+    assert marks(picker, "Letters/2019") == "x-xx" and "follows the folder above again" in picker.message.get()
+    picker.follow_above()
+    assert "already follows the folder above" in picker.message.get()
+
+    picker.toggle_option("Letters/2019", "alike")
+    picker.tree.focus("n:Letters")
+    picker.apply_inside()
+    assert marks(picker, "Letters/2019") == "x-xx" and "1 folder(s) inside Letters had their own choice" in picker.message.get()
+    picker.apply_inside()
+    assert "already follows it" in picker.message.get()
+    picker.tree.focus("")
+    picker.apply_inside()
+    assert picker.message.get() == "Select a folder first."
+
     picker.toggle("Letters")
-    assert row(picker, "Letters/2019")["level"] == "" and "out" in picker.tree.item("n:Letters/2019", "tags")
+    assert marks(picker, "Letters/2019") == "    " and "out" in picker.tree.item("n:Letters/2019", "tags")
     assert row(picker, "Letters/2019")["tick"] == IN, "its own box is still ticked; it is out because Letters is"
 
 

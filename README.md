@@ -134,22 +134,15 @@ in place of `onnxruntime` (`pip uninstall onnxruntime`, then `pip install onnxru
 works with NVIDIA, AMD and Intel cards. `dugup doctor` says whether a card can be used. Where it cannot,
 the processor is used and the report says so.
 
-Levels let one folder be treated differently from the rest: `names` keeps file names only, `words` also
-reads the text of readable files, `ocr` also reads pictures and scans, `meaning` is everything (the default).
-A folder's level applies to everything below it until a folder further down has its own; `inherit` takes a
-level away again. Lowering a folder to `names` removes the text kept for it at once. To leave a folder out
-completely, use `dugup roots exclude`.
-
-The first time the window opens with no folder yet, a short setup wizard appears. It says plainly that
-building the index is heavy work and temporary, looks at the computer (cores, memory, free disk, and a
-quick test of whether the graphics card reads pictures faster than the processor), and offers to choose
-everything for you, showing what it chose and why. Or you can go through the choices a page at a time.
-"Settings..." in the window shows every setting later.
-
-Settings: `dugup config list` shows the everyday settings, grouped, each with a line of guidance
-(`--all` shows every one); `dugup config get NAME` explains one; `dugup config set NAME VALUE` changes it
-after checking the value; `dugup config reset NAME` goes back to the default. They are kept in
-`config.toml` in the data folder, which you need not edit by hand.
+What is done with a folder's files is a set of separate choices, not a ladder. File names are always
+kept. Beyond that: `words` (the text of documents), `ocr` (words in pictures and scans), `meaning` and
+`alike` (pictures by what they show; these two are remembered now and used once searching by meaning is
+built). Join them with `+`, for example `dugup roots level "D:\Photos" words+alike` for a photo folder that
+should not be put through OCR. `names` means file names only, and `inherit` makes a folder follow the one
+above it again. A folder's choice applies to everything inside it until a folder further in has its own.
+Lowering a folder to `names` removes the text kept for it at once. To leave a folder out completely, use
+`dugup roots exclude`. In the picker these are tick columns, with "Apply to everything inside" and
+"Follow the folder above" for the selected folder.
 
 `python -m dugup ...` does the same. The index lives in one per-user data folder (`%LOCALAPPDATA%\DugUp`
 on Windows, `~/.local/share/DugUp` on Linux); add `--data-dir FOLDER` to any command to keep it somewhere

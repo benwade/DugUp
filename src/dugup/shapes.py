@@ -243,13 +243,72 @@ POLICY_NAMES_ONLY = "names_only"  # file names only; no text is read or kept
 POLICIES = (POLICY_OPEN, POLICY_NAMES_ONLY)
 
 
-# How far indexing goes in a folder. Each level includes the ones before it. A folder that should not be
-# indexed at all is not a level: that is a skip rule (`exclude`).
-LEVEL_NAMES = "names"      # file names and paths; no file is opened
-LEVEL_WORDS = "words"      # also the text of readable files
-LEVEL_OCR = "ocr"          # also the words in pictures and scanned pages
-LEVEL_MEANING = "meaning"  # also search by meaning (when that is set up); the default
-LEVELS = (LEVEL_NAMES, LEVEL_WORDS, LEVEL_OCR, LEVEL_MEANING)
+# What is done with the files of a folder. File names are always kept for a folder that is indexed at all;
+# the rest are separate choices, because they are different things and not steps of one ladder: a folder
+# of photos may want "pictures alike" without OCR, a folder of scanned letters the reverse.
+# A folder that should not be indexed at all has no level: that is a skip rule (`exclude`).
+OPTION_WORDS = "words"      # the text of readable files (Word, PDF, plain text)
+OPTION_OCR = "ocr"          # the words in pictures and scanned pages
+OPTION_MEANING = "meaning"  # find passages by what they are about (when that is set up)
+OPTION_ALIKE = "alike"      # find pictures by what they show (when that is set up)
+OPTIONS = (OPTION_WORDS, OPTION_OCR, OPTION_MEANING, OPTION_ALIKE)
+# Reading scans, and searching by meaning, both work on text, so each brings "words" with it.
+_NEEDS_WORDS = (OPTION_OCR, OPTION_MEANING)
+
+LEVEL_NAMES = "names"                       # file names and paths only; no file is opened
+LEVEL_WORDS = "words"
+LEVEL_OCR = "words+ocr"
+LEVEL_MEANING = "words+ocr+meaning+alike"   # everything; the default
+LEVELS = (LEVEL_NAMES, LEVEL_WORDS, LEVEL_OCR, LEVEL_MEANING)   # the four usual combinations, least to most
+_OLD_NAMES = {"ocr": LEVEL_OCR, "meaning": LEVEL_MEANING, "everything": LEVEL_MEANING, "all": LEVEL_MEANING}
+
+
+def level_of(options) -> str:
+    """The one spelling of a set of choices: the options in their fixed order joined by "+", or "names".
+    Choosing scans or meaning brings words with it."""
+    chosen = {str(o).strip().casefold() for o in options}
+    if chosen & set(_NEEDS_WORDS):
+        chosen.add(OPTION_WORDS)
+    return "+".join(o for o in OPTIONS if o in chosen) or LEVEL_NAMES
+
+
+def normalize_level(text: object) -> Optional[str]:
+    """A level as typed or as stored (the older single words included) in its one spelling, or None when
+    it names something that is not a choice."""
+    if not isinstance(text, str):
+        return None
+    typed = text.strip().casefold()
+    if typed in _OLD_NAMES:
+        return _OLD_NAMES[typed]
+    parts = [p.strip() for p in typed.replace(",", "+").replace(" ", "+").split("+") if p.strip()]
+    if not parts:
+        return None
+    if parts == [LEVEL_NAMES]:
+        return LEVEL_NAMES
+    if any(p not in OPTIONS for p in parts):
+        return None
+    return level_of(parts)
+
+
+def options_of(level: str) -> frozenset:
+    spelled = normalize_level(level) or LEVEL_NAMES
+    return frozenset() if spelled == LEVEL_NAMES else frozenset(spelled.split("+"))
+
+
+def wants(level: str, option: str) -> bool:
+    return option in options_of(level)
+
+
+def level_words(level: str) -> str:
+    """A level in plain words."""
+    chosen = options_of(level)
+    if not chosen:
+        return "file names only"
+    if chosen == set(OPTIONS):
+        return "everything"
+    names = {OPTION_WORDS: "words in documents", OPTION_OCR: "words in pictures and scans",
+             OPTION_MEANING: "meaning", OPTION_ALIKE: "pictures alike"}
+    return ", ".join(names[o] for o in OPTIONS if o in chosen)
 
 
 @dataclass(frozen=True)
@@ -282,12 +341,12 @@ def level_for(root: Root, path: str, case_insensitive: bool = False) -> str:
         key = folder.casefold() if case_insensitive else folder
         if len(key) > best_length and (key == "" or relative.startswith(key + "/")):
             best, best_length = level, len(key)
-    return best
+    return normalize_level(best) or root.base_level      # an index from before this spelling reads the same
 
 
 def level_reaches(level: str, wanted: str) -> bool:
-    """True when `level` goes at least as far as `wanted`."""
-    return LEVELS.index(level) >= LEVELS.index(wanted)
+    """True when `level` includes everything `wanted` does."""
+    return options_of(wanted) <= options_of(level)
 
 
 # ---- the common promise: a result or a stated reason ----------------------------------------------------

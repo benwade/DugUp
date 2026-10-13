@@ -55,6 +55,19 @@ class Row:
     readable: int = 0            # documents and text that are on this machine and worth reading
     to_ocr: int = 0              # pictures that are on this machine and worth reading
 
+    def cost_for(self, rates: Rates, options) -> float:
+        """Estimated index bytes for this choice of options (shapes.OPTIONS). Names always count."""
+        total = (self.files - self.not_worth) * rates.name
+        if "words" in options:
+            total += self.readable * rates.read
+        if "ocr" in options:
+            total += self.to_ocr * rates.picture
+        if "meaning" in options:
+            total += (self.readable + (self.to_ocr if "ocr" in options else 0)) * rates.vector
+        if "alike" in options:
+            total += self.to_ocr * rates.vector
+        return total
+
     def cost(self, rates: Rates) -> Tuple[float, float, float, float]:
         """Estimated index bytes at each level, in the order of LEVELS (each includes the one before)."""
         names = (self.files - self.not_worth) * rates.name

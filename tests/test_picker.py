@@ -46,11 +46,11 @@ def test_the_starting_guesses_and_their_reasons(tree):
     seen = {c.name: (plan.ticked(c.rel), plan.level(c.rel)) for c in tree.top.sorted_children()}
     assert seen == {
         "Letters": (True, LEVEL_MEANING), "Mixed": (True, LEVEL_MEANING), "Proj": (True, LEVEL_MEANING),
-        "Pics": (True, LEVEL_WORDS), "Books": (True, LEVEL_NAMES), "Videos": (True, LEVEL_NAMES), "Cloud": (True, LEVEL_NAMES),
+        "Pics": (True, "words+alike"), "Books": (True, LEVEL_NAMES), "Videos": (True, LEVEL_NAMES), "Cloud": (True, LEVEL_NAMES),
         "Trash": (False, LEVEL_MEANING)}
     reason = lambda name: plan.reasons[name.casefold()]
     assert "book library" in reason("Books") and "a guess" in reason("Books")
-    assert "mostly pictures" in reason("Pics") and "Words and scans" in reason("Pics")
+    assert "mostly pictures" in reason("Pics") and "matched by what they show" in reason("Pics") and "tick Scans" in reason("Pics")
     assert "scans are read too" in reason("Mixed"), "a folder with documents and pictures together gets OCR"
     assert "cloud" in reason("Cloud") and "trash" in reason("Trash") and "nothing here that can be read" in reason("Videos")
 
@@ -62,7 +62,7 @@ def test_the_guesses_follow_the_settings():
     assert guess(node, ["SHELF"]).level == LEVEL_NAMES, "names are compared without regard to case"
     pics = build("/r", [(f"/r/P/p{n}.jpg", 1, False) for n in range(10)] + [("/r/P/a.pdf", 1, False)]).top.children["p"]
     assert guess(pics, picture_min=20).level == LEVEL_MEANING, "too few pictures to call it a picture folder"
-    assert guess(pics, picture_min=5).level == LEVEL_WORDS and guess(pics, picture_min=5, picture_fraction=0.95).level == LEVEL_MEANING
+    assert guess(pics, picture_min=5).level == "words+alike" and guess(pics, picture_min=5, picture_fraction=0.95).level == LEVEL_MEANING
     tools = build("/r", [("/r/T/.git/a", 1, False), ("/r/T/.git/b", 1, False)]).top.children["t"]
     assert guess(tools).ticked is False
 
@@ -91,7 +91,7 @@ def test_the_estimate_follows_the_choices(tree):
     assert everything > 0 and plan.cost(rates, "Proj/.venv") == 0, "tool data is left out and costs nothing"
     plan.set_ticked("Letters", False)
     without = plan.cost(rates)
-    assert without == everything - tree.top.children["letters"].total.cost(rates)[3]
+    assert without == everything - tree.top.children["letters"].total.cost_for(rates, ("words", "ocr", "meaning", "alike"))
     plan.set_level("Pics", LEVEL_NAMES)
     assert plan.cost(rates, "Pics") == 30 * rates.name < without
     plan.skip_tool = False
@@ -104,12 +104,12 @@ def test_the_choices_become_skip_rules_and_levels_that_do_what_was_chosen(tree):
     plan.set_level("Mixed", LEVEL_OCR)
     root = plan.to_root()
     assert root.path == "/r" and set(root.exclude) == {"Proj/.venv", "/Trash", "/Letters/2019"}
-    assert dict(root.levels) == {"Books": LEVEL_NAMES, "Pics": LEVEL_WORDS, "Videos": LEVEL_NAMES, "Cloud": LEVEL_NAMES, "Mixed": LEVEL_OCR}
+    assert dict(root.levels) == {"Books": LEVEL_NAMES, "Pics": "words+alike", "Videos": LEVEL_NAMES, "Cloud": LEVEL_NAMES, "Mixed": LEVEL_OCR}
     rules = ScanRules((), root.exclude)
     wanted = {path: matches_rules(path[3:], rules) for path, _, _ in FILES}
     assert not wanted["/r/Trash/old.txt"] and not wanted["/r/Letters/2019/tax.docx"] and not wanted["/r/Proj/.venv/lib/x.py"]
     assert wanted["/r/Letters/roof.pdf"] and wanted["/r/Proj/readme.md"] and wanted["/r/top.txt"]
-    assert level_for(root, "/r/Pics/2020/p1.jpg") == LEVEL_WORDS and level_for(root, "/r/Letters/roof.pdf") == LEVEL_MEANING
+    assert level_for(root, "/r/Pics/2020/p1.jpg") == "words+alike" and level_for(root, "/r/Letters/roof.pdf") == LEVEL_MEANING
 
 
 def test_a_folder_out_needs_one_rule_and_levels_below_it_are_dropped(tree):
@@ -142,7 +142,7 @@ def test_an_indexed_folder_opens_with_its_current_choices_and_round_trips(tree):
     root = first.to_root()
     again = plan_from_root(tree, root)
     assert again.to_root() == root, "opening and applying unchanged changes nothing"
-    assert not again.ticked("Trash") and not again.ticked("Letters/2019") and again.level("Pics") == LEVEL_WORDS and again.skip_tool
+    assert not again.ticked("Trash") and not again.ticked("Letters/2019") and again.level("Pics") == "words+alike" and again.skip_tool
     older = Root("/r", exclude=("*.tmp", "Trash", "/Videos"), levels=(("", LEVEL_WORDS),))
     plan = plan_from_root(tree, older)
     assert plan.kept_rules == ("*.tmp", "Trash") and not plan.ticked("Videos") and plan.base_level == LEVEL_WORDS
@@ -217,3 +217,63 @@ def test_folders_that_cannot_be_planned_are_stated_failures(world, tmp_path):
     world.apply_plan(world.plan_folder(str(world.docs))["plan"])
     inside = world.plan_folder(str(world.docs / "Letters"))
     assert isinstance(inside, Failure) and "overlaps" in inside.detail and "inside that one" in inside.detail
+
+
+# ---- separate choices, and folders that follow or differ --------------------------------------------------------
+
+def test_each_choice_is_ticked_on_its_own_and_scans_and_meaning_bring_words(tree):
+    plan = Plan(tree)
+    plan.set_level("Pics", LEVEL_NAMES)
+    assert plan.set_option("Pics", "alike", True) == "alike" and plan.has("Pics", "alike") and not plan.has("Pics", "words")
+    assert plan.set_option("Pics", "ocr", True) == "words+ocr+alike", "ticking Scans ticks Words"
+    assert plan.set_option("Pics", "words", False) == "alike", "unticking Words unticks what needs it"
+    assert plan.set_option("Pics", "meaning", True) == "words+meaning+alike"
+    assert plan.set_option("Pics", "alike", False) == "words+meaning" and plan.set_option("Pics", "meaning", False) == "words"
+    assert plan.set_option("Pics", "words", False) == LEVEL_NAMES
+    assert plan.to_root().levels == (("Pics", LEVEL_NAMES),)
+
+
+def test_set_the_whole_folder_then_change_one_folder_inside(tree):
+    """What Ben described: choose for a folder and everything in it, then make one subfolder different."""
+    plan = Plan(tree)
+    plan.set_option("Letters", "ocr", False)
+    assert plan.level("Letters") == "words+meaning+alike" and plan.level("Letters/2019") == "words+meaning+alike"
+    assert not plan.differs("Letters/2019"), "the folder inside simply follows"
+    plan.set_option("Letters/2019", "ocr", True)
+    assert plan.differs("Letters/2019") and plan.level("Letters/2019") == LEVEL_MEANING and plan.level("Letters") == "words+meaning+alike"
+    assert plan.inside_with_own_choice("Letters") == ["Letters/2019"]
+    root = plan.to_root()
+    assert dict(root.levels) == {"Letters": "words+meaning+alike", "Letters/2019": LEVEL_MEANING}
+    assert level_for(root, "/r/Letters/2019/tax.docx") == LEVEL_MEANING and level_for(root, "/r/Letters/roof.pdf") == "words+meaning+alike"
+    plan.set_option("Letters", "meaning", False)
+    assert plan.level("Letters/2019") == LEVEL_MEANING, "the folder with its own choice keeps it when the folder above changes"
+
+
+def test_apply_to_everything_inside_and_follow_the_folder_above(tree):
+    plan = Plan(tree)
+    plan.set_level("Letters/2019", LEVEL_NAMES)
+    plan.set_ticked("Pics/2020", False)
+    plan.set_level("Pics", LEVEL_WORDS)
+    assert plan.apply_to_everything_inside("Letters") == 1 and not plan.differs("Letters/2019")
+    assert plan.level("Letters/2019") == LEVEL_MEANING
+    assert plan.apply_to_everything_inside("Letters") == 0, "nothing left inside that differs"
+    assert plan.apply_to_everything_inside("") == 2 and plan.ticked("Pics/2020") and not plan.differs("Pics"), \
+        "from the top: every folder follows again, ticks included"
+    plan.set_level("Mixed", LEVEL_WORDS)
+    assert plan.differs("Mixed")
+    plan.follow_above("Mixed")
+    assert not plan.differs("Mixed") and plan.level("Mixed") == LEVEL_MEANING
+    plan.follow_above("")
+    assert plan.level("") == LEVEL_MEANING, "the top folder has nothing above it to follow"
+
+
+def test_the_estimate_counts_each_choice(tree):
+    rates = Rates()
+    pics = tree.top.children["pics"].total
+    plan = Plan(tree)
+    plan.set_level("Pics", LEVEL_NAMES)
+    names = plan.cost(rates, "Pics")
+    plan.set_option("Pics", "alike", True)
+    assert plan.cost(rates, "Pics") == names + pics.to_ocr * rates.vector
+    plan.set_option("Pics", "ocr", True)
+    assert plan.cost(rates, "Pics") == names + pics.to_ocr * (rates.vector + rates.picture) + pics.readable * rates.read

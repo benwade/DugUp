@@ -21,11 +21,22 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from .filesource import ScanRules, excluded
-from .shapes import LEVEL_MEANING, LEVEL_NAMES, LEVEL_OCR, LEVEL_WORDS, LEVELS, POLICY_NAMES_ONLY, FileKind, Root
+from .shapes import (LEVEL_MEANING, LEVEL_NAMES, LEVEL_OCR, LEVEL_WORDS, LEVELS, OPTION_ALIKE, OPTION_MEANING, OPTION_OCR,
+                     OPTION_WORDS, OPTIONS, POLICY_NAMES_ONLY, FileKind, Root, level_of, level_words, normalize_level,
+                     options_of)
 from .suggest import SAFE, suggest_excludes, safe_folders
 from .survey import CODE, DOCUMENTS, MEDIA, OTHER, PICTURES, TEXT, Rates, Row, group_of
 
 LEVEL_LABELS = {LEVEL_NAMES: "Names only", LEVEL_WORDS: "Words", LEVEL_OCR: "Words and scans", LEVEL_MEANING: "Everything"}
+OPTION_LABELS = {OPTION_WORDS: "Words", OPTION_OCR: "Scans", OPTION_MEANING: "Meaning", OPTION_ALIKE: "Pictures alike"}
+NOT_YET = (OPTION_MEANING, OPTION_ALIKE)      # remembered now, used when searching by meaning is built
+PICTURE_FOLDER = level_of([OPTION_WORDS, OPTION_ALIKE])   # documents are read, pictures are matched by what they show
+
+
+def label(level: str) -> str:
+    """A level in a few words: one of the usual names, or its choices listed."""
+    spelled = normalize_level(level) or LEVEL_NAMES
+    return LEVEL_LABELS.get(spelled) or level_words(spelled).capitalize()
 TRASH_FOLDERS = frozenset({"trash", ".trash", ".trashes", "$recycle.bin", "recycle bin", "recycled"})
 
 
@@ -121,14 +132,14 @@ def guess(node: Node, book_folders: Sequence[str] = (), book_level: str = LEVEL_
     if node.tool or (row.files and useful == 0):
         return Guess(False, LEVEL_MEANING, "tool data and downloaded requirements, nothing a person wrote")
     if book_level and name in {b.casefold() for b in book_folders}:
-        return Guess(True, book_level, "the name suggests a book library (a guess; change it if you want the books read)")
+        return Guess(True, normalize_level(book_level) or LEVEL_NAMES, "the name suggests a book library (a guess; change it if you want the books read)")
     readable, pictures = row.readable, row.to_ocr
     if readable + pictures == 0:
         if row.cloud_only:
             return Guess(True, LEVEL_NAMES, "its files are kept in the cloud, not on this machine")
         return Guess(True, LEVEL_NAMES, "nothing here that can be read (sound, video, programs or other kinds)")
     if pictures >= picture_min and pictures >= picture_fraction * (readable + pictures):
-        return Guess(True, LEVEL_WORDS, "mostly pictures: they are not read for words unless you choose Words and scans")
+        return Guess(True, PICTURE_FOLDER, "mostly pictures: matched by what they show, and not read for words unless you tick Scans")
     if pictures:
         return Guess(True, LEVEL_MEANING, "documents and pictures together: scans are read too")
     return Guess(True, LEVEL_MEANING, "documents and text")
@@ -180,8 +191,22 @@ class Plan:
     def level(self, rel: str) -> str:
         for key in self._above(rel):
             if key in self.levels:
-                return self.levels[key][1]
-        return self.base_level
+                return normalize_level(self.levels[key][1]) or LEVEL_NAMES
+        return normalize_level(self.base_level) or LEVEL_MEANING
+
+    def has(self, rel: str, option: str) -> bool:
+        return option in options_of(self.level(rel))
+
+    def differs(self, rel: str) -> bool:
+        """True when this folder has a choice of its own and does not simply follow the folder above."""
+        return bool(rel) and rel.casefold() in self.levels
+
+    def inside_with_own_choice(self, rel: str) -> List[str]:
+        """Folders below this one that have a level or a tick of their own."""
+        prefix = rel.casefold() + "/" if rel else ""
+        found = [pair[0] for key, pair in self.levels.items() if key.startswith(prefix) and key != rel.casefold() and key]
+        found += [path for key, path in self.unticked.items() if key.startswith(prefix) and key != rel.casefold()]
+        return sorted(set(found), key=str.casefold)
 
     def own_level(self, rel: str) -> Optional[str]:
         found = self.levels.get(rel.casefold())
@@ -192,8 +217,7 @@ class Plan:
         node = self.node(rel)
         if node is None or not self.ticked(rel) or (node.tool and self.skip_tool):
             return 0.0
-        at = LEVELS.index(self.level(rel))
-        total = node.own.cost(rates)[at]
+        total = node.own.cost_for(rates, options_of(self.level(rel)))
         if not self.skip_tool:       # tool files are then indexed like any others: count their names at least
             total += node.own.not_worth * rates.name
         for child in node.children.values():
@@ -222,7 +246,8 @@ class Plan:
             self.levels.pop(rel.casefold(), None)
             if not rel:
                 self.base_level = LEVEL_MEANING
-        elif level in LEVELS:
+        elif normalize_level(level) is not None:
+            level = normalize_level(level)
             if not rel:
                 self.base_level = level
             elif level == self.level(rel.rsplit("/", 1)[0] if "/" in rel else ""):
@@ -231,10 +256,39 @@ class Plan:
                 self.levels[rel.casefold()] = (rel, level)
 
     def next_level(self, rel: str) -> str:
-        """Step to the next level, round and round (what one click on the level does)."""
-        level = LEVELS[(LEVELS.index(self.level(rel)) + 1) % len(LEVELS)]
+        """Step through the four usual combinations, round and round. A combination that is not one of them
+        starts again at the first."""
+        now = self.level(rel)
+        level = LEVELS[(LEVELS.index(now) + 1) % len(LEVELS)] if now in LEVELS else LEVELS[0]
         self.set_level(rel, level)
         return level
+
+    def set_option(self, rel: str, option: str, on: bool) -> str:
+        """Turn one choice on or off for a folder, starting from what applies to it now. Scans and meaning
+        bring words with them; turning words off turns those off too. Returns the level that results."""
+        chosen = set(options_of(self.level(rel)))
+        if on:
+            chosen.add(option)
+        else:
+            chosen.discard(option)
+            if option == OPTION_WORDS:
+                chosen -= {OPTION_OCR, OPTION_MEANING}
+        self.set_level(rel, level_of(chosen))
+        return self.level(rel)
+
+    def apply_to_everything_inside(self, rel: str) -> int:
+        """Make every folder below this one follow it again: their own levels and ticks are taken away.
+        Returns how many folders that changed."""
+        doomed = self.inside_with_own_choice(rel)
+        for path in doomed:
+            self.levels.pop(path.casefold(), None)
+            self.unticked.pop(path.casefold(), None)
+        return len(doomed)
+
+    def follow_above(self, rel: str) -> None:
+        """Take this folder's own level away, so it follows the folder above it."""
+        if rel:
+            self.levels.pop(rel.casefold(), None)
 
     # -- the result
 

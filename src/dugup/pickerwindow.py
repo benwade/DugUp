@@ -11,12 +11,15 @@ from __future__ import annotations
 
 from typing import Callable, Dict, Optional
 
-from .picker import LEVEL_LABELS, Node, Plan
+from .picker import NOT_YET, OPTION_LABELS, Node, Plan, label
+from .shapes import OPTIONS
 from .survey import CODE, DOCUMENTS, MEDIA, OTHER, PICTURES, TEXT, Rates
 
 IN, OUT = "☑", "☐"       # a ticked and an empty box
-COLUMNS = (("tick", "In", 40), ("level", "How far", 180), ("holds", "What is there", 330), ("cost", "Index grows by", 110),
-           ("why", "Why it starts this way", 420))
+COLUMNS = (("tick", "In", 36),
+           *((option, OPTION_LABELS[option] + ("*" if option in NOT_YET else ""), 112 if option == "alike" else 76) for option in OPTIONS),
+           ("holds", "What is there", 300), ("cost", "Index grows by", 116), ("why", "Notes", 380))
+OPTION_COLUMN = {f"#{index + 2}": option for index, option in enumerate(OPTIONS)}     # "#1" is the tick
 PLACEHOLDER = "more:"
 
 
@@ -57,14 +60,14 @@ class PickerDialog:
         self.applied = False
         win = self.window = tk.Toplevel(parent)
         win.title("Choose what to index")
-        win.geometry("1320x680")
+        win.geometry("1400x700")
         win.columnconfigure(0, weight=1)
         win.rowconfigure(2, weight=1)
 
         self.where = tk.StringVar(value=plan.tree.root)
         ttk.Entry(win, textvariable=self.where, state="readonly").grid(row=0, column=0, sticky="ew", padx=6, pady=(6, 2))
-        self.help = tk.StringVar(value="Click a box to take a folder in or out. Click \"How far\" to step through the levels. "
-                                       "Nothing changes until Apply.")
+        self.help = tk.StringVar(value="Click a box to change it. \"In\" takes a folder in or out; the others say what is done with "
+                                       "its files. Folders inside follow the folder above. Nothing changes until Apply.")
         ttk.Entry(win, textvariable=self.help, state="readonly").grid(row=1, column=0, sticky="ew", padx=6, pady=2)
 
         frame = ttk.Frame(win)
@@ -73,10 +76,10 @@ class PickerDialog:
         frame.rowconfigure(0, weight=1)
         tree = self.tree = ttk.Treeview(frame, columns=[key for key, _, _ in COLUMNS], selectmode="browse")
         tree.heading("#0", text="Folder")
-        tree.column("#0", width=300, stretch=False)
+        tree.column("#0", width=260, stretch=False)
         for key, title, width in COLUMNS:
             tree.heading(key, text=title)
-            tree.column(key, width=width, stretch=key == "why", anchor="center" if key == "tick" else "w")
+            tree.column(key, width=width, stretch=key == "why", anchor="center" if key == "tick" or key in OPTIONS else "w")
         tree.tag_configure("out", foreground="#888888")
         bar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=bar.set)
@@ -88,23 +91,32 @@ class PickerDialog:
         tree.bind("<space>", lambda event: self._key(self.toggle))
         tree.bind("<Key-l>", lambda event: self._key(self.step_level))
 
+        actions = ttk.Frame(win)
+        actions.grid(row=3, column=0, sticky="w", padx=6, pady=(2, 2))
+        self.inside_button = ttk.Button(actions, text="Apply to everything inside", command=self.apply_inside)
+        self.inside_button.pack(side="left", padx=(0, 6))
+        self.follow_button = ttk.Button(actions, text="Follow the folder above", command=self.follow_above)
+        self.follow_button.pack(side="left", padx=(0, 6))
+        self.note = tk.StringVar(value="* Meaning and Pictures alike are remembered now and used once searching by meaning is built. "
+                                       "Scans and Meaning need Words, so ticking one ticks Words too.")
+        ttk.Entry(win, textvariable=self.note, state="readonly").grid(row=4, column=0, sticky="ew", padx=6, pady=2)
         self.skip_tool = tk.BooleanVar(value=plan.skip_tool)
         self.tool_box = ttk.Checkbutton(
             win, variable=self.skip_tool, command=self._tool_changed,
             text=f"Leave out tool data and downloaded requirements ({plan.tree.tool_files:,} file(s): package folders, "
                  "version-control data, caches)")
-        self.tool_box.grid(row=3, column=0, sticky="w", padx=6, pady=2)
+        self.tool_box.grid(row=5, column=0, sticky="w", padx=6, pady=2)
         if not plan.tree.tool_files:
             self.tool_box.state(["disabled"])
 
         self.total = tk.StringVar()
-        ttk.Entry(win, textvariable=self.total, state="readonly").grid(row=4, column=0, sticky="ew", padx=6, pady=2)
+        ttk.Entry(win, textvariable=self.total, state="readonly").grid(row=6, column=0, sticky="ew", padx=6, pady=2)
         self.message = tk.StringVar(value="This folder is already indexed: these are its current choices." if known else
                                     "These are starting guesses. Change anything that does not fit.")
-        ttk.Entry(win, textvariable=self.message, state="readonly").grid(row=5, column=0, sticky="ew", padx=6, pady=2)
+        ttk.Entry(win, textvariable=self.message, state="readonly").grid(row=7, column=0, sticky="ew", padx=6, pady=2)
 
         buttons = ttk.Frame(win)
-        buttons.grid(row=6, column=0, sticky="e", padx=6, pady=6)
+        buttons.grid(row=8, column=0, sticky="e", padx=6, pady=6)
         if fresh is not None:
             ttk.Button(buttons, text="Start over from the guesses", command=self.start_over).pack(side="left", padx=4)
         ttk.Button(buttons, text="Cancel", command=self.close).pack(side="left", padx=4)
@@ -124,13 +136,14 @@ class PickerDialog:
     def _values(self, node: Node):
         plan = self.plan
         inside = plan.ticked(node.rel)
-        level = LEVEL_LABELS[plan.level(node.rel)] if inside else ""
-        if inside and plan.own_level(node.rel) is None and "/" in node.rel:
-            level += "  (as above)"
+        marks = tuple((IN if plan.has(node.rel, option) else OUT) if inside else "" for option in OPTIONS)
         why = plan.reasons.get(node.rel.casefold(), "")
         if not plan.own_tick(node.rel):
             why = why or "left out"
-        return (IN if plan.own_tick(node.rel) else OUT, level, holds_text(node),
+        elif not why and inside:
+            why = "its own choice: differs from the folder above" if plan.differs(node.rel) else \
+                ("follows the folder above" if "/" in node.rel else "")
+        return (IN if plan.own_tick(node.rel) else OUT, *marks, holds_text(node),
                 size_text(plan.cost(self.rates, node.rel)) if inside else "", why)
 
     def _insert(self, parent: str, node: Node) -> None:
@@ -174,7 +187,7 @@ class PickerDialog:
         visit("")
         inside, outside = self.plan.counts()
         learned = "from your own index" if self.rates.learned else "a starting guess"
-        level = LEVEL_LABELS[self.plan.base_level]
+        level = label(self.plan.base_level)
         self.total.set(f"{inside:,} folder(s) in, {outside:,} out. Files directly in this folder: {level}. "
                        f"The index would grow by about {size_text(self.plan.cost(self.rates))} (a rough estimate, {learned}).")
 
@@ -190,8 +203,8 @@ class PickerDialog:
         column = self.tree.identify_column(event.x)
         if column == "#1":
             self.toggle(rel)
-        elif column == "#2":
-            self.step_level(rel)
+        elif column in OPTION_COLUMN:
+            self.toggle_option(rel, OPTION_COLUMN[column])
 
     def _selected(self, event=None) -> None:
         """Say the selected row's reason in full below (the column may be too narrow for it)."""
@@ -206,7 +219,7 @@ class PickerDialog:
             self.message.set(f"{name}: left out.")
         else:
             follows = "" if self.plan.own_level(rel) or "/" not in rel else ", following the folder above"
-            self.message.set(f"{name}: {LEVEL_LABELS[self.plan.level(rel)]}{follows}.")
+            self.message.set(f"{name}: {label(self.plan.level(rel))}{follows}.")
 
     def _key(self, action) -> str:
         rel = self._rel(self.tree.focus())
@@ -218,6 +231,44 @@ class PickerDialog:
         self.plan.set_ticked(rel, not self.plan.own_tick(rel))
         self.plan.reasons.pop(rel.casefold(), None)       # the starting reason no longer describes the row
         self.refresh()
+
+    def toggle_option(self, rel: str, option: str) -> None:
+        """Tick or untick one of the choices for a folder (a click in its column)."""
+        if not self.plan.ticked(rel):
+            self.message.set("That folder is left out. Tick its \"In\" box first.")
+            return
+        self.plan.set_option(rel, option, not self.plan.has(rel, option))
+        self.plan.reasons.pop(rel.casefold(), None)
+        name = rel.rsplit("/", 1)[-1]
+        self.refresh()
+        self.message.set(f"{name}: {label(self.plan.level(rel))}. Folders inside it follow, unless they have a choice of their own.")
+
+    def apply_inside(self) -> None:
+        """Make every folder inside the selected one follow it again."""
+        rel = self._rel(self.tree.focus() or "")
+        if rel is None:
+            self.message.set("Select a folder first.")
+            return
+        changed = self.plan.apply_to_everything_inside(rel)
+        self.refresh()
+        name = rel.rsplit("/", 1)[-1]
+        self.message.set(f"{changed} folder(s) inside {name} had their own choice and now follow it." if changed else
+                         f"Every folder inside {name} already follows it.")
+
+    def follow_above(self) -> None:
+        """Take the selected folder's own choice away."""
+        rel = self._rel(self.tree.focus() or "")
+        if rel is None:
+            self.message.set("Select a folder first.")
+            return
+        name = rel.rsplit("/", 1)[-1]
+        if not self.plan.differs(rel):
+            self.message.set(f"{name} already follows the folder above.")
+            return
+        self.plan.follow_above(rel)
+        self.plan.reasons.pop(rel.casefold(), None)
+        self.refresh()
+        self.message.set(f"{name} follows the folder above again: {label(self.plan.level(rel))}.")
 
     def step_level(self, rel: str) -> None:
         if not self.plan.ticked(rel):
@@ -255,6 +306,6 @@ class PickerDialog:
             self.window.destroy()
             # tkinter's variables must be let go here, on the window's thread. Left to the garbage collector
             # they may be freed on a background thread, which tkinter does not allow (it can hang on Windows).
-            self.where = self.help = self.total = self.message = self.skip_tool = None
+            self.where = self.help = self.total = self.message = self.skip_tool = self.note = None
             if self.on_close is not None:
                 self.on_close()

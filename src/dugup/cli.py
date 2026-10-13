@@ -29,7 +29,7 @@ from .filesource import SUGGESTED_EXCLUDES
 from .indexer import KEEP, REFUSE, REREAD, IndexReport, Progress
 from .protocols import WARN_MASS_LOSS, WARN_ROOT_EMPTY
 from .service import LocalService
-from .shapes import LEVEL_WORDS, LEVELS, POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow
+from .shapes import LEVEL_WORDS, LEVELS, OPTION_OCR, POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow
 from .store import SORT_COLUMNS, StoreError
 from .suggest import SAFE, Suggestion
 
@@ -187,9 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
     level = roots_sub.add_parser("level", parents=[common],
                                  help="how far indexing goes in one folder (a subfolder's level wins over the folder above it)")
     level.add_argument("path", help="an indexed folder, or any folder inside one")
-    level.add_argument("level", choices=list(LEVELS) + ["inherit"],
-                       help="names: file names only. words: also the text of readable files. ocr: also the words in "
-                            "pictures and scans. meaning: everything (the default). inherit: follow the folder above again")
+    level.add_argument("level",
+                       help="names: file names only. Or any of these joined by +: words (text of documents), ocr (words in "
+                            "pictures and scans), meaning, alike (pictures by what they show); for example words+ocr. "
+                            "meaning alone is short for everything, the default. inherit: follow the folder above again")
     look = roots_sub.add_parser("survey", parents=[common],
                                 help="what a folder holds and what indexing it would cost, folder by folder (opens no file, changes nothing)")
     look.add_argument("path")
@@ -485,12 +486,13 @@ def cmd_roots(args, env, out, environ) -> int:
             if isinstance(result, Failure):
                 return _fail(result, out)
             where = os.path.join(str(result["root"]), *str(result["folder"]).split("/")) if result["folder"] else result["root"]
-            safe_write(f"{where}: level {result['level']}" + (" (follows the folder above)" if args.level == "inherit" else ""), out)
+            from .shapes import level_words, wants
+            safe_write(f"{where}: {level_words(str(result['level']))}" + (" (follows the folder above)" if args.level == "inherit" else ""), out)
             if result["purged"]:
                 safe_write(f"  The text kept for {result['purged']:,} file(s) was removed; their names stay searchable.", out)
             if result["queued"]:
                 safe_write(f"  {result['queued']:,} file(s) now wait to be read. Next: dugup index", out)
-            if result["level"] == LEVEL_WORDS:
+            if wants(str(result["level"]), "words") and not wants(str(result["level"]), OPTION_OCR):
                 safe_write("  Pictures and scanned pages here are no longer read (text already read from them is kept).", out)
             return 0
         if args.roots_command == "survey":
@@ -544,8 +546,9 @@ def _print_root(root: Root, status, out: TextIO) -> None:
     state = "" if root.reachable else "  [NOT AVAILABLE at the last scan; its files are kept]"
     safe_write(f"{root.path}{state}", out)
     safe_write(f"  policy {root.policy}; {total:,} file(s); last scan {format_date(root.last_scan)}", out)
+    from .shapes import level_words
     for folder, level in root.levels:
-        safe_write(f"  level {level}: {folder or '(the whole folder)'}", out)
+        safe_write(f"  {folder or '(the whole folder)'}: {level_words(level)}", out)
     if root.exclude:
         safe_write(f"  skipping: {', '.join(root.exclude)}", out)
     if root.include:
