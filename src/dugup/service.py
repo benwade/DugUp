@@ -372,6 +372,18 @@ class LocalService:
         return surveying.survey(target, ((e.path, e.size, e.offline) for e in listing.entries),
                                 self.settings.extensions, rates)
 
+    def copies(self, path: str, stop: Optional[StopSignal] = None):
+        """Folders below `path` that look like copies of each other (copies.Pair, most files first), or a
+        Failure. From names and sizes alone: nothing is opened, indexed or changed, and skip rules are not
+        applied, so everything is compared."""
+        from . import copies as finding
+        target = os.path.abspath(os.path.expanduser(path))
+        listing = self._lister().scan(target, ScanRules(), stop)
+        if isinstance(listing, Failure):
+            return listing
+        base = target.rstrip("/\\")
+        return finding.find(((e.path[len(base) + 1:].replace("\\", "/"), e.size) for e in listing.entries), stop=stop)
+
     def _apply_policy(self, root: Root, below: Optional[str] = None) -> Tuple[int, int]:
         """Make what is stored fit the level of every file below a folder (the whole root when `below` is None).
         Where the level is now "names", the text is removed; where it is no longer, the files wait to be read.

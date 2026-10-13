@@ -40,3 +40,25 @@ def test_the_picker_leaves_out_what_is_named_a_backup_and_only_notes_the_rest():
     assert 'looks like a copy of "Photos2"' in plan.reasons["photos"] and 'looks like a copy of "Photos"' in plan.reasons["photos2"]
     assert len(plan.copies) == 2
     assert "/Backup/Docs" in plan.to_root().exclude
+
+
+def test_the_command_lists_pairs_with_full_locations_and_changes_nothing(tmp_path):
+    import io
+    from dugup.cli import main
+    docs = tmp_path / "docs"
+    for folder in ("Stuff", "Backup/Stuff"):
+        (docs / folder).mkdir(parents=True)
+        for i in range(25):
+            (docs / folder / f"note{i}.txt").write_text("x" * (i + 1), encoding="utf-8")
+    out = io.StringIO()
+    code = main(["roots", "copies", str(docs), "--data-dir", str(tmp_path / "data")], stdout=out)
+    text = out.getvalue()
+    assert code == 0 and "1 pair(s) of folders look like copies" in text and "About 25 file(s) are there twice" in text
+    assert str(docs / "Stuff") in text and str(docs / "Backup" / "Stuff") in text, "every copy with its whole location"
+    assert "named like a backup" in text.split(str(docs / "Backup" / "Stuff"))[1].splitlines()[0]
+    out = io.StringIO()
+    assert main(["roots", "list", "--data-dir", str(tmp_path / "data")], stdout=out) in (0, 1) and str(docs) not in out.getvalue()
+    out = io.StringIO()
+    (docs / "Lone").mkdir()
+    assert main(["roots", "copies", str(docs / "Lone"), "--data-dir", str(tmp_path / "data")], stdout=out) == 0
+    assert "No folders here look like copies" in out.getvalue()

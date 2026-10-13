@@ -48,6 +48,8 @@ def safe_write(text: str, stream: TextIO, end: str = "\n") -> None:
     A Windows console in a legacy code page raises on characters it cannot show
     (for example a Japanese folder name). Show an escape instead of crashing.
     """
+    if stream is None:        # started without a console (the window's launcher): there is nowhere to write
+        return
     encoding = getattr(stream, "encoding", None) or "utf-8"
     stream.write(text.encode(encoding, "backslashreplace").decode(encoding) + end)
     stream.flush()
@@ -195,6 +197,10 @@ def build_parser() -> argparse.ArgumentParser:
                                 help="what a folder holds and what indexing it would cost, folder by folder (opens no file, changes nothing)")
     look.add_argument("path")
     look.add_argument("--rows", type=int, default=30, help="how many folders to list, largest first (default 30)")
+    alike = roots_sub.add_parser("copies", parents=[common],
+                                 help="folders that look like copies of other folders, from names and sizes (opens no file, changes nothing)")
+    alike.add_argument("path")
+    alike.add_argument("--rows", type=int, default=40, help="how many pairs to list, most files first (default 40)")
     suggest.add_argument("--apply-safe", action="store_true",
                          help="skip everything in the 'safe to skip' list (downloaded requirements, tool data)")
     exclude = roots_sub.add_parser("exclude", parents=[common], help="skip more files or folders in an indexed folder")
@@ -464,7 +470,7 @@ def print_suggestions(found: List[Suggestion], path: str, is_root: bool, out: Te
 
 
 def cmd_roots(args, env, out, environ) -> int:
-    service = _service(args, environ, out, create=args.roots_command in ("add", "suggest", "survey"))
+    service = _service(args, environ, out, create=args.roots_command in ("add", "suggest", "survey", "copies"))
     if service is None:
         return 1
     with service:
@@ -505,6 +511,27 @@ def cmd_roots(args, env, out, environ) -> int:
             if isinstance(found, Failure):
                 return _fail(found, out)
             print_survey(found, max(1, args.rows), out)
+            return 0
+        if args.roots_command == "copies":
+            from . import copies as finding
+            safe_write(f"Looking through {args.path} (no file is opened, nothing is changed) ...", out)
+            found = service.copies(args.path)
+            if isinstance(found, Failure):
+                return _fail(found, out)
+            if not found:
+                safe_write("No folders here look like copies of each other.", out)
+                return 0
+            capped = " or more" if len(found) >= finding.MOST_PAIRS else ""
+            safe_write(f"{len(found):,}{capped} pair(s) of folders look like copies (same file names and sizes; a guess, "
+                       f"not proof). About {sum(p.files for p in found):,} file(s) are there twice.", out)
+            for pair in found[:max(1, args.rows)]:
+                backup = finding.the_copy(pair)
+                safe_write(f"  {pair.files:,} file(s), about {pair.share:.0%} the same", out)
+                for folder in (pair.first, pair.second):
+                    mark = "   <- named like a backup: the picker would leave it out" if folder == backup else ""
+                    safe_write(f"      {os.path.join(args.path, *folder.split('/'))}{mark}", out)
+            if len(found) > args.rows:
+                safe_write(f"  ... and {len(found) - max(1, args.rows):,} more pair(s); --rows N shows more", out)
             return 0
         if args.roots_command == "suggest":
             safe_write(f"Looking through {args.path}" + ("" if args.apply_safe else " (nothing is changed)") + " ...", out)
