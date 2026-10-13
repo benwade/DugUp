@@ -139,7 +139,7 @@ class FakeDesktop:
 
 
 class Bench:
-    def __init__(self, tmp_path, intent=None, settings=None, pick=False):
+    def __init__(self, tmp_path, intent=None, settings=None, pick=False, setup=False):
         self.docs = tmp_path / helpers.AWKWARD_FOLDER
         self.docs.mkdir()
         (self.docs / "sub").mkdir()
@@ -161,7 +161,7 @@ class Bench:
         self.answer = None
         self.folder_to_add = str(self.docs)
         self.app = w.App(self.root, self.service, self.desktop, ask=self._ask, choose_folder=lambda: self.folder_to_add,
-                         pick=pick)
+                         pick=pick, setup=setup)
         self.copied = []
         self.app.copy_text = self.copied.append     # the tests leave the real clipboard alone
 

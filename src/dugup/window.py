@@ -156,8 +156,10 @@ class App:
     """`root` is a tkinter root (or Toplevel). `service` is a LocalService. The rest can be replaced in tests."""
 
     def __init__(self, root, service, desktop: Optional[Desktop] = None, ask=None, choose_folder=None,
-                 pick: bool = True) -> None:
+                 pick: bool = True, setup: bool = True) -> None:
         self.pick = pick              # show the folder picker when a folder is added (False: add it whole, at once)
+        self.setup_on_first_start = setup    # open the setup wizard by itself when there is no folder yet
+        self.wizard = None            # the setup wizard or Settings window while it is open
         self.picker = None            # the picker's window while it is open
         self.carried = ""             # the report of an index update that went straight on into OCR
         self.waiting_fast = ""        # a folder to read fast as soon as the run now going has stopped
@@ -184,6 +186,8 @@ class App:
         self.refresh_status()
         root.protocol("WM_DELETE_WINDOW", self.close)
         self._poll_id = root.after(POLL_MS, self._poll)
+        if self.setup_on_first_start and not self.service.list_roots():
+            self.open_setup(first_run=True)
 
     # -- building
 
@@ -335,6 +339,7 @@ class App:
         self.stop_button = ttk.Button(buttons, text="Stop", command=self.stop_work, state="disabled")
         self.stop_button.pack(side="left", padx=2)
         ttk.Button(buttons, text="Refresh", command=self.refresh_status).pack(side="left", padx=2)
+        ttk.Button(buttons, text="Settings...", command=self.open_setup).pack(side="left", padx=2)
         self.progress_text = tk.StringVar(value="Nothing is running.")
         self._readonly(index, self.progress_text, row=1, column=0, sticky="ew", pady=3)
         self.status = tk.Text(index, wrap="word", state="disabled", font="TkDefaultFont")
@@ -687,6 +692,32 @@ class App:
             chosen = roots[0]
         self.start("plan", path=chosen)
 
+    def open_setup(self, first_run: bool = False) -> None:
+        """The setup wizard (first run: it looks at the computer and suggests) or the Settings window (later:
+        every setting, as it stands)."""
+        from .setup import SetupPlan
+        from .setupwindow import SetupWizard
+        if self.wizard is not None and not self.wizard.closed:
+            self.wizard.window.lift()
+            return
+        service = self.service
+        plan = SetupPlan(service.settings, first_run=first_run, advanced=not first_run)
+
+        def save(done) -> str:
+            changes = done.changes()
+            if changes:
+                result = service.apply_settings(changes)
+                if isinstance(result, Failure):
+                    return f"That could not be saved: {result.detail}"
+            self.refresh_status()
+            self.say(f"Saved {len(changes)} setting(s)." if changes else "Nothing was changed.")
+            if done.first_run and not service.list_roots():
+                self.root.after(0, self.add_folder)       # the last step of setting up: which folders
+            return ""
+
+        look = (lambda stop: service.look_at_machine(stop, test_card=True)) if first_run else None
+        self.wizard = SetupWizard(self.root, plan, look, save)
+
     def read_folder_now(self) -> None:
         """Read one folder's pictures and scans at once, with several readers side by side. A run that is
         going on is asked to stop first (what it has done is kept, the rest stays queued), and this starts
@@ -912,6 +943,8 @@ class App:
         self.stop.set()
         if self.picker is not None:
             self.picker.close()
+        if self.wizard is not None:
+            self.wizard.close()
         worker = self.worker
         if worker is not None:
             worker.join()        # a stop request ends a run promptly; nothing is lost

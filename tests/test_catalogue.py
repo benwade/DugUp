@@ -94,7 +94,7 @@ def test_values_that_depend_on_each_other_are_checked_together():
 def test_values_are_shown_in_plain_words():
     assert catalogue.show("ocr_gpu", True) == "yes" and catalogue.show("max_index_mb", 56337) == "56,337 MB"
     assert catalogue.show("book_folder_level", "names") == "file names only" and catalogue.show("intent_url", "") == "(empty)"
-    assert catalogue.show("picture_heavy_fraction", 0.8) == "0.8" and catalogue.show("ocr_fast_readers", 0) == "0 readers"
+    assert catalogue.show("picture_heavy_fraction", 0.8) == "0.8" and catalogue.show("ocr_fast_readers", 0) == "worked out by DugUp" and catalogue.show("max_index_mb", 0) == "no limit"
 
 
 # ---- defaults chosen from the machine ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ def test_the_spending_limit_and_reader_count_come_from_the_machine_with_their_re
     found = catalogue.suggestions(Machine(cores=32, free_memory_bytes=35 * GB, free_disk_bytes=550 * GB))
     assert found["max_index_mb"] == (56320, "a tenth of the 550 GB that is free now")
     value, why = found["ocr_fast_readers"]
-    assert value == 0 and "8 on this computer (32 processor cores)" in why
+    assert value == 0 and "8 on this computer, which has 32 processor cores" in why
     small = catalogue.suggestions(Machine(cores=1, free_disk_bytes=2 * GB))
     assert small["max_index_mb"][0] == 500, "never a limit so small that nothing fits"
     unknown = catalogue.suggestions(Machine())

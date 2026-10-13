@@ -120,6 +120,18 @@ class SandboxOcrBackend:
             self.last_device = str(answer["device"])
         return result_from_data(answer)
 
+    def speed_test(self, stop: Optional[StopSignal] = None, seconds: float = 180.0) -> "dict | Failure":
+        """Time a made-up page on the processor and on the graphics card (jobs.ocr_speed)."""
+        answer = self.sandbox.run("dugup.jobs:ocr_speed", {"rounds": 3}, Limits(seconds, self.settings.ocr_memory_mb or None), stop)
+        if isinstance(answer, Failure):
+            return answer
+        if not isinstance(answer, dict) or "failure" in answer:
+            try:
+                return Failure(FailureReason(answer["failure"]), str(answer["detail"]))
+            except Exception:
+                return Failure(FailureReason.CRASHED, "the speed test's answer could not be understood")
+        return answer
+
     def card(self, stop: Optional[StopSignal] = None) -> str:
         """The graphics card route this machine's OCR runtime has, in words, or "" when it has none.
         Asked of a worker, so the main program never loads the runtime."""

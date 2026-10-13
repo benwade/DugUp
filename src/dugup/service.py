@@ -499,6 +499,41 @@ class LocalService:
         return machine.readers_for(s.ocr_fast_readers, s.ocr_reader_threads, s.ocr_reader_memory_mb,
                                    free_bytes=machine.free_memory_bytes())
 
+    def look_at_machine(self, stop: Optional[StopSignal] = None, test_card: bool = True):
+        """What this computer has (catalogue.Machine): cores, free memory, free disk, whether the picture reader
+        can use a graphics card and, when `test_card` is on, how much faster the card read a sample page.
+        The test takes some seconds and loads the reader twice; run it off the window's thread."""
+        from . import machine
+        from .catalogue import Machine
+        backend = self.ocr_backend
+        card, speedup = "", None
+        if test_card and hasattr(backend, "speed_test"):
+            timed = backend.speed_test(stop)
+            if isinstance(timed, dict):
+                card = str(timed.get("card_name") or "")
+                slow, quick = timed.get("processor"), timed.get("card")
+                if card and slow and quick and quick > 0:
+                    speedup = float(slow) / float(quick)
+        elif hasattr(backend, "card"):
+            card = backend.card(stop)
+        return Machine(machine.cores(), machine.free_memory_bytes(), self.layout.free_bytes(), card, speedup)
+
+    def apply_settings(self, changes: Mapping[str, object]) -> "Settings | Failure":
+        """Check these settings, save them in config.toml and use them from now on. Nothing is saved when one
+        of them will not do. Workers started under the old settings are ended, so the new ones take effect."""
+        from . import catalogue
+        new = catalogue.apply(self.settings, changes)
+        if isinstance(new, Failure):
+            return new
+        catalogue.write(self.layout.config, {name: getattr(new, name) for name in changes})
+        self.settings = new
+        self._forget_intent()
+        close = getattr(self._ocr_backend, "close", None)
+        if close is not None and isinstance(self._ocr_backend, SandboxOcrBackend):
+            close()
+            self._ocr_backend = None
+        return new
+
     def card_readers(self) -> int:
         """How many readers share the graphics card in fast mode. Each still does its drawing and tidying on
         the processor, so the count follows the cores, and eight is as far as it has been measured."""

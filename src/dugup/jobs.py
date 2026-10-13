@@ -144,6 +144,60 @@ def ocr_device(payload: Mapping[str, Any]) -> Dict[str, Any]:
     return {"card": GPU_NAMES.get(card, ""), "provider": card}
 
 
+SAMPLE_LINES = ("Quarterly report on harbour maintenance", "The bakery opens at seven every morning",
+                "Invoice 20418 is due on the first of March", "Minutes of the meeting held on Tuesday",
+                "Please return the signed form by Friday", "Chapter three: the long road to the coast")
+
+
+def ocr_speed(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Read one made-up page a few times on the processor and, when the runtime has a way to the graphics
+    card, on the card as well. Answers {"processor": seconds a page, "card": seconds a page or None,
+    "card_name": words}. The first read of each is left out: it includes loading the engine."""
+    try:
+        import time
+
+        import numpy
+        from PIL import Image, ImageDraw, ImageFont
+        from rapidocr import RapidOCR
+    except ImportError as exc:
+        return _failure(FailureReason.NOT_INSTALLED, f"the OCR engine is not installed ({exc.name or exc})")
+    page = Image.new("RGB", (1240, 1754), "white")
+    draw = ImageDraw.Draw(page)
+    try:
+        font = ImageFont.load_default(size=30)
+    except TypeError:                     # an older picture library: its one small built-in font
+        font = ImageFont.load_default()
+    for row in range(30):
+        draw.text((90, 80 + row * 54), SAMPLE_LINES[row % len(SAMPLE_LINES)] + f" {row + 1}", fill="black", font=font)
+    picture = numpy.ascontiguousarray(numpy.asarray(page)[:, :, ::-1])
+    rounds = max(1, int(payload.get("rounds") or 3))
+    threads = int(payload.get("threads") or 0)
+
+    def time_one(card: str) -> float:
+        params: Dict[str, Any] = {"Global.log_level": "error"}
+        if card == "DmlExecutionProvider":
+            params["EngineConfig.onnxruntime.use_dml"] = True
+        elif card == "CUDAExecutionProvider":
+            params["EngineConfig.onnxruntime.use_cuda"] = True
+        elif threads > 0:
+            params["EngineConfig.onnxruntime.intra_op_num_threads"] = threads
+        engine = RapidOCR(params=params)
+        engine(picture)                   # the warm-up read
+        started = time.perf_counter()
+        for _ in range(rounds):
+            engine(picture)
+        return (time.perf_counter() - started) / rounds
+
+    card = gpu_provider()
+    answer: Dict[str, Any] = {"processor": time_one(""), "card": None, "card_name": GPU_NAMES.get(card, "")}
+    if card:
+        try:
+            answer["card"] = time_one(card)
+        except Exception as exc:          # the card route is there but does not work: said, and the processor stands
+            answer["card_problem"] = f"{type(exc).__name__}: {exc}"[:200]
+    return answer
+
+
 def ocr(payload: Mapping[str, Any]) -> Dict[str, Any]:
     """Read one picture, or one page of a PDF (page 1 or more), with the OCR engine."""
     try:

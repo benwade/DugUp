@@ -54,6 +54,7 @@ class Entry:
     low: Optional[float] = None
     high: Optional[float] = None
     unit: str = ""
+    zero: str = ""      # what 0 means for this setting, in words ("no limit", "worked out by DugUp")
     suggest: Optional[Callable[[Machine], Tuple[object, str]]] = None   # a default that depends on the machine
 
 
@@ -109,7 +110,7 @@ def _readers(machine: Machine) -> Tuple[object, str]:
     from .machine import readers_for
     count = readers_for(0, Settings().ocr_reader_threads, Settings().ocr_reader_memory_mb, machine.cores,
                         machine.free_memory_bytes)
-    return 0, f"worked out when a fast run starts: {count} on this computer ({machine.cores} processor cores)"
+    return 0, f"{count} on this computer, which has {machine.cores} processor cores"
 
 
 YES_NO = ((True, "yes"), (False, "no"))
@@ -147,11 +148,11 @@ def _entries() -> Tuple[Entry, ...]:
         E("ocr_max_pixels", "pictures", "Largest picture side",
           "A larger picture is scaled down to this before reading.", low=1, unit="pixels"),
         E("ocr_tiny_pixels", "pictures", "Tiny pictures",
-          "Pictures smaller than this (icons, buttons) are read last. 0 turns this off.", low=0, unit="pixels"),
+          "Pictures smaller than this (icons, buttons) are read last. 0 turns this off.", low=0, unit="pixels", zero="off"),
         E("ocr_seconds", "pictures", "Time for one page",
           "How long one page or picture may take before it is set aside for a second, longer try.", low=1, unit="seconds"),
         E("ocr_memory_mb", "pictures", "Memory for the reader",
-          "Memory the picture reader may use. 0 means no limit, which the reader needs on most machines.", low=0, unit="MB"),
+          "Memory the picture reader may use. 0 means no limit, which the reader needs on most machines.", low=0, unit="MB", zero="no limit"),
         E("ocr_failures_in_a_row", "pictures", "Pause after failures",
           "This many pages failing one after another pause the run: it looks like trouble with the reader, not the pictures.",
           low=1, unit="pages"),
@@ -159,10 +160,10 @@ def _entries() -> Tuple[Entry, ...]:
         E("ocr_fast_readers", "speed", "Readers in a fast run",
           "How many picture readers work side by side in a fast run. 0 lets DugUp work it out.",
           why="More readers finish sooner and make the computer busier while they run. The usual, gentle run uses one.",
-          everyday=True, low=0, high=64, unit="readers", suggest=_readers),
+          everyday=True, low=0, high=64, unit="readers", suggest=_readers, zero="worked out by DugUp"),
         E("ocr_gpu_readers", "speed", "Readers sharing the graphics card",
           "How many readers share the graphics card in a fast run. 0 lets DugUp work it out (at most 8).",
-          low=0, high=64, unit="readers"),
+          low=0, high=64, unit="readers", zero="worked out by DugUp"),
         E("ocr_reader_threads", "speed", "Processor threads per reader",
           "How many processor threads each reader in a fast run may use.", low=1, high=64, unit="threads"),
         E("ocr_reader_memory_mb", "speed", "Memory counted per reader",
@@ -172,15 +173,15 @@ def _entries() -> Tuple[Entry, ...]:
         E("max_index_mb", "disk", "Spending limit for the index",
           "Indexing and reading stop when the index is larger than this. 0 means no limit.",
           why="An index of a large disk can reach several GB. A limit means it can never surprise you.",
-          everyday=True, low=0, unit="MB", suggest=_limit),
+          everyday=True, low=0, unit="MB", suggest=_limit, zero="no limit"),
         E("min_free_mb", "disk", "Space always kept free",
-          "A run stops when the disk that holds the index has less than this free. 0 turns the check off.", low=0, unit="MB"),
+          "A run stops when the disk that holds the index has less than this free. 0 turns the check off.", low=0, unit="MB", zero="not checked"),
         E("text_compression", "disk", "Compress stored text",
           "Stored text is compressed, which makes the index much smaller and does not affect searching.",
           choices=(("zlib", "compressed (smaller index)"), ("none", "not compressed"))),
         E("compact_at_fraction", "disk", "Tidy the index by itself",
           "After a run the index is rewritten to give space back when at least this share of it is unused. 0 means never by itself.",
-          low=0.0, high=1.0),
+          low=0.0, high=1.0, zero="never by itself"),
         E("compact_min_mb", "disk", "...when at least this much is unused", "The least unused space worth tidying for.",
           low=0, unit="MB"),
         # -- search
@@ -204,7 +205,7 @@ def _entries() -> Tuple[Entry, ...]:
         E("intent_server", "words", "Model server program", "A model server program for DugUp to start itself. Empty: the installed one."),
         E("intent_model_file", "words", "Model file", "The model file that server should load."),
         E("intent_gpu_layers", "words", "Model layers on the graphics card",
-          "How much of the language model runs on the graphics card. 0 keeps it on the processor.", low=0, unit="layers"),
+          "How much of the language model runs on the graphics card. 0 keeps it on the processor.", low=0, unit="layers", zero="none (the processor)"),
         E("intent_seconds", "words", "Time for one sentence", "How long the model may take to read one sentence.", low=0.1, unit="seconds"),
         E("intent_start_seconds", "words", "Time to load the model", "How long the model server may take to start.", low=0.1, unit="seconds"),
         # -- files
@@ -224,7 +225,7 @@ def _entries() -> Tuple[Entry, ...]:
           "A PDF page whose text has at least this share of unusable characters is read by OCR instead.", low=0.01, high=1.0),
         E("figure_fraction", "files", "Pictures inside typed pages",
           "A typed page with a picture covering at least this share is also read by OCR, for the words in the picture. 0 turns it off.",
-          low=0.0, high=1.0),
+          low=0.0, high=1.0, zero="off"),
         # -- safety
         E("isolate_readers", "safety", "Read files in a separate process",
           "Leave on. Off is for finding faults: a bad file could then hang or crash the program.", choices=YES_NO),
@@ -232,12 +233,12 @@ def _entries() -> Tuple[Entry, ...]:
           low=0.1, unit="seconds"),
         E("reader_seconds_per_mb", "safety", "Extra time per megabyte", "Added for each megabyte of the file.", low=0, unit="seconds"),
         E("reader_seconds_cap", "safety", "Longest time for any file", "Never more than this for one file.", low=0.1, unit="seconds"),
-        E("reader_memory_mb", "safety", "Memory for reading a file", "Memory a file reader may use. 0 means no limit.", low=0, unit="MB"),
+        E("reader_memory_mb", "safety", "Memory for reading a file", "Memory a file reader may use. 0 means no limit.", low=0, unit="MB", zero="no limit"),
         E("retry_patience", "safety", "Second tries",
           "A file or page that ran out of time gets one more try, last of all, with its time multiplied by this. 1 means no second try.",
           low=0, unit="times"),
         E("reader_failures_in_a_row", "safety", "Pause after failures",
-          "This many crashes or timeouts one after another pause the run. 0 means never.", low=0, unit="files"),
+          "This many crashes or timeouts one after another pause the run. 0 means never.", low=0, unit="files", zero="never"),
     )
 
 
@@ -341,6 +342,8 @@ def show(name: str, value: object) -> str:
             return words
     if isinstance(value, bool):
         return "yes" if value else "no"
+    if entry.zero and isinstance(value, (int, float)) and value == 0:
+        return entry.zero
     if isinstance(value, float):
         text = f"{value:g}"
     elif isinstance(value, int):

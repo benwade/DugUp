@@ -140,6 +140,12 @@ A folder's level applies to everything below it until a folder further down has 
 level away again. Lowering a folder to `names` removes the text kept for it at once. To leave a folder out
 completely, use `dugup roots exclude`.
 
+The first time the window opens with no folder yet, a short setup wizard appears. It says plainly that
+building the index is heavy work and temporary, looks at the computer (cores, memory, free disk, and a
+quick test of whether the graphics card reads pictures faster than the processor), and offers to choose
+everything for you, showing what it chose and why. Or you can go through the choices a page at a time.
+"Settings..." in the window shows every setting later.
+
 Settings: `dugup config list` shows the everyday settings, grouped, each with a line of guidance
 (`--all` shows every one); `dugup config get NAME` explains one; `dugup config set NAME VALUE` changes it
 after checking the value; `dugup config reset NAME` goes back to the default. They are kept in
