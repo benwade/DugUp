@@ -240,6 +240,16 @@ def test_settings_later_shows_every_setting_as_it_stands_and_changes_nothing_by_
 
 # ---- in the main window ---------------------------------------------------------------------------------------
 
+def started(bench, seconds=30.0, until=None):
+    """Let the window work until the look it queued has begun (it is queued, so it may take a turn or two)."""
+    import time
+    end = time.monotonic() + seconds
+    until = until or (lambda: bench.app.worker is not None)
+    while not until() and time.monotonic() < end:
+        bench.root.update()
+        time.sleep(0.01)
+
+
 def test_the_wizard_opens_by_itself_on_a_first_start_and_finishing_saves_and_asks_for_a_folder(tmp_path, monkeypatch):
     from dugup import service as service_module
     monkeypatch.setattr(service_module.LocalService, "look_at_machine", lambda self, stop=None, test_card=True: STRONG)
@@ -261,7 +271,7 @@ def test_the_wizard_opens_by_itself_on_a_first_start_and_finishing_saves_and_ask
         saved, notes = settings_module.load(bench.layout.config)
         assert saved.ocr_gpu is True and saved.max_index_mb == 56320 and notes == []
         assert bench.app.place_queue == [str(bench.docs), str(tmp_path / "nowhere")], "the folder inside another is covered by it"
-        bench.root.update()                        # finishing queued a look through the first folder
+        started(bench)                             # finishing queued a look through the first folder
         bench.finish_run()
         picker = bench.app.picker
         assert picker is not None and picker.where.get() == str(bench.docs), "no bare file box: the picker, for the folder chosen"
@@ -269,8 +279,9 @@ def test_the_wizard_opens_by_itself_on_a_first_start_and_finishing_saves_and_ask
         assert bench.app.setting_up and bench.root.state() != "normal", "still setting up: folders are left to choose"
         picker.apply()
         assert str(bench.docs) in bench.app.folder_box.cget("values")
-        bench.root.update()                        # closing the picker moves on to the next folder
-        bench.finish_run()
+        started(bench, until=lambda: not bench.app.place_queue)   # closing the picker moves on to the next folder
+        if bench.app.worker is not None:           # (a look that fails at once may already be over)
+            bench.finish_run()
         assert "could not be looked through" in bench.app.message.get() and bench.app.place_queue == []
         assert bench.app.worker is None
         assert not bench.app.setting_up and bench.root.state() == "normal", "setting up is over: the main window is back"
