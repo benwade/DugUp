@@ -44,6 +44,7 @@ class Settings:
     reader_seconds_per_mb: float = 2.0     # extra time for each megabyte of the file
     reader_seconds_cap: float = 900.0      # never more than this for one file
     reader_memory_mb: int = 4096           # memory a reader may use; 0 means no limit
+    index_readers: int = 0                 # files read side by side when indexing; 0 works it out, 1 is one at a time
     retry_patience: float = 2.0            # a file or page that ran out of time gets one more try, last of all,
                                            # with its time limit multiplied by this; 1 or less means no second try
     reader_failures_in_a_row: int = 10     # this many crashes or timeouts one after another pause the run; 0: never
@@ -132,6 +133,8 @@ def validate(s: Settings) -> List[str]:
     for name in ("reader_seconds", "reader_seconds_cap"):
         if getattr(s, name) <= 0:
             problems.append(f"{name} must be above 0")
+    if s.index_readers < 0:
+        problems.append("index_readers must not be negative")
     if s.reader_seconds_per_mb < 0 or s.reader_memory_mb < 0:
         problems.append("reader_seconds_per_mb and reader_memory_mb must not be negative")
     if not 0.0 <= s.compact_at_fraction <= 1.0 or s.compact_min_mb < 0:

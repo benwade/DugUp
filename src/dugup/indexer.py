@@ -174,7 +174,11 @@ class Indexer:
                  progress: Optional[Callable[[Progress], None]] = None, clock: Callable[[], float] = time.time,
                  timer: Callable[[], float] = time.monotonic, extra_excludes: Sequence[str] = (),
                  room: Optional[Callable[[], str]] = None,
-                 size_now: Optional[Callable[[], int]] = None, case_insensitive: Optional[bool] = None) -> None:
+                 size_now: Optional[Callable[[], int]] = None, case_insensitive: Optional[bool] = None,
+                 extra_extractors: Sequence[Extractor] = ()) -> None:
+        # more readers, each with a worker of its own: files are then read side by side. Reading is all they
+        # do; everything is stored by the one thread that runs the indexer.
+        self.extra_extractors = tuple(extra_extractors)
         self.case_insensitive = (os.name == "nt") if case_insensitive is None else case_insensitive
         self.size_now = size_now   # the index's size on disk in bytes, for the early estimate; None: no estimate
         self.room = room         # says why nothing more may be written (the drive is nearly full, or the
@@ -410,6 +414,9 @@ class Indexer:
         A file that runs out of time is not failed at once. It keeps its place in the queue with a note,
         and is read again after everything else, with more time; only a second timeout fails it. The note
         is stored, so a run that stops before that last pass still knows which files have had their first try.
+
+        With more readers (extra_extractors) files are read side by side: a slow file keeps one reader busy
+        while the others go on. Whatever is read is stored here, by this one thread, as each reader finishes.
         """
         total = int(dict(self.store.state_counts(root.path)).get(FileState.PENDING.value, 0))
         started = self.timer()
@@ -418,10 +425,11 @@ class Indexer:
         done = failed = in_a_row = 0
         later: List[FileRecord] = []
         cursor = 0
+        readers = _Readers((self.extractor, *self.extra_extractors)) if self.extra_extractors else None
+        ended: List[bool] = []            # what ended the run early, when something did
 
-        def one(record: FileRecord, patient: bool) -> Optional[bool]:
+        def before(record: FileRecord) -> Optional[bool]:
             """None to carry on, else what read_pending returns."""
-            nonlocal done, failed, in_a_row, estimate_at
             if _stopped(stop):
                 return False
             if (done + len(later)) % ROOM_EVERY == 0:
@@ -429,7 +437,10 @@ class Indexer:
                 if report.paused:
                     return False
             self._tell(Progress("read", root.path, done, total, failed, self.timer() - started, record.path))
-            state = self.read_one(record, report, stop, patient)
+            return None
+
+        def after(record: FileRecord, state: Optional[FileState]) -> Optional[bool]:
+            nonlocal done, failed, in_a_row, estimate_at
             if state is None and _stopped(stop):
                 return False
             if state is FileState.PENDING:      # out of time once: it waits for the last pass
@@ -453,29 +464,70 @@ class Indexer:
                 return False
             return None
 
-        while True:
-            batch = self.store.list_files(prefix=root.path, state=FileState.PENDING, missing=False,
-                                          limit=self.settings.batch_files, after_row=cursor)
-            if not batch:
-                break
-            for record in batch:
-                cursor = record.row_id
-                if record.error == RETRY_NOTE and self._patient() is not None:
-                    later.append(record)       # had its first try in an earlier run
-                    continue
-                answer = one(record, False)
+        def take(wait: bool) -> None:
+            """Store what the readers have finished. `wait`: until at least one has."""
+            for record, patient, result in readers.finished(wait):
+                if patient and self._patient() is not None:
+                    report.second_tries += 1
+                answer = after(record, self._keep(record, result, report, patient))
                 if answer is not None:
-                    return answer
-            self._tell(Progress("read", root.path, done, max(total, done), failed, self.timer() - started))
-        second = list(later)
-        del later[:]
-        for record in second:
-            answer = one(record, True)
+                    ended.append(answer)
+
+        def one(record: FileRecord, patient: bool) -> Optional[bool]:
+            answer = before(record)
             if answer is not None:
                 return answer
-        if second:
-            self._tell(Progress("read", root.path, done, max(total, done), failed, self.timer() - started))
-        return True
+            if readers is None:
+                return after(record, self.read_one(record, report, stop, patient))
+            while not readers.free() and not ended:
+                take(True)
+            if ended:
+                return ended[0]
+            readers.start(lambda extractor: self._read(extractor, record, stop, patient), record, patient)
+            take(False)
+            return ended[0] if ended else None
+
+        def settle() -> Optional[bool]:
+            """Wait for the readers still at work and store what they read."""
+            while readers is not None and readers.busy():
+                take(True)
+            return ended[0] if ended else None
+
+        try:
+            while True:
+                batch = self.store.list_files(prefix=root.path, state=FileState.PENDING, missing=False,
+                                              limit=self.settings.batch_files, after_row=cursor)
+                if not batch:
+                    break
+                for record in batch:
+                    cursor = record.row_id
+                    if record.error == RETRY_NOTE and self._patient() is not None:
+                        later.append(record)       # had its first try in an earlier run
+                        continue
+                    answer = one(record, False)
+                    if answer is not None:
+                        settle()
+                        return answer
+                self._tell(Progress("read", root.path, done, max(total, done), failed, self.timer() - started))
+            answer = settle()                      # the first tries are all in before the second ones start
+            if answer is not None:
+                return answer
+            second = list(later)
+            del later[:]
+            for record in second:
+                answer = one(record, True)
+                if answer is not None:
+                    settle()
+                    return answer
+            answer = settle()
+            if answer is not None:
+                return answer
+            if second:
+                self._tell(Progress("read", root.path, done, max(total, done), failed, self.timer() - started))
+            return True
+        finally:
+            if readers is not None:
+                readers.close()
 
     _last_reason: Optional[FailureReason] = None
 
@@ -483,18 +535,28 @@ class Indexer:
                  patient: bool = False) -> Optional[FileState]:
         """Read one file and store the outcome. Returns its new state; None when it was left waiting untouched;
         PENDING when it ran out of time for the first time and now waits for a more patient second try."""
-        self._last_reason = None
-        patiently = self._patient()
+        if patient and self._patient() is not None:
+            report.second_tries += 1
+        return self._keep(record, self._read(self.extractor, record, stop, patient), report, patient)
+
+    def _read(self, extractor, record: FileRecord, stop: Optional[StopSignal], patient: bool):
+        """The reading half: no index, no counters, so several of these may run side by side."""
+        patiently = getattr(extractor, "extract_patiently", None) if self.settings.retry_patience > 1.0 else None
         try:
             if patient and patiently is not None:
-                report.second_tries += 1
                 result = patiently(record, stop, self.settings.retry_patience)
             else:
-                result = self.extractor.extract(record, stop)
+                result = extractor.extract(record, stop)
         except Exception as exc:   # a reader bug must cost one file, not the run
             result = Failure(FailureReason.CRASHED, f"the reader raised {type(exc).__name__}: {exc}")
         if result is None:
             result = Failure(FailureReason.OTHER, "the reader returned nothing")
+        return result
+
+    def _keep(self, record: FileRecord, result, report: IndexReport, patient: bool) -> Optional[FileState]:
+        """The storing half: always on the indexer's own thread."""
+        self._last_reason = None
+        patiently = self._patient()
         if isinstance(result, Failure):
             self._last_reason = result.reason
             if result.reason is FailureReason.TIMED_OUT and not patient and patiently is not None:
@@ -535,3 +597,52 @@ class Indexer:
 
 def _stopped(stop: Optional[StopSignal]) -> bool:
     return stop is not None and stop.is_set()
+
+
+class _Readers:
+    """Several extractors at work side by side. Each reads one file at a time on a thread of its own; what
+    they read is handed back to the thread that asked, which is the only one that touches the index."""
+
+    def __init__(self, extractors: Sequence[Extractor]) -> None:
+        import queue
+        from concurrent.futures import ThreadPoolExecutor
+        self._idle = list(extractors)
+        self._count = len(self._idle)
+        self._done: "queue.Queue[tuple]" = queue.Queue()
+        self._pool = ThreadPoolExecutor(max_workers=self._count, thread_name_prefix="dugup-reader")
+
+    def free(self) -> bool:
+        return bool(self._idle)
+
+    def busy(self) -> bool:
+        return len(self._idle) < self._count
+
+    def start(self, read: Callable[[Extractor], object], record: FileRecord, patient: bool) -> None:
+        extractor = self._idle.pop()
+
+        def work() -> None:
+            try:
+                result = read(extractor)
+            except BaseException as exc:      # the reading half catches its own; this is the last line of defence
+                result = Failure(FailureReason.CRASHED, f"the reader raised {type(exc).__name__}: {exc}")
+            self._done.put((extractor, record, patient, result))
+
+        self._pool.submit(work)
+
+    def finished(self, wait: bool) -> List[tuple]:
+        """(record, patient, result) for every read that has ended; with `wait`, not before one has."""
+        import queue
+        out = []
+        while self.busy() or not self._done.empty():
+            try:
+                extractor, record, patient, result = self._done.get(timeout=0.2) if wait and not out else self._done.get_nowait()
+            except queue.Empty:
+                if wait and not out and self.busy():
+                    continue
+                break
+            self._idle.append(extractor)
+            out.append((record, patient, result))
+        return out
+
+    def close(self) -> None:
+        self._pool.shutdown(wait=True)

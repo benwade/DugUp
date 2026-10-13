@@ -488,19 +488,27 @@ class LocalService:
                 return Failure(FailureReason.BUSY, "another program is indexing into this data folder right now")
             try:
                 store = self._open_store()   # the writer: its own connection, in this thread
+                more: list = []
                 try:
                     def tell(p: Progress) -> None:
                         self._progress = p
                         if progress is not None:
                             progress(p)
 
+                    more = self._more_index_readers(self.index_readers() - 1)
                     indexer = Indexer(store, self.source, self.extractor, self.settings, tell, self.clock,
                                       extra_excludes=(str(self.layout.root),), room=self.room,
-                                      size_now=self.layout.index_bytes, case_insensitive=self.case_insensitive)
+                                      size_now=self.layout.index_bytes, case_insensitive=self.case_insensitive,
+                                      extra_extractors=more)
                     report = indexer.run(stop, roots, on_settings_change, retry_failed)
                     self.last_report = report
                     return report
                 finally:
+                    for reader in more:
+                        try:
+                            reader.close()
+                        except Exception:
+                            pass
                     store.close()
             finally:
                 self._lock.release()
@@ -516,6 +524,18 @@ class LocalService:
             if owner is None or level_reaches(level_for(owner, task.path, self.case_insensitive), LEVEL_OCR):
                 count += 1
         return count
+
+    def index_readers(self) -> int:
+        """How many files an indexing run reads side by side. More than one only when files are read in worker
+        processes (the default): readers that run inside this program are not made to be shared."""
+        from . import machine
+        if not isinstance(self.extractor, SandboxedExtractor):
+            return 1
+        return machine.index_readers_for(self.settings.index_readers, free_bytes=machine.free_memory_bytes())
+
+    def _more_index_readers(self, count: int) -> list:
+        """`count` more document readers, each with a worker of its own. The caller closes them."""
+        return [SandboxedExtractor(SubprocessSandbox(), self.settings) for _ in range(max(0, count))]
 
     def fast_readers(self) -> int:
         """How many readers fast mode would use on this machine now."""

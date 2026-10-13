@@ -107,6 +107,12 @@ def _limit(machine: Machine) -> Tuple[object, str]:
     return megabytes, f"a tenth of the {machine.free_disk_bytes / 1024 ** 3:,.0f} GB that is free now"
 
 
+def _index_readers(machine: Machine) -> Tuple[object, str]:
+    from .machine import index_readers_for
+    count = index_readers_for(0, machine.cores, machine.free_memory_bytes)
+    return 0, f"{count} on this computer, which has {machine.cores} processor cores"
+
+
 def _readers(machine: Machine) -> Tuple[object, str]:
     from .machine import readers_for
     count = readers_for(0, Settings().ocr_reader_threads, Settings().ocr_reader_memory_mb, machine.cores,
@@ -158,6 +164,11 @@ def _entries() -> Tuple[Entry, ...]:
           "This many pages failing one after another pause the run: it looks like trouble with the reader, not the pictures.",
           low=1, unit="pages"),
         # -- speed
+        E("index_readers", "speed", "Files read side by side",
+          "How many files are read at the same time when the index is updated. 0 lets DugUp work it out; 1 reads one at a time.",
+          why="Side by side, one slow file (a large PDF, or one that must first come down from a cloud drive) does not "
+              "hold up the rest. More readers make the computer busier while the index is updated.",
+          everyday=True, low=0, high=32, unit="readers", suggest=_index_readers, zero="worked out by DugUp"),
         E("ocr_fast_readers", "speed", "Readers in a fast run",
           "How many picture readers work side by side in a fast run. 0 lets DugUp work it out.",
           why="More readers finish sooner and make the computer busier while they run. The usual, gentle run uses one.",

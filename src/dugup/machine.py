@@ -53,3 +53,12 @@ def readers_for(wanted: int, threads_each: int, memory_each_mb: int, core_count:
     if free_bytes is not None and memory_each_mb > 0:
         by_memory = max(1, int(free_bytes // (memory_each_mb * 1024 * 1024)))
     return max(1, min(by_cores, by_memory, most))
+
+
+INDEX_READER_MB = 600      # counted for each reader of documents [a guess: most files need far less]
+
+
+def index_readers_for(wanted: int, core_count: Optional[int] = None, free_bytes: Optional[int] = None) -> int:
+    """How many files to read side by side when indexing: the person's own number when given, else half the
+    cores, at most 8, and never more than the free memory holds."""
+    return readers_for(wanted, 1, INDEX_READER_MB, core_count, free_bytes, most=8)
