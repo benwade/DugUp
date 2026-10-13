@@ -181,7 +181,7 @@ class Plan:
         self.unticked: Dict[str, str] = {}     # folded rel -> rel
         self.levels: Dict[str, Tuple[str, str]] = {}   # folded rel -> (rel, level)
         self.reasons: Dict[str, str] = {}      # folded rel -> why it started the way it did
-        self.copies: List[tuple] = []          # (copies.Pair, the one left out or ""): what the guess found
+        self.copies: List[tuple] = []          # (copies.Family, the folders left out): what the guess found
         self._nodes = {node.rel.casefold(): node for node in tree.top.walk()}
 
     # -- reading
@@ -350,23 +350,28 @@ def plan_from_guess(tree: Tree, settings=None) -> Plan:
         else:
             plan.set_level(child.rel, made.level)
     from . import copies
-    for pair in tree.copies:
-        if not (plan.ticked(pair.first) and plan.ticked(pair.second)):
-            continue                                   # one of the two is left out already
-        about = f"about {pair.share:.0%} of the same file names and sizes"
-        backup = copies.the_copy(pair)
-        if backup:
-            other = pair.second if backup == pair.first else pair.first
+    for family in copies.families(tree.copies):
+        folders = [f for f in family.folders if plan.ticked(f)]
+        if len(folders) < 2:
+            continue                                   # all but one are left out already
+        about = f"about {family.share:.0%} of the same file names and sizes"
+        backups = copies.named_backups(folders)
+        kept = [f for f in folders if f not in backups]
+        for backup in backups:
             plan.set_ticked(backup, False)
-            plan.reasons[backup.casefold()] = (f"looks like a backup of \"{other}\" ({about}), so it is left out; "
+            plan.reasons[backup.casefold()] = (f"looks like a backup of \"{kept[0]}\" ({about}), so it is left out; "
                                                "tick it if you want both")
-            before = plan.reasons.get(other.casefold(), "")
-            plan.reasons[other.casefold()] = (before + "; " if before else "") + f"\"{backup}\" looks like a backup of this and is left out"
-        else:
-            for one, two in ((pair.first, pair.second), (pair.second, pair.first)):
-                plan.reasons[one.casefold()] = (f"looks like a copy of \"{two}\" ({about}); both are included, "
-                                                "untick one if you do not need both")
-        plan.copies.append((pair, backup))
+        for one in kept:
+            others = [f for f in kept if f != one]
+            before = plan.reasons.get(one.casefold(), "")
+            if others:
+                shown = ", ".join(f"\"{f}\"" for f in others[:3]) + (f" and {len(others) - 3} more" if len(others) > 3 else "")
+                note = (f"looks like a copy of {shown} ({about}); all are included, untick the ones you do not need")
+                plan.reasons[one.casefold()] = note
+            elif backups:
+                plan.reasons[one.casefold()] = (before + "; " if before else "") + \
+                    f"\"{backups[0]}\" looks like a backup of this and is left out"
+        plan.copies.append((family, tuple(backups)))
     return plan
 
 

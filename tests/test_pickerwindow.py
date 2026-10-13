@@ -293,6 +293,6 @@ def test_a_folder_that_looks_like_a_backup_is_left_out_shown_and_said(bench):
     assert picker.tree.exists("n:Keep/Backup/Stuff"), "the row is brought into view without being asked for"
     assert row(picker, "Keep/Backup/Stuff")["tick"] == OUT and 'looks like a backup of "Stuff"' in row(picker, "Keep/Backup/Stuff")["why"]
     assert row(picker, "Stuff")["tick"] == IN and "looks like a backup of this" in row(picker, "Stuff")["why"]
-    assert "1 folder(s) look like copies" in picker.message.get() and "1 named like a backup are left out" in picker.message.get()
+    assert "1 set(s) of folders look like copies" in picker.message.get() and "1 named like a backup are left out" in picker.message.get()
     picker.toggle("Keep/Backup/Stuff")
     assert row(picker, "Keep/Backup/Stuff")["tick"] == IN, "and it can be put back"

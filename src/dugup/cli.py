@@ -200,7 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
     alike = roots_sub.add_parser("copies", parents=[common],
                                  help="folders that look like copies of other folders, from names and sizes (opens no file, changes nothing)")
     alike.add_argument("path")
-    alike.add_argument("--rows", type=int, default=40, help="how many pairs to list, most files first (default 40)")
+    alike.add_argument("--rows", type=int, default=40, help="how many sets to list, most extra files first (default 40)")
     suggest.add_argument("--apply-safe", action="store_true",
                          help="skip everything in the 'safe to skip' list (downloaded requirements, tool data)")
     exclude = roots_sub.add_parser("exclude", parents=[common], help="skip more files or folders in an indexed folder")
@@ -521,17 +521,19 @@ def cmd_roots(args, env, out, environ) -> int:
             if not found:
                 safe_write("No folders here look like copies of each other.", out)
                 return 0
+            groups = finding.families(found)
+            extra = sum(g.files * (len(g.folders) - 1) for g in groups)
             capped = " or more" if len(found) >= finding.MOST_PAIRS else ""
-            safe_write(f"{len(found):,}{capped} pair(s) of folders look like copies (same file names and sizes; a guess, "
-                       f"not proof). About {sum(p.files for p in found):,} file(s) are there twice.", out)
-            for pair in found[:max(1, args.rows)]:
-                backup = finding.the_copy(pair)
-                safe_write(f"  {pair.files:,} file(s), about {pair.share:.0%} the same", out)
-                for folder in (pair.first, pair.second):
-                    mark = "   <- named like a backup: the picker would leave it out" if folder == backup else ""
+            safe_write(f"{len(groups):,}{capped} set(s) of folders look like copies of each other (same file names and "
+                       f"sizes; a guess, not proof). Roughly {extra:,} file(s) are extra copies.", out)
+            for group in groups[:max(1, args.rows)]:
+                backups = set(finding.named_backups(group.folders))
+                safe_write(f"  {len(group.folders)} places, {group.files:,} file(s) or more in each, about {group.share:.0%} the same or better", out)
+                for folder in group.folders:
+                    mark = "   <- named like a backup: the picker would leave it out" if folder in backups else ""
                     safe_write(f"      {os.path.join(args.path, *folder.split('/'))}{mark}", out)
-            if len(found) > args.rows:
-                safe_write(f"  ... and {len(found) - max(1, args.rows):,} more pair(s); --rows N shows more", out)
+            if len(groups) > args.rows:
+                safe_write(f"  ... and {len(groups) - max(1, args.rows):,} more set(s); --rows N shows more", out)
             return 0
         if args.roots_command == "suggest":
             safe_write(f"Looking through {args.path}" + ("" if args.apply_safe else " (nothing is changed)") + " ...", out)

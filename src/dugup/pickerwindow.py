@@ -172,15 +172,15 @@ class PickerDialog:
         found = getattr(self.plan, "copies", [])
         if not found:
             return
-        for pair, _ in found[:10]:
-            for rel in (pair.first, pair.second):
+        for family, _ in found[:10]:
+            for rel in family.folders:
                 parts = rel.split("/")
                 for depth in range(1, len(parts)):
                     above = "/".join(parts[:depth])
                     if self.tree.exists(self._iid(above)):
                         self.open(above)
-        left_out = sum(1 for _, backup in found if backup)
-        self.message.set(f"{len(found)} folder(s) look like copies of other folders (same file names and sizes; no file "
+        left_out = sum(len(backups) for _, backups in found)
+        self.message.set(f"{len(found)} set(s) of folders look like copies of each other (same file names and sizes; no file "
                          f"was opened). {left_out} named like a backup are left out, the rest are included. "
                          "See the Notes column; change anything that does not fit.")
 

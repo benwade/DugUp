@@ -53,7 +53,7 @@ def test_the_command_lists_pairs_with_full_locations_and_changes_nothing(tmp_pat
     out = io.StringIO()
     code = main(["roots", "copies", str(docs), "--data-dir", str(tmp_path / "data")], stdout=out)
     text = out.getvalue()
-    assert code == 0 and "1 pair(s) of folders look like copies" in text and "About 25 file(s) are there twice" in text
+    assert code == 0 and "1 set(s) of folders look like copies" in text and "Roughly 25 file(s) are extra copies" in text
     assert str(docs / "Stuff") in text and str(docs / "Backup" / "Stuff") in text, "every copy with its whole location"
     assert "named like a backup" in text.split(str(docs / "Backup" / "Stuff"))[1].splitlines()[0]
     out = io.StringIO()
@@ -81,3 +81,23 @@ def test_tool_data_is_not_compared_at_all():
     tree = picker.build("/r", listed)
     assert [(p.first, p.second) for p in tree.copies] == [("Docs", "Docs copy")], "only the folders a person made"
     assert copies.find(package("A/venv") + package("B/venv"), skip=["A/venv", "b/VENV"]) == []
+
+
+def test_a_folder_kept_in_four_places_is_one_family_and_saved_web_pages_are_not_copies():
+    """From a real drive: Desktop in four places came out as six pairs, and the folders a browser writes
+    beside saved pages (all holding the same scripts) as dozens."""
+    places = ["Desktop", "Personal/Desktop", "Other/PC2/Desktop", "Other/PC3/Desktop"]
+    listed = [row for place in places for row in files(place, 60)] + files("Alone", 60, start=3000)
+    pages = [(f"Travel/Mail {n}_files/asset{i}.js", 700 + i) for n in range(6) for i in range(40)]
+    found = copies.find(listed + pages)
+    assert len(found) == 6 and not any("_files" in p.first for p in found)
+    groups = copies.families(found)
+    assert len(groups) == 1 and groups[0].folders == ("Desktop", "Personal/Desktop", "Other/PC2/Desktop", "Other/PC3/Desktop")
+    assert groups[0].files == 60 and copies.named_backups(groups[0].folders) == []
+    assert copies.named_backups(("Docs", "Backup/Docs", "Docs - Copy")) == ["Backup/Docs", "Docs - Copy"]
+    assert copies.named_backups(("Backup/A", "Backup/B")) == [], "when every name says backup, the names do not choose"
+    tree = picker.build("/r", [(f"/r/{rel}", size, False) for rel, size in listed])
+    plan = picker.plan_from_guess(tree)
+    assert all(plan.ticked(place) for place in places) and len(plan.copies) == 1
+    note = plan.reasons["desktop"]
+    assert '"Personal/Desktop"' in note and '"Other/PC2/Desktop"' in note and "all are included" in note

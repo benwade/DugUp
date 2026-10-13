@@ -33,6 +33,45 @@ def backup_name(name: str) -> bool:
     return bool(_BACKUP.search(name.strip()))
 
 
+def page_parts(folder: str) -> bool:
+    """Inside the folder a browser writes beside a saved web page ("Some page_files"): scripts and styles that
+    are the same for every page saved from one site, so they pair up with each other and mean nothing."""
+    return any(part.casefold().endswith(("_files", ".files", "_archivos", "_fichiers", "-dateien")) for part in folder.split("/"))
+
+
+@dataclass(frozen=True)
+class Family:
+    folders: Tuple[str, ...]   # every folder that looks like a copy of the others, in a steady order
+    files: int                 # files in the smallest of them
+    share: float               # the weakest likeness between two of them that were paired
+
+
+def families(pairs: Sequence["Pair"]) -> List[Family]:
+    """Pairs joined up: when A is like B and B is like C, the three are one family. A folder kept in four
+    places is then said once, with its four places, and not as six pairs."""
+    leader: Dict[str, str] = {}
+
+    def find_leader(folder: str) -> str:
+        while leader.setdefault(folder, folder) != folder:
+            leader[folder] = leader[leader[folder]]
+            folder = leader[folder]
+        return folder
+
+    for pair in pairs:
+        a, b = find_leader(pair.first), find_leader(pair.second)
+        if a != b:
+            leader[max(a, b)] = min(a, b)
+    groups: Dict[str, List[Pair]] = {}
+    for pair in pairs:
+        groups.setdefault(find_leader(pair.first), []).append(pair)
+    made = []
+    for members in groups.values():
+        folders = sorted({f for pair in members for f in (pair.first, pair.second)}, key=lambda f: (f.count("/"), f.casefold()))
+        made.append(Family(tuple(folders), min(p.files for p in members), min(p.share for p in members)))
+    made.sort(key=lambda f: (-f.files * (len(f.folders) - 1), f.folders[0].casefold()))
+    return made
+
+
 @dataclass(frozen=True)
 class Pair:
     first: str            # folder paths below the root, written with "/"
@@ -67,7 +106,7 @@ def find(files: Iterable[Tuple[str, int]], min_files: int = MIN_FILES, min_share
         if size <= 0 or "/" not in relative:
             continue
         folder, name = relative.rsplit("/", 1)
-        if left_out and skipped(folder):
+        if (left_out and skipped(folder)) or page_parts(folder):
             continue
         mark = _mark(name, size)
         while True:
@@ -144,6 +183,13 @@ def _share(a: Sequence[int], b: Sequence[int]) -> float:
         return 0.0
     in_a, in_b = set(a), set(b)
     return sum(1 for value in both if value in in_a and value in in_b) / len(both)
+
+
+def named_backups(folders: Sequence[str]) -> List[str]:
+    """Those of a family whose name (their own or a folder above) says backup; none when all of them do,
+    since then the names do not tell which to keep."""
+    said = [f for f in folders if any(backup_name(part) for part in f.split("/"))]
+    return [] if len(said) == len(folders) else said
 
 
 def the_copy(pair: Pair) -> str:
