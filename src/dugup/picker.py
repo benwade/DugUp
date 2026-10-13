@@ -354,6 +354,13 @@ def plan_from_guess(tree: Tree, settings=None) -> Plan:
         folders = [f for f in family.folders if plan.ticked(f)]
         if len(folders) < 2:
             continue                                   # all but one are left out already
+        if family.inside:      # alike in parts only: each also holds what the other lacks, so nothing is left out
+            for one in folders:
+                others = ", ".join(f"\"{f}\"" for f in folders if f != one)
+                plan.reasons[one.casefold()] = (f"{family.inside} folders inside are copies of folders in {others}; all are "
+                                                "included, open it to untick the ones you do not need")
+            plan.copies.append((family, ()))
+            continue
         about = f"about {family.share:.0%} of the same file names and sizes"
         backups = copies.named_backups(folders)
         kept = [f for f in folders if f not in backups]

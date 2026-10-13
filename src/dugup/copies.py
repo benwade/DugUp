@@ -44,6 +44,7 @@ class Family:
     folders: Tuple[str, ...]   # every folder that looks like a copy of the others, in a steady order
     files: int                 # files in the smallest of them
     share: float               # the weakest likeness between two of them that were paired
+    inside: int = 0            # above 0: this many folders inside them are alike, not the folders as wholes
 
 
 def families(pairs: Sequence["Pair"]) -> List[Family]:
@@ -67,7 +68,8 @@ def families(pairs: Sequence["Pair"]) -> List[Family]:
     made = []
     for members in groups.values():
         folders = sorted({f for pair in members for f in (pair.first, pair.second)}, key=lambda f: (f.count("/"), f.casefold()))
-        made.append(Family(tuple(folders), min(p.files for p in members), min(p.share for p in members)))
+        made.append(Family(tuple(folders), min(p.files for p in members), min(p.share for p in members),
+                           max(p.inside for p in members)))
     made.sort(key=lambda f: (-f.files * (len(f.folders) - 1), f.folders[0].casefold()))
     return made
 
@@ -78,6 +80,7 @@ class Pair:
     second: str
     share: float          # about what part of the smaller folder's files are in the other too, 0..1
     files: int            # files in the smaller of the two
+    inside: int = 0       # above 0: the two are not alike as wholes; this many folders inside them pair off
 
 
 def _mark(name: str, size: int) -> int:
@@ -164,8 +167,27 @@ def find(files: Iterable[Tuple[str, int]], min_files: int = MIN_FILES, min_share
                    for c, d in alike)
         if not said:                                    # else a pair of folders above these already says it
             pairs.append(Pair(a, b, share, min(counts[a], counts[b])))
+    pairs = _rolled_up(pairs)
     pairs.sort(key=lambda p: (-p.files, p.first.casefold(), p.second.casefold()))
     return pairs[:MOST_PAIRS]
+
+
+ROLL_UP = 3             # this many folders inside two folders pairing off one to one: the two are said instead
+
+
+def _rolled_up(pairs: List["Pair"]) -> List["Pair"]:
+    """Two libraries that share most of their shelves are one finding, not one for every shelf. (The libraries
+    themselves may differ too much to pair: each has shelves the other lacks.)"""
+    by_parents: Dict[Tuple[str, str], List[Pair]] = {}
+    for pair in pairs:
+        above = (_parent(pair.first), _parent(pair.second))
+        if above[0] and above[1] and above[0].casefold() != above[1].casefold():
+            by_parents.setdefault(above, []).append(pair)
+    out = [p for p in pairs if len(by_parents.get((_parent(p.first), _parent(p.second)), ())) < ROLL_UP]
+    for (first, second), members in by_parents.items():
+        if len(members) >= ROLL_UP:
+            out.append(Pair(first, second, min(p.share for p in members), sum(p.files for p in members), len(members)))
+    return out
 
 
 def _parent(folder: str) -> str:

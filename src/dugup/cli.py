@@ -528,7 +528,11 @@ def cmd_roots(args, env, out, environ) -> int:
                        f"sizes; a guess, not proof). Roughly {extra:,} file(s) are extra copies.", out)
             for group in groups[:max(1, args.rows)]:
                 backups = set(finding.named_backups(group.folders))
-                safe_write(f"  {len(group.folders)} places, {group.files:,} file(s) or more in each, about {group.share:.0%} the same or better", out)
+                if group.inside:
+                    safe_write(f"  {len(group.folders)} places with {group.inside:,} folders inside that are copies of each other "
+                               f"({group.files:,} file(s), each about {group.share:.0%} the same or better)", out)
+                else:
+                    safe_write(f"  {len(group.folders)} places, {group.files:,} file(s) or more in each, about {group.share:.0%} the same or better", out)
                 for folder in group.folders:
                     mark = "   <- named like a backup: the picker would leave it out" if folder in backups else ""
                     safe_write(f"      {os.path.join(args.path, *folder.split('/'))}{mark}", out)

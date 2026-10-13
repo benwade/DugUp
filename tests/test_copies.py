@@ -101,3 +101,15 @@ def test_a_folder_kept_in_four_places_is_one_family_and_saved_web_pages_are_not_
     assert all(plan.ticked(place) for place in places) and len(plan.copies) == 1
     note = plan.reasons["desktop"]
     assert '"Personal/Desktop"' in note and '"Other/PC2/Desktop"' in note and "all are included" in note
+
+
+def test_two_libraries_sharing_many_shelves_are_one_finding():
+    """From a real drive: two book libraries, each with authors the other lacks, came out as 30 lines."""
+    shared = [row for n in range(6) for lib in ("Calibre", "Portable") for row in files(f"{lib}/Author {n}", 30, start=n * 100)]
+    only = [row for n in range(20) for row in files(f"Calibre/Solo {n}", 30, start=5000 + n * 100)]
+    found = copies.find(shared + only)
+    assert [(p.first, p.second, p.inside, p.files) for p in found] == [("Calibre", "Portable", 6, 180)]
+    assert copies.families(found)[0].inside == 6
+    two = [row for n in range(2) for lib in ("X", "Y") for row in files(f"{lib}/Part {n}", 30, start=n * 100)] + \
+        files("X/Own", 200, start=9000)
+    assert sorted(p.inside for p in copies.find(two)) == [0, 0], "two shelves are still said one by one"
