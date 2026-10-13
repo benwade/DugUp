@@ -400,6 +400,19 @@ class LocalService:
         return cleanup.report(self.store, _place(drive), [_place(p) for p in kept], self.case_insensitive,
                               [_place(p) for p in home])
 
+    def remove_duplicates(self, found, stop: Optional[StopSignal] = None, tell=None, mover=None):
+        """Move the report's "extra" copies to the trash (cleanup.remove_extras; trash.to_trash). The one thing
+        in DugUp that changes a file, and it only ever moves an exact copy whose keeper is there now."""
+        from . import cleanup, trash
+        import time as clock
+
+        def gone(path: str) -> None:
+            record = self.store.get_file(path)
+            if record is not None and record.row_id is not None:
+                self.store.set_missing(record.row_id, clock.time())
+
+        return cleanup.remove_extras(found, mover or trash.to_trash, gone, stop, tell)
+
     def copies(self, path: str, stop: Optional[StopSignal] = None):
         """Folders below `path` that look like copies of each other (copies.Pair, most files first), or a
         Failure. From names and sizes alone: nothing is opened, indexed or changed, and skip rules are not

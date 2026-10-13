@@ -194,6 +194,43 @@ folder; see `src/dugup/settings.py` for the names and defaults. The ones most li
     min_free_mb = 200          # a run stops when the drive has less than this free
     figure_fraction = 0.1      # a picture this share of a typed page gets the page read by OCR too; 0: off
 
+## Clearing out copies
+
+A drive that several computers have backed up to, or that a sync dispute has left in a mess, ends up holding
+the same files in many places. DugUp can find them, say which copy to keep, and move the rest to the trash.
+This is the one thing in DugUp that changes a file, so it is kept apart from indexing and searching, and it
+only ever moves an exact copy whose keeper is there and identical at that moment. The order below has worked
+on one real drive; it is a way of going about it, not the only one, and every step is a command you can run
+again.
+
+1. **Index the drive**, so every file that is read has a mark of its content (`dugup index`). Folders listed
+   by name only (book libraries, say) get no marks and take no part; raise their level if you want them in.
+2. **See the shape of it** with `dugup roots copies G:\`: whole folders that look like copies of each other,
+   from names and sizes. This is a guess, for orientation only, and it shows which folders are the usual
+   suspects (a Desktop kept in four places).
+3. **Decide what must never be touched.** A folder on the drive that is a live sync of another computer is
+   one: removing a file there can remove it on that computer. Name such folders in `cleanup_protect`
+   (separated by `;`). The report flags a protected folder that holds no indexed file, which usually means
+   the name is wrong: check it against `dir`, not against what the cloud drive's settings call the computer.
+4. **Decide where files belong.** When the same file is in four folders of the same size, only you know
+   which folder is its home. Name those in `cleanup_prefer`; a copy there is the one kept. Otherwise the copy
+   in the larger set of files is kept, then the one higher up.
+5. **Look at the report**: `dugup duplicates G:\`, and `--save FILE` for the whole thing in a file. Each set
+   shows the copy to keep and every other copy with its full path. Nothing is changed. Read through it;
+   a keeper in the wrong place means a folder belongs in step 4.
+6. **See how the trash behaves here** with `dugup duplicates G:\ --try-trash "G:\some throwaway file.txt"`:
+   on a cloud drive the file should land in that drive's own trash, elsewhere in the Recycle Bin. Where no
+   trash can be reached, DugUp moves files aside into a folder named "DugUp removed" at the top of the drive
+   instead, and says so.
+7. **Remove the extras**: `dugup duplicates G:\ --remove --record C:\Users\you\Desktop\moved.txt`. The
+   list is shown and a `yes` asked for. Each extra is moved only after its keeper is found to hold the same
+   bytes right then; a copy that has changed, or whose keeper is gone, is left alone and the record says why.
+   Ctrl+C stops between files. The record lists every file moved and the copy kept for it.
+8. **Run `dugup index` again** so the index catches up with what moved.
+
+Copies on another drive are never duplicates to this report: a file on your own drive and its backup on a
+cloud drive are a file and its backup. Run it per drive, and only on the drive you mean to clean.
+
 ## Tests
 
     python -m pytest

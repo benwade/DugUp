@@ -307,6 +307,13 @@ def build_parser() -> argparse.ArgumentParser:
                           "the setting cleanup_prefer); may be repeated")
     dup.add_argument("--rows", type=int, default=50, help="how many sets to show, most space first (default 50)")
     dup.add_argument("--save", metavar="FILE", help="write the whole report to a text file (keep or extra, path, size, files in its folder)")
+    dup.add_argument("--remove", action="store_true",
+                     help="move every 'extra' to the trash, each after its keeper is found to hold the same bytes now; "
+                          "the list is shown and a 'yes' asked for first; needs --record")
+    dup.add_argument("--record", metavar="FILE", help="with --remove: a file that will list what was moved and what was left, and why")
+    dup.add_argument("--yes", action="store_true", help="with --remove: do not ask; answer yes")
+    dup.add_argument("--try-trash", metavar="FILE", dest="try_trash",
+                     help="move this one file to the trash and say where it went, to see how the trash behaves here")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")
@@ -1304,12 +1311,29 @@ def cmd_window(args, env, out, environ) -> int:
     return 0
 
 
-def cmd_duplicates(args, env, out, environ) -> int:
+def cmd_duplicates(args, env, out, environ, stop: Optional[threading.Event] = None, install_signals: bool = True,
+                   answer: Optional[Callable[[str], str]] = None) -> int:
+    from . import trash
+    if args.try_trash:
+        path = os.path.abspath(os.path.expanduser(args.try_trash))
+        safe_write(f"Here a file is {trash.how()}.", out)
+        problem = trash.to_trash(path)
+        if problem:
+            safe_write(f"{path}: {problem}", out)
+            return 1
+        safe_write(f"{path} was moved to the trash. Look there (the drive's own trash for a cloud drive, else the "
+                   "Recycle Bin) to see that it arrived, and put it back from there.", out)
+        return 0
+    if args.remove and not args.record:
+        safe_write("--remove needs --record FILE: a file that will list what was moved and what was left alone, and why.", out)
+        return 1
     service = _service(args, environ, out, create=False)
     if service is None:
         return 1
     with service:
         found = service.duplicates(args.drive, args.protect, args.prefer)
+        if args.remove:
+            return _remove_duplicates(found, service, args, out, environ, stop, install_signals, answer)
         safe_write(f"The same file in several places below {found.drive} (from the index; nothing is changed, DugUp never deletes).", out)
         for folder in found.protected:
             gone = folder in found.protected_empty
@@ -1342,6 +1366,86 @@ def cmd_duplicates(args, env, out, environ) -> int:
                 safe_write(f"      kept aside (protected)  {item.record.path}", out)
         if len(found.sets) > args.rows:
             safe_write(f"  ... and {len(found.sets) - max(1, args.rows):,} more set(s); --rows N shows more, --save FILE writes all", out)
+    return 0
+
+
+def _remove_duplicates(found, service, args, out, environ, stop, install_signals, answer) -> int:
+    from . import trash
+    record_path = os.path.abspath(os.path.expanduser(args.record))
+    problem = save_lines(record_path, [], args, environ)      # claimed now, so the run cannot end with nowhere to write
+    if problem:
+        safe_write(problem, out)
+        return 1
+    safe_write(f"Below {found.drive}: {found.extra_files:,} extra copy(ies) of {len(found.sets):,} file(s), about "
+               f"{format_bytes(found.wasted_bytes)}.", out)
+    for folder in found.protected:
+        gone = folder in found.protected_empty
+        safe_write(f"  never touched: {folder}" + ("   <- NO INDEXED FILE LIES BELOW THIS: is the name right?" if gone else ""), out)
+    for folder in found.preferred:
+        safe_write(f"  the proper home, kept when there is a choice: {folder}", out)
+    if not found.sets:
+        safe_write("Nothing to move.", out)
+        return 0
+    safe_write(f"Each extra would be {trash.how()}, one by one, only after the copy kept is found to hold the same "
+               "bytes at that moment. Nothing is deleted outright. Ctrl+C stops between files; what was moved stays moved.", out)
+    safe_write(f"What was moved, and what was left alone and why, will be written to {record_path}.", out)
+    shown = found.sets[:max(1, args.rows)]
+    for same in shown:
+        safe_write(f"  keep   {same.keep.record.path}", out)
+        for item in same.extra:
+            safe_write(f"  move   {item.record.path}", out)
+    if len(found.sets) > len(shown):
+        safe_write(f"  ... and {len(found.sets) - len(shown):,} more set(s) (--rows N shows more; --save FILE writes all)", out)
+    if not args.yes:
+        ask = answer or (lambda prompt: input(prompt))
+        try:
+            reply = ask(f"Move all {found.extra_files:,} extra copy(ies) to the trash? Type yes to go on: ")
+        except (EOFError, KeyboardInterrupt):
+            reply = ""
+        if reply.strip().lower() != "yes":
+            safe_write("Nothing was moved.", out)
+            return 0
+    stop = stop or threading.Event()
+    previous = None
+
+    def on_interrupt(signum, frame):
+        if stop.is_set():
+            raise KeyboardInterrupt
+        stop.set()
+        safe_write("\nStopping after the file in hand. What was moved stays moved; the rest stays where it is.", out)
+
+    if install_signals and threading.current_thread() is threading.main_thread():
+        previous = signal.signal(signal.SIGINT, on_interrupt)
+    width = [0]
+
+    def tell(at: int, total: int, path: str) -> None:
+        line = f"[move] {at:,} of {total:,}  | {shorten(os.path.basename(path), 50)}"
+        pad = " " * max(0, width[0] - len(line))
+        width[0] = len(line)
+        safe_write("\r" + line + pad, out, end="")
+
+    try:
+        done = service.remove_duplicates(found, stop, tell)
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
+    safe_write("", out)
+    lines = [f"moved\t{path}\tkept\t{kept}" for path, kept in done.moved] + \
+        [f"left\t{path}\t{why}" for path, why in done.skipped]
+    try:
+        with open(record_path, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n") as handle:
+            for line in lines:
+                handle.write(line + "\n")
+    except OSError as exc:
+        safe_write(f"The record could not be written ({type(exc).__name__}: {exc}); here it is:", out)
+        for line in lines:
+            safe_write("  " + line, out)
+    safe_write(f"Moved {len(done.moved):,} file(s) to the trash, about {format_bytes(done.bytes_freed)}; left {len(done.skipped):,} alone"
+               + (" (stopped)" if done.stopped else "") + f". The record is in {record_path}.", out)
+    for path, why in done.skipped[:10]:
+        safe_write(f"  left: {path}: {why}", out)
+    if len(done.skipped) > 10:
+        safe_write(f"  ... and {len(done.skipped) - 10:,} more in the record", out)
     return 0
 
 

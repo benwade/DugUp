@@ -119,3 +119,121 @@ def test_a_preferred_folder_wins_the_choice_and_a_protected_folder_with_nothing_
     assert all(s.keep.record.path.startswith("G:\\My Drive\\Rivera-ALEX") for s in homed.sets), "the proper home wins"
     assert homed.protected_empty == ("G:\\Other computers\\My Computer (4)",), "a protected folder that holds nothing is said"
     assert cleanup.report(store, "G:\\", case_insensitive=True, protected=["G:\\My Drive\\Desktop"]).protected_empty == ()
+
+
+# ---- removing ----------------------------------------------------------------------------------------------
+
+def real_world(tmp_path):
+    """Real files on disk, indexed for real, with a mover that moves to a folder standing in for the trash."""
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.shapes import Root
+    drive = tmp_path / "drive"
+    for folder in ("Docs", "Backup/Docs", "Old/Docs", "Laptop/Docs"):
+        (drive / folder).mkdir(parents=True)
+    for i in range(4):
+        text = f"needle number {i} and more words"
+        for folder in ("Docs", "Backup/Docs", "Old/Docs"):
+            (drive / folder / f"n{i}.txt").write_text(text, encoding="utf-8")
+    (drive / "Docs" / "only.txt").write_text("one of a kind", encoding="utf-8")
+    (drive / "Laptop" / "Docs" / "n0.txt").write_text("needle number 0 and more words", encoding="utf-8")
+    (drive / "Docs" / "extra.txt").write_text("in docs and backup", encoding="utf-8")
+    (drive / "Backup" / "Docs" / "extra.txt").write_text("in docs and backup", encoding="utf-8")
+    data = tmp_path / "data"
+    data.mkdir()
+    service = LocalService(DataLayout(data).ensure())
+    service.set_root(Root(str(drive)))
+    assert service.run_indexing().done == 16
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    moved = []
+
+    def mover(path):
+        moved.append(path)
+        os.replace(path, bin_ / os.path.basename(path).replace(".txt", f"-{len(moved)}.txt"))
+        return ""
+
+    return service, drive, data, mover, moved
+
+
+import os
+
+
+def test_extras_are_moved_only_after_the_keeper_is_checked_and_the_index_follows(tmp_path):
+    service, drive, data, mover, moved = real_world(tmp_path)
+    with service:
+        found = service.duplicates(str(drive), protected=[str(drive / "Laptop")], preferred=[str(drive / "Docs")])
+        assert found.extra_files == 9 and all(s.keep.record.path.startswith(str(drive / "Docs")) for s in found.sets)
+        (drive / "Old" / "Docs" / "n1.txt").write_text("changed since the index was made", encoding="utf-8")
+        (drive / "Backup" / "Docs" / "n2.txt").unlink()
+        told = []
+        done = service.remove_duplicates(found, tell=lambda at, total, path: told.append((at, total)), mover=mover)
+        assert len(done.moved) == 7 and not done.stopped and told[-1] == (9, 9)
+        assert sorted(why for _, why in done.skipped) == ["it is not there now", "it no longer holds the same bytes as the copy to keep"]
+        assert (drive / "Old" / "Docs" / "n1.txt").exists(), "a changed copy is left where it is"
+        assert all((drive / "Docs" / f"n{i}.txt").exists() for i in range(4)) and (drive / "Laptop" / "Docs" / "n0.txt").exists()
+        assert not (drive / "Backup" / "Docs" / "n0.txt").exists() and not (drive / "Old" / "Docs" / "n3.txt").exists()
+        for path, _ in done.moved:
+            assert service.store.get_file(path).missing_since is not None, "the index knows the copy is gone"
+        assert service.search("needle").total == 4, "every file is still found, once"
+        again = service.duplicates(str(drive), protected=[str(drive / "Laptop")], preferred=[str(drive / "Docs")])
+        assert again.extra_files == 2, "the two left alone are still in the index as they were: the next scan sorts them out"
+        assert service.run_indexing().read == 1 and service.duplicates(str(drive), protected=[str(drive / "Laptop")]).extra_files == 0
+
+
+def test_a_stop_ends_between_files_and_keeps_what_was_moved(tmp_path):
+    import threading
+    service, drive, data, mover, moved = real_world(tmp_path)
+    stop = threading.Event()
+
+    def mover_then_stop(path):
+        problem = mover(path)
+        if len(moved) == 3:
+            stop.set()
+        return problem
+
+    with service:
+        found = service.duplicates(str(drive), protected=[str(drive / "Laptop")], preferred=[str(drive / "Docs")])
+        done = service.remove_duplicates(found, stop=stop, mover=mover_then_stop)
+        assert done.stopped and len(done.moved) == 3 and len(done.skipped) == 0
+        assert service.duplicates(str(drive), protected=[str(drive / "Laptop")], preferred=[str(drive / "Docs")]).extra_files == 6
+
+
+def test_the_command_shows_asks_records_and_a_no_moves_nothing(tmp_path, monkeypatch):
+    from dugup import trash
+    service, drive, data, mover, moved = real_world(tmp_path)
+    service.close()
+    monkeypatch.setattr(trash, "to_trash", lambda path, mover=None: mover(path))
+    record = tmp_path / "moved.txt"
+    out = io.StringIO()
+    code = main(["duplicates", str(drive), "--protect", str(drive / "Laptop"), "--prefer", str(drive / "Docs"),
+                 "--remove", "--data-dir", str(data)], stdout=out)
+    assert code == 1 and "--remove needs --record" in out.getvalue()
+    out = io.StringIO()
+    from dugup.cli import build_parser, cmd_duplicates
+    args = build_parser().parse_args(["duplicates", str(drive), "--protect", str(drive / "Laptop"), "--prefer", str(drive / "Docs"),
+                                      "--remove", "--record", str(record), "--data-dir", str(data)])
+    code = cmd_duplicates(args, None, out, {}, install_signals=False, answer=lambda prompt: "no")
+    text = out.getvalue()
+    assert code == 0 and "Nothing was moved." in text and "move   " in text and "keep   " in text and moved == []
+    assert "Type yes to go on" not in text, "the question is asked, not printed"
+    record.unlink()                              # claimed by the first run; the record is never written over
+    out = io.StringIO()
+    args = build_parser().parse_args(["duplicates", str(drive), "--protect", str(drive / "Laptop"), "--prefer", str(drive / "Docs"),
+                                      "--remove", "--record", str(record), "--data-dir", str(data), "--yes"])
+    monkeypatch.setattr(trash, "to_trash", lambda path, _mover=None: mover(path))
+    code = cmd_duplicates(args, None, out, {}, install_signals=False)
+    text = out.getvalue()
+    assert code == 0 and "Moved 9 file(s) to the trash" in text and "left 0 alone" in text, text
+    lines = record.read_text(encoding="utf-8-sig").splitlines()
+    assert len(lines) == 9 and all(line.startswith("moved\t") and "\tkept\t" in line for line in lines)
+    assert len(moved) == 9 and all((drive / "Docs" / f"n{i}.txt").exists() for i in range(4))
+
+
+def test_the_trash_itself(tmp_path):
+    from dugup import trash
+    victim = tmp_path / "gone.txt"
+    victim.write_text("x", encoding="utf-8")
+    assert trash.to_trash(str(tmp_path / "nowhere.txt")) == "it is not there (or it is a folder)"
+    assert trash.to_trash(str(tmp_path)) == "it is not there (or it is a folder)", "never a folder"
+    assert trash.to_trash(str(victim), mover=lambda p: "") == "" and victim.exists(), "a mover of one's own"

@@ -99,3 +99,64 @@ def report(store, drive: str, protected: Sequence[str] = (), case_insensitive: O
         found.append(Same(ranked[0], ranked[1:], [c for c in copies if c.protected]))
     found.sort(key=lambda s: (-s.wasted, s.keep.record.path.lower()))
     return Report(drive, tuple(protected), found, tuple(preferred), empty)
+
+
+# ---- removing the extras ------------------------------------------------------------------------------------
+
+@dataclass
+class Removal:
+    moved: List[Tuple[str, str]] = field(default_factory=list)      # (extra moved to the trash, the copy kept)
+    skipped: List[Tuple[str, str]] = field(default_factory=list)    # (extra left alone, why)
+    stopped: bool = False
+
+    @property
+    def bytes_freed(self) -> int:
+        return self._bytes
+
+    _bytes: int = 0
+
+
+def same_bytes(one: str, two: str) -> bool:
+    """True when the two files hold the same bytes now, read in full (the index's marks may be stale)."""
+    import filecmp
+    try:
+        return filecmp.cmp(one, two, shallow=False)
+    except OSError:
+        return False
+
+
+def remove_extras(found: Report, mover: Callable[[str], str], note_missing: Callable[[str], None],
+                  stop=None, tell: Optional[Callable[[int, int, str], None]] = None) -> Removal:
+    """Move every "extra" of the report to the trash, one by one, each only after its keeper is found to be
+    there and to hold the same bytes at that moment. `mover(path)` does the moving and answers "" or why
+    not; `note_missing(path)` tells the index. A stop request ends it between files; nothing is undone."""
+    done = Removal()
+    total = found.extra_files
+    at = 0
+    for same in found.sets:
+        keeper = same.keep.record.path
+        for extra in same.extra:
+            if stop is not None and stop.is_set():
+                done.stopped = True
+                return done
+            at += 1
+            path = extra.record.path
+            if tell is not None:
+                tell(at, total, path)
+            if not os.path.isfile(keeper):
+                done.skipped.append((path, f"the copy to keep is not there now: {keeper}"))
+                continue
+            if not os.path.isfile(path):
+                done.skipped.append((path, "it is not there now"))
+                continue
+            if not same_bytes(keeper, path):
+                done.skipped.append((path, "it no longer holds the same bytes as the copy to keep"))
+                continue
+            problem = mover(path)
+            if problem:
+                done.skipped.append((path, problem))
+                continue
+            done.moved.append((path, keeper))
+            done._bytes += extra.record.size
+            note_missing(path)
+    return done
