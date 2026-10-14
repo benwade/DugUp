@@ -199,6 +199,63 @@ class FakeStore:
                 counts[folder] = counts.get(folder, 0) + 1
         return {f: counts.get(f, 0) for f in folders}
 
+    # -- sketches of meaning
+    def _sk(self):
+        if not hasattr(self, "sketches"):
+            self.sketches, self.sketched = {}, {}       # segment id -> (file, model, dims, scale, sketch, fp); file -> model
+        return self.sketches
+
+    def unsketched(self, model, limit=200, prefix=None, case_insensitive=None):
+        self._sk()
+        read = (FileState.DONE, FileState.PARTIAL)
+        ids = set(self.files) if prefix is None else set(self._below(prefix, case_insensitive))
+        found = [r for i, r in self.files.items() if i in ids and r.missing_since is None and r.state in read
+                 and self.sketched.get(i, "") != model and any(s.kind is not SegmentKind.NAME for s in self.segments.get(i, []))]
+        found.sort(key=lambda r: (-r.modified, r.row_id))
+        return [copy.copy(r) for r in found[:max(0, limit)]]
+
+    def text_of(self, row_id):
+        return [(seg_id, seg.page, seg.text) for seg, seg_id in zip(self.segments.get(row_id, []), self.segment_ids.get(row_id, []))
+                if seg.kind is not SegmentKind.NAME]
+
+    def save_sketches(self, row_id, model, dims, rows):
+        if row_id not in self.files:
+            raise StoreError(f"no file with id {row_id}")
+        sk = self._sk()
+        for seg_id in [k for k, v in sk.items() if v[0] == row_id]:
+            del sk[seg_id]
+        for seg, scale, sketch, fingerprint in rows:
+            sk[seg] = (row_id, model, dims, scale, sketch, fingerprint)
+        self.sketched[row_id] = model
+
+    def forget_sketches(self, row_id):
+        sk = self._sk()
+        for seg_id in [k for k, v in sk.items() if v[0] == row_id]:
+            del sk[seg_id]
+        self.sketched.pop(row_id, None)
+
+    def sketch_counts(self, model):
+        self._sk()
+        read = (FileState.DONE, FileState.PARTIAL)
+        done = sum(1 for i, m in self.sketched.items() if m == model and i in self.files and self.files[i].missing_since is None)
+        could = sum(1 for i, r in self.files.items() if r.missing_since is None and r.state in read
+                    and any(s.kind is not SegmentKind.NAME for s in self.segments.get(i, [])))
+        return done, could
+
+    def fingerprints(self, model):
+        import numpy as np
+        from dugup.sketches import FINGERPRINT
+        sk = self._sk()
+        rows = sorted((seg, v[5]) for seg, v in sk.items() if v[1] == model and v[0] in self.files and self.files[v[0]].missing_since is None)
+        ids = np.array([seg for seg, _ in rows], dtype=np.int64)
+        matrix = np.frombuffer(b"".join(fp for _, fp in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
+            else np.zeros((0, FINGERPRINT), dtype=np.int8)
+        return ids, matrix
+
+    def sketches_of(self, segment_ids):
+        sk = self._sk()
+        return {seg: (sk[seg][0], sk[seg][2], sk[seg][3], sk[seg][4]) for seg in segment_ids if seg in sk}
+
     def read_marks(self):
         read = (FileState.DONE, FileState.PARTIAL)
         return sorted({(m, self.files[i].kind.value) for i, m in self._marked().items() if self.files[i].state in read})
@@ -494,6 +551,8 @@ class FakeStore:
         self.segments[row_id] = list(segments)
         self.segment_ids[row_id] = list(range(self.next_segment, self.next_segment + len(segments)))
         self.next_segment += len(segments)
+        if hasattr(self, "sketches"):
+            self.forget_sketches(row_id)
 
     def file_count(self) -> int:
         return len(self.files)

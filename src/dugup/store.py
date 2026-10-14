@@ -232,8 +232,27 @@ def _migration_8(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE files SET content = '!' || id WHERE size <= 0 AND content IS NOT NULL")
 
 
+def _migration_9(conn: sqlite3.Connection) -> None:
+    """Sketches of meaning (sketches.py): one row a piece of text, for one model. `sketch` is the full
+    sketch as signed bytes with `scale`; `fingerprint` its first numbers, scanned first. A piece that is
+    deleted takes its sketch with it (the cascade). `files.sketched` says which model's sketches a file has,
+    so what still waits is found without joining every piece."""
+    conn.execute("""CREATE TABLE sketches (
+                        segment_id INTEGER PRIMARY KEY REFERENCES segments(id) ON DELETE CASCADE,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        model TEXT NOT NULL,
+                        dims INTEGER NOT NULL,
+                        scale REAL NOT NULL,
+                        sketch BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL
+                    )""")
+    conn.execute("CREATE INDEX sketches_file ON sketches(file_id)")
+    conn.execute("ALTER TABLE files ADD COLUMN sketched TEXT NOT NULL DEFAULT ''")
+
+
 MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3, _migration_4,
-                                                          _migration_5, _migration_6, _migration_7, _migration_8]
+                                                          _migration_5, _migration_6, _migration_7, _migration_8,
+                                                          _migration_9]
 OCR_ORDER = 1_000_000   # the order number of a page's OCR text, after anything a text layer gave
 SCHEMA_VERSION = len(MIGRATIONS)  # informational; the live value is len(MIGRATIONS)
 
@@ -742,6 +761,7 @@ class SqliteStore:
 
     def _copy_segments(self, from_row: int, to_row: int, where: str, args: Sequence[object]) -> None:
         name = _clean(self.conn.execute("SELECT name FROM files WHERE id=?", (to_row,)).fetchone()[0])
+        self.conn.execute("UPDATE files SET sketched='' WHERE id=?", (to_row,))
         rows = self.conn.execute(f"SELECT id, page, ord, kind, text, z FROM segments WHERE file_id=? AND {where} ORDER BY id",
                                  [from_row] + list(args)).fetchall()
         for r in rows:
@@ -872,6 +892,7 @@ class SqliteStore:
             if name_row is None:
                 raise StoreError(f"no file with id {row_id}")
             self._delete_segments(row_id, keep_name=True)
+            self.conn.execute("UPDATE files SET sketched='' WHERE id=?", (row_id,))     # its sketches went with its pieces
             for seg in segments:
                 if seg.kind is SegmentKind.NAME:
                     raise ValueError("name segments are managed by the store")
@@ -948,6 +969,8 @@ class SqliteStore:
                       l.confidence, t) for t, l in lines])
             self.conn.execute("UPDATE pages SET needs_ocr=0, ocr='done', ocr_reason='', ocr_engine=? "
                               "WHERE file_id=? AND page=?", (f"{result.engine} {result.version}".strip(), row_id, page))
+            if lines:
+                self.conn.execute("UPDATE files SET sketched='' WHERE id=?", (row_id,))   # new text: sketches to make
 
     def fail_ocr(self, row_id: int, page: int, reason: str) -> None:
         with self.transaction():
@@ -1047,6 +1070,78 @@ class SqliteStore:
 
     def file_count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+
+    # -- sketches of meaning (sketches.py); the store does not know what a sketch means
+
+    def unsketched(self, model: str, limit: int = 200, prefix: Optional[str] = None,
+                   case_insensitive: Optional[bool] = None) -> List[FileRecord]:
+        """Files with text that have no sketches by this model yet, the most recently changed first. Files
+        listed by name only (no text) are not among them."""
+        clauses, args = ["f.sketched <> ?", "f.missing_since IS NULL", "f.state IN (?,?)",
+                         "EXISTS (SELECT 1 FROM segments s WHERE s.file_id = f.id AND s.kind != 'name')"], \
+            [model, FileState.DONE.value, FileState.PARTIAL.value]
+        if prefix is not None:
+            clause, more = _under_clause(prefix, case_insensitive, "f.path")
+            clauses.append(clause)
+            args.extend(more)
+        sql = f"SELECT f.* FROM files f WHERE {' AND '.join(clauses)} ORDER BY f.modified DESC, f.id LIMIT ?"
+        return [self._record(r) for r in self.conn.execute(sql, args + [max(0, limit)])]
+
+    def text_of(self, row_id: int) -> List[Tuple[int, int, str]]:
+        """(segment id, page, text) of a file's pieces of text, in order."""
+        rows = self.conn.execute("SELECT id, page, text, z FROM segments WHERE file_id=? AND kind != 'name' ORDER BY page, ord, id",
+                                 (row_id,))
+        return [(r["id"], r["page"], unpack_text(r["text"], r["z"])) for r in rows]
+
+    def save_sketches(self, row_id: int, model: str, dims: int, rows: Sequence[Tuple[int, float, bytes, bytes]]) -> None:
+        """Keep the sketches of a file's pieces: (segment id, scale, sketch bytes, fingerprint bytes). Older
+        sketches of the file by any model go, and the file is marked as sketched by this one."""
+        with self.transaction():
+            if self.conn.execute("SELECT 1 FROM files WHERE id=?", (row_id,)).fetchone() is None:
+                raise StoreError(f"no file with id {row_id}")
+            self.conn.execute("DELETE FROM sketches WHERE file_id=?", (row_id,))
+            self.conn.executemany(
+                "INSERT INTO sketches(segment_id, file_id, model, dims, scale, sketch, fingerprint) VALUES(?,?,?,?,?,?,?)",
+                [(seg, row_id, model, dims, scale, sketch, fingerprint) for seg, scale, sketch, fingerprint in rows])
+            self.conn.execute("UPDATE files SET sketched=? WHERE id=?", (model, row_id))
+
+    def forget_sketches(self, row_id: int) -> None:
+        """A file's text changed (or its level no longer asks for meaning): its sketches are stale."""
+        with self.transaction():
+            self.conn.execute("DELETE FROM sketches WHERE file_id=?", (row_id,))
+            self.conn.execute("UPDATE files SET sketched='' WHERE id=?", (row_id,))
+
+    def sketch_counts(self, model: str) -> Tuple[int, int]:
+        """(files sketched by this model, files with text that could be), among files there at the last scan."""
+        done = self.conn.execute("SELECT COUNT(*) FROM files WHERE sketched=? AND missing_since IS NULL", (model,)).fetchone()[0]
+        could = self.conn.execute(
+            "SELECT COUNT(*) FROM files f WHERE f.missing_since IS NULL AND f.state IN (?,?) AND "
+            "EXISTS (SELECT 1 FROM segments s WHERE s.file_id = f.id AND s.kind != 'name')",
+            (FileState.DONE.value, FileState.PARTIAL.value)).fetchone()[0]
+        return int(done), int(could)
+
+    def fingerprints(self, model: str):
+        """Every fingerprint by this model, for files there at the last scan: (segment ids, int8 matrix)."""
+        import numpy as np
+        from .sketches import FINGERPRINT
+        rows = self.conn.execute(
+            "SELECT k.segment_id, k.fingerprint FROM sketches k JOIN files f ON f.id = k.file_id "
+            "WHERE k.model=? AND f.missing_since IS NULL ORDER BY k.segment_id", (model,)).fetchall()
+        ids = np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows))
+        matrix = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
+            else np.zeros((0, FINGERPRINT), dtype=np.int8)
+        return ids, matrix
+
+    def sketches_of(self, segment_ids: Sequence[int]) -> Dict[int, Tuple[int, int, float, bytes]]:
+        """segment id -> (file id, dims, scale, sketch bytes) for these pieces."""
+        found: Dict[int, Tuple[int, int, float, bytes]] = {}
+        ids = [int(i) for i in segment_ids]
+        for at in range(0, len(ids), 400):
+            chunk = ids[at:at + 400]
+            marks = ",".join("?" * len(chunk))
+            for r in self.conn.execute(f"SELECT segment_id, file_id, dims, scale, sketch FROM sketches WHERE segment_id IN ({marks})", chunk):
+                found[r[0]] = (r[1], r[2], r[3], r[4])
+        return found
 
     def sample_text(self, count: int) -> List[Tuple[int, str, int, str]]:
         """`count` pieces of text drawn at random: (segment id, file path, page, text). For measuring."""

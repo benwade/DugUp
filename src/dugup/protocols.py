@@ -273,6 +273,28 @@ class Store(Protocol):
     def copy_page(self, from_row: int, to_row: int, page: int) -> None:
         """Give one file what OCR made of a page of another with the same content."""
 
+    # sketches of meaning (sketches.py): the store keeps bytes and a model name, and compares nothing
+    def unsketched(self, model: str, limit: int = 200, prefix: Optional[str] = None,
+                   case_insensitive: Optional[bool] = None) -> Sequence[FileRecord]:
+        """Files with text that have no sketches by this model yet, the most recently changed first."""
+
+    def text_of(self, row_id: int) -> Sequence[Tuple[int, int, str]]:
+        """(segment id, page, text) of a file's pieces of text, in order."""
+
+    def save_sketches(self, row_id: int, model: str, dims: int, rows: Sequence[Tuple[int, float, bytes, bytes]]) -> None:
+        """Keep (segment id, scale, sketch bytes, fingerprint bytes) for a file; older sketches of it go."""
+
+    def forget_sketches(self, row_id: int) -> None: ...
+
+    def sketch_counts(self, model: str) -> Tuple[int, int]:
+        """(files sketched by this model, files with text that could be)."""
+
+    def fingerprints(self, model: str):
+        """(segment ids, int8 matrix of fingerprints) for every sketch by this model."""
+
+    def sketches_of(self, segment_ids: Sequence[int]) -> Mapping[int, Tuple[int, int, float, bytes]]:
+        """segment id -> (file id, dims, scale, sketch bytes)."""
+
     def remove_files(self, row_ids: Sequence[int]) -> int:
         """Take these files out of the index (text and page records too). Returns how many were there."""
 
