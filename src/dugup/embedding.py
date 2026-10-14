@@ -186,3 +186,70 @@ class Looker:
             ids[row, :len(e.ids)] = e.ids
         vectors = self._words.run(None, {"input_ids": ids})[0]
         return (vectors / np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-9)).astype(np.float32)
+
+
+# ---- captions ---------------------------------------------------------------------------------------------
+
+CAPTION_SIDE = 768
+CAPTION_MEAN = (0.485, 0.456, 0.406)
+CAPTION_STD = (0.229, 0.224, 0.225)
+CAPTION_FILES = {"vision": "captions-vision.onnx", "embed": "captions-embed.onnx", "encoder": "captions-encoder.onnx",
+                 "decoder": "captions-decoder.onnx", "tokenizer": "captions-tokenizer.json"}
+CAPTION_PROMPT = "What does the image describe?"        # the model's own short-caption task
+CAPTION_LONGER = "Describe with a paragraph what is shown in the image."
+_START, _BOS, _END = 2, 0, 2                            # the decoder starts on </s>, writes <s>, ends on </s>
+
+
+class Captioner:
+    """A model that writes a sentence about a picture (four ONNX parts and a tokenizer). Greedy decoding, one
+    token at a time, the whole sentence re-run each step (no cache: simpler, and a sentence is short).
+    Slow next to the other models (seconds a picture on a processor), so it is used on demand only."""
+
+    def __init__(self, folder: str, gpu: bool = False, threads: int = 0) -> None:
+        import numpy as np
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
+        self.np = np
+        options = ort.SessionOptions()
+        if threads > 0:
+            options.intra_op_num_threads = threads
+        providers = ["CPUExecutionProvider"]
+        self.device = "processor"
+        if gpu:
+            have = set(ort.get_available_providers())
+            for name in ("CUDAExecutionProvider", "DmlExecutionProvider"):
+                if name in have:
+                    providers = [name, "CPUExecutionProvider"]
+                    self.device = "graphics card (" + ("CUDA" if name.startswith("CUDA") else "DirectML") + ")"
+                    break
+        load = lambda part: ort.InferenceSession(os.path.join(folder, CAPTION_FILES[part]), options, providers=providers)
+        self.vision, self.embed, self.encoder, self.decoder = load("vision"), load("embed"), load("encoder"), load("decoder")
+        self.tokenizer = Tokenizer.from_file(os.path.join(folder, CAPTION_FILES["tokenizer"]))
+
+    @staticmethod
+    def prepare(picture):
+        import numpy as np
+        from PIL import Image, ImageOps
+        picture = ImageOps.exif_transpose(picture).convert("RGB").resize((CAPTION_SIDE, CAPTION_SIDE), Image.BICUBIC)
+        array = (np.asarray(picture, dtype=np.float32) / 255.0 - np.array(CAPTION_MEAN, dtype=np.float32)) / np.array(CAPTION_STD, dtype=np.float32)
+        return array.transpose(2, 0, 1)
+
+    def caption(self, prepared, longer: bool = False, max_tokens: int = 24) -> str:
+        """One sentence about one prepared picture (prepare)."""
+        np = self.np
+        features = self.vision.run(None, {"pixel_values": prepared[None].astype(np.float32)})[0]
+        prompt = np.array([self.tokenizer.encode(CAPTION_LONGER if longer else CAPTION_PROMPT).ids], dtype=np.int64)
+        words = self.embed.run(None, {"input_ids": prompt})[0]
+        inputs = np.concatenate([features, words], axis=1)
+        mask = np.ones(inputs.shape[:2], dtype=np.int64)
+        hidden = self.encoder.run(None, {"inputs_embeds": inputs, "attention_mask": mask})[0]
+        written = [_START]
+        for step in range(max_tokens if not longer else max_tokens * 3):
+            so_far = self.embed.run(None, {"input_ids": np.array([written], dtype=np.int64)})[0]
+            logits = self.decoder.run(None, {"encoder_attention_mask": mask, "encoder_hidden_states": hidden,
+                                             "inputs_embeds": so_far})[0][0, -1]
+            token = _BOS if step == 0 else int(np.argmax(logits))
+            written.append(token)
+            if token == _END and step > 0:
+                break
+        return self.tokenizer.decode(written, skip_special_tokens=True).strip()

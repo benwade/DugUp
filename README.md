@@ -271,6 +271,28 @@ fetched on first use into the data folder. It needs `pip install dugup[meaning]`
 - **Measuring.** `dugup alike measure --ask "a sentence" --like PICTURE` tries the model on a sample of your
   own pictures and reports speed, disk and what is found, without storing anything.
 
+## Naming pictures by what they show
+
+Many pictures have names that say nothing (`IMG_4471.jpg`). `dugup rename FOLDER` shows what each picture in a
+folder would be called, from a sentence a captioning model writes about it and a pattern you set, and changes
+nothing; `--apply --record FILE` renames as shown and writes every rename to the record; `dugup rename --undo
+FILE` puts the names back, last first. The index follows each rename at once, so the new names are searchable
+and nothing is read again.
+
+- **The pattern** (`rename_pattern`, default `{caption} {taken}`): `{caption}` the sentence made safe for a
+  name ("Green car parked in front of yellow building"), `{taken}` the day the photo was taken from the
+  camera's own record, else the day it was saved, `{time}`, `{camera}`, `{folder}`, `{original}` the name it
+  has now, `{n}`, `{ext}` (the ending is kept unless named). Two pictures that would get the same name are
+  numbered. `--pattern` tries another one for a run.
+- **The captions** come from a pinned captioning model (Florence-2 base, four ONNX parts, about 1.1 GB),
+  fetched once on first use, run in a worker on the card when it can (`caption_gpu`). It is the slowest
+  model here (seconds a picture on a processor), which is why it runs on demand only, never in the
+  background. `--longer` asks for a longer description; `--no-caption` uses the other fields alone.
+  `caption_source = "server"` is the seam for a local model server of your own; it is not built yet.
+- **Protections**: pictures in protected folders (`cleanup_protect`) are left alone; a picture that changed
+  since the preview, or whose new name is taken by then, is skipped and said so; `os.rename` never
+  overwrites; the record is written a line at a time.
+
 ## Clearing out copies
 
 A drive that several computers have backed up to, or that a sync dispute has left in a mess, ends up holding

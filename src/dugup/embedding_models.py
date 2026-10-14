@@ -53,6 +53,29 @@ LOOKS_BASE: Tuple[Pinned, ...] = (
 LOOKS_BY_CHOICE: Dict[str, Tuple[Pinned, ...]] = {"base": LOOKS_BASE}
 
 
+# ---- captions: a model that describes a picture in a sentence, for naming (on demand only) ----------------
+_CAPTIONS = _HF + "onnx-community/Florence-2-base-ft/resolve/e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f/"
+CAPTIONS_BASE: Tuple[Pinned, ...] = (
+    Pinned("captions-vision.onnx", _CAPTIONS + "onnx/vision_encoder.onnx",
+           366549825, "d67258cdfdebfa21285dad9e7bd4bd99725236d0aaef9e474a1b24a6ec471351",
+           "a captioning model's picture half (367 MB; Florence-2 base)",
+           "MIT, https://huggingface.co/microsoft/Florence-2-base-ft"),
+    Pinned("captions-embed.onnx", _CAPTIONS + "onnx/embed_tokens.onnx",
+           157560044, "90cae3deb6406938c676a35b5246db02b478c9cc8cf93508361be80c05babf95", "its word table (158 MB)"),
+    Pinned("captions-encoder.onnx", _CAPTIONS + "onnx/encoder_model.onnx",
+           173380723, "cb0bccc232c64290397f5e1235eb3e1fa6ccf8c5afed9216480ee4eed80737fc", "its encoder (173 MB)"),
+    Pinned("captions-decoder.onnx", _CAPTIONS + "onnx/decoder_model.onnx",
+           388077195, "16b40ea746ea09802a549be74c2eedc937c76025a1ea9baa040617ba0605306d", "its decoder, which writes the sentence (388 MB)"),
+    Pinned("captions-tokenizer.json", _CAPTIONS + "tokenizer.json",
+           2297961, "d69dcdb2323e124ac4f800cb9863ddccea0d7bb11e16125e8df3bd60f2f8aeac", "its tokenizer (2.3 MB)"),
+)
+CAPTIONS_BY_CHOICE: Dict[str, Tuple[Pinned, ...]] = {"base": CAPTIONS_BASE}
+
+
+def captions_present(folder: Path, choice: str = "base") -> bool:
+    return all((Path(folder) / item.name).exists() for item in CAPTIONS_BY_CHOICE[choice])
+
+
 def looks_present(folder: Path, choice: str = "base") -> bool:
     return all((Path(folder) / item.name).exists() for item in LOOKS_BY_CHOICE[choice])
 

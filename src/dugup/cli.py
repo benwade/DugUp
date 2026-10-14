@@ -111,6 +111,11 @@ def progress_text(p: Progress) -> str:
         line = (f"[same files] marking what was read before: {p.done:,} of {p.total:,} ({p.percent:.1f}%)  "
                 f"{p.rate:.1f} files/s  {left_text}")
         return line + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else "")
+    if p.phase == "caption":
+        left = p.remaining_seconds
+        left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
+        return (f"[rename] writing captions: {p.done:,} of {p.total:,} ({p.percent:.1f}%)  {left_text}"
+                + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else ""))
     if p.phase == "look":
         if p.root:
             return f"[alike] {p.root} on the {p.current}: {p.done:,} of {p.total:,}"
@@ -381,6 +386,18 @@ def build_parser() -> argparse.ArgumentParser:
     liking.add_argument("picture", help="a picture file, in the index or not")
     liking.add_argument("--limit", type=int, default=20)
     liking.add_argument("--offset", type=int, default=0)
+    rename = sub.add_parser("rename", parents=[common],
+                            help="name the pictures in a folder by what they show (a preview; --apply renames; --undo puts names back)")
+    rename.add_argument("folder", nargs="?", help="an indexed folder, or a folder inside one")
+    rename.add_argument("--pattern", help="the name pattern (default: the setting rename_pattern, \"{caption} {taken}\")")
+    rename.add_argument("--no-caption", action="store_true", help="do not write captions; {caption} is then empty and such files are left alone")
+    rename.add_argument("--longer", action="store_true", help="ask the model for a longer description (slower; more words to choose from)")
+    rename.add_argument("--apply", action="store_true", help="rename as the preview says (needs --record)")
+    rename.add_argument("--record", metavar="FILE", help="with --apply: a file that lists every rename, for --undo")
+    rename.add_argument("--yes", action="store_true", help="with --apply: do not ask")
+    rename.add_argument("--undo", metavar="RECORD", help="put the names in this record back, last first")
+    rename.add_argument("--gpu", dest="gpu", action="store_true", default=None)
+    rename.add_argument("--no-gpu", dest="gpu", action="store_false")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")
@@ -1574,6 +1591,108 @@ def cmd_alike(args, env, out, environ, stop: Optional[threading.Event] = None, i
     return 0
 
 
+def cmd_rename(args, env, out, environ, stop: Optional[threading.Event] = None, install_signals: bool = True,
+               ask: Callable[[str], str] = input) -> int:
+    service = _service(args, environ, out, create=False)
+    if service is None:
+        return 1
+    stop = stop or threading.Event()
+    with service:
+        if args.undo:
+            try:
+                with open(args.undo, "r", encoding="utf-8-sig") as handle:
+                    text = handle.read()
+            except OSError as exc:
+                safe_write(f"The record could not be read ({type(exc).__name__}: {exc}).", out)
+                return 1
+            done = service.undo_names(text)
+            safe_write(f"Put back {len(done.renamed):,} name(s); left {len(done.skipped):,}.", out)
+            for path, why in done.skipped[:20]:
+                safe_write(f"  left: {path}: {why}", out)
+            return 0
+        if not args.folder:
+            safe_write("Name a folder to preview, or --undo RECORD.", out)
+            return 1
+        if args.apply and not args.record:
+            safe_write("--apply needs --record FILE: a file that will list every rename, so it can be undone.", out)
+            return 1
+        if args.record:
+            problem = save_lines(args.record, [], args, environ)
+            if problem:
+                safe_write(problem, out)
+                return 1
+        printer = ProgressPrinter(out)
+        previous = None
+
+        def on_interrupt(signum, frame):
+            if stop.is_set():
+                raise KeyboardInterrupt
+            stop.set()
+            printer.finish()
+            safe_write("Stopping.", out)
+
+        if install_signals and threading.current_thread() is threading.main_thread():
+            previous = signal.signal(signal.SIGINT, on_interrupt)
+        if not args.no_caption and service.captions_ready() is not True and "not fetched" in str(service.captions_ready()):
+            safe_write("The captioning model is fetched now, once (about 1.1 GB, checked against known checksums). Ctrl+C stops.", out)
+        try:
+            found = service.plan_names(args.folder, args.pattern, not args.no_caption, args.longer, printer, stop, args.gpu)
+            printer.finish()
+        finally:
+            if previous is not None:
+                signal.signal(signal.SIGINT, previous)
+        if isinstance(found, Failure):
+            return _fail(found, out)
+        if found.stopped:
+            safe_write("Stopped before every picture was captioned; nothing was renamed.", out)
+            return 130
+        print_name_plan(found, out)
+        if not args.apply or not found.to_rename:
+            if found.to_rename and not args.apply:
+                safe_write("Nothing was renamed. Add --apply --record FILE to rename as shown.", out)
+            return 0
+        if not args.yes:
+            try:
+                reply = ask(f"Rename {len(found.to_rename):,} picture(s) as shown? Type yes to go on: ")
+            except (EOFError, KeyboardInterrupt):
+                reply = ""
+            if reply.strip().lower() != "yes":
+                safe_write("Nothing was renamed.", out)
+                return 0
+        try:
+            handle = open(args.record, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n")
+        except OSError as exc:
+            safe_write(f"The record could not be written ({type(exc).__name__}: {exc}); nothing was renamed.", out)
+            return 1
+        try:
+            handle.write(f"pattern\t{found.pattern}\n")
+            done = service.apply_names(found, journal=lambda line: (handle.write(line + "\n"), handle.flush()), stop=stop)
+        finally:
+            handle.close()
+        safe_write(f"Renamed {len(done.renamed):,} picture(s); left {len(done.skipped):,} alone"
+                   + (" (stopped)" if done.stopped else "") + f". The record is in {args.record}; `dugup rename --undo {args.record}` puts the names back.", out)
+        for path, why in done.skipped[:20]:
+            safe_write(f"  left: {path}: {why}", out)
+    return 0
+
+
+def print_name_plan(found, out: TextIO) -> None:
+    device = f" on the {found.device}" if found.device else ""
+    if found.captioned:
+        safe_write(f"Captioned {found.captioned:,} picture(s){device} in {format_seconds(found.seconds)}.", out)
+    safe_write(f"Pattern: {found.pattern}", out)
+    for change in found.to_rename:
+        safe_write(f"  {os.path.basename(change.old)}", out)
+        safe_write(f"    -> {os.path.basename(change.new)}" + (f"    ({change.caption})" if change.caption else ""), out)
+    if found.left_alone:
+        safe_write(f"Left alone: {len(found.left_alone):,}", out)
+        for change in found.left_alone[:20]:
+            safe_write(f"  {os.path.basename(change.old)}: {change.why}", out)
+        if len(found.left_alone) > 20:
+            safe_write(f"  ... and {len(found.left_alone) - 20:,} more", out)
+    safe_write(f"{len(found.to_rename):,} picture(s) would be renamed.", out)
+
+
 def print_looks_status(service, out: TextIO) -> None:
     done, could, unread = service.looks_coverage()
     share = f" ({100.0 * done / could:.0f}%)" if could else ""
@@ -1823,7 +1942,7 @@ def _remove_duplicates(found, service, args, out, environ, stop, install_signals
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
+            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "rename": cmd_rename, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

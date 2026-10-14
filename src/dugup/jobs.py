@@ -18,6 +18,7 @@ EXTRACT = "dugup.jobs:extract"
 CONTENT_MARK = "dugup.jobs:content_mark"
 EMBED = "dugup.jobs:embed"
 LOOK = "dugup.jobs:look"
+CAPTION = "dugup.jobs:caption"
 OCR = "dugup.jobs:ocr"
 PROBE = "dugup.jobs:probe_pictures"
 
@@ -182,6 +183,42 @@ def look(payload: Mapping[str, Any]) -> Dict[str, Any]:
     packed, rows, dims = embedding.pack(vectors)
     return {"vectors": packed, "rows": rows, "dims": dims, "device": looker.device,
             "failed": {str(k): v for k, v in failed.items()}}
+
+
+_captioners: Dict[str, Any] = {}
+
+
+def caption(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """A sentence about each picture (embedding.Captioner), inside a worker; the model is loaded once per
+    worker. Payload: folder, gpu, threads, paths, longer. Answer: captions (a list, "" where a picture could
+    not be read), failed {row: why}, device."""
+    from . import embedding
+    key = f"{payload.get('folder')}|{bool(payload.get('gpu'))}|{int(payload.get('threads') or 0)}"
+    try:
+        if key not in _captioners:
+            _captioners.clear()
+            _captioners[key] = embedding.Captioner(str(payload["folder"]), bool(payload.get("gpu")), int(payload.get("threads") or 0))
+    except ImportError as exc:
+        return {"failure": FailureReason.NOT_INSTALLED.value, "detail": f"the embedding runtime is not installed ({exc})"}
+    except Exception as exc:
+        return {"failure": FailureReason.CRASHED.value, "detail": f"the model could not be loaded ({type(exc).__name__}: {exc})"}
+    captioner = _captioners[key]
+    from PIL import Image
+    captions, failed = [], {}
+    for row, item in enumerate(payload.get("paths") or []):
+        path = path_from_data(item)
+        try:
+            with Image.open(path) as picture:
+                picture.load()
+                prepared = embedding.Captioner.prepare(picture)
+            captions.append(captioner.caption(prepared, bool(payload.get("longer"))))
+        except FileNotFoundError:
+            failed[str(row)] = "the file was not there"
+            captions.append("")
+        except Exception as exc:
+            failed[str(row)] = f"could not be read as a picture ({type(exc).__name__})"
+            captions.append("")
+    return {"captions": captions, "failed": failed, "device": captioner.device}
 
 
 # ---- OCR ------------------------------------------------------------------------------------------------

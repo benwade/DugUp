@@ -14,6 +14,7 @@ the caller's thread and an indexing run opens its own, so a window can ask for s
 from __future__ import annotations
 
 import logging
+import datetime
 import os
 import threading
 import time
@@ -30,12 +31,12 @@ from .lockfile import RunLock
 from .ocr import SandboxOcrBackend
 from .ocrqueue import OcrReport, OcrRunner
 from .filesource import matches_rules
-from .protocols import Extractor, FileSource, ScanRules, StopSignal, Store
+from .protocols import Extractor, FileSource, Limits, ScanRules, StopSignal, Store
 from .sandbox import SubprocessSandbox
 from .settings import Settings
 from dataclasses import replace
 
-from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, OPTION_ALIKE, OPTION_MEANING, OPTION_WORDS, WHERE_BOTH, WHERE_LOOKS, WHERE_MEANING, level_for, level_reaches, level_words, normalize_level, wants, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
+from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, OPTION_ALIKE, OPTION_MEANING, OPTION_WORDS, WHERE_BOTH, WHERE_LOOKS, WHERE_MEANING, level_for, level_reaches, level_words, normalize_level, wants, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileKind, FileRecord, FileState,
                      Passage, Root, SearchPage)
 from .store import SqliteStore
 from .suggest import Suggestion, suggest_excludes
@@ -593,6 +594,98 @@ class LocalService:
             filters = replace(filters, case_insensitive=self.case_insensitive)
         return self.store.search_looks(vectors[0], self.looks_model(), limit, offset, filters,
                                        not_file=record.row_id if record is not None else None)
+
+    # -- naming pictures
+
+    def captions_ready(self) -> "bool | str":
+        from . import embedding_models
+        if self.settings.caption_source == "server":
+            return "captions from a local model server are not built yet; set caption_source to \"model\""
+        try:
+            import onnxruntime  # noqa: F401
+            import tokenizers  # noqa: F401
+            import PIL  # noqa: F401
+        except ImportError:
+            return "the runtime for captions is not installed (pip install dugup[meaning] and pillow)"
+        if not embedding_models.captions_present(self.layout.models / "captions"):
+            size = sum(i.size for i in embedding_models.CAPTIONS_BY_CHOICE["base"]) / 1048576
+            return f"the captioning model is not fetched yet ({size:,.0f} MB)"
+        return True
+
+    def plan_names(self, folder: str, pattern: Optional[str] = None, caption: bool = True, longer: bool = False,
+                   progress: Optional[Callable[[Progress], None]] = None, stop: Optional[StopSignal] = None,
+                   gpu: Optional[bool] = None) -> "naming.Plan | Failure":
+        """What the pictures below a folder would be called (naming.plan). Captions are written now, by the
+        captioning model in a worker (fetched on first use), when the pattern asks for {caption} and `caption`
+        is on. Changes nothing."""
+        import time as _time
+        from . import embedding_models, naming
+        pattern = pattern if pattern is not None else self.settings.rename_pattern
+        problem = naming.check_pattern(pattern)
+        if problem:
+            return Failure(FailureReason.UNSUPPORTED, f"the pattern cannot be used: {problem}")
+        folder = os.path.abspath(os.path.expanduser(folder))
+        if not any(_under(folder, r.path, self._fold) for r in self.store.list_roots()):
+            return Failure(FailureReason.OTHER, f"that folder is not inside an indexed folder: {folder}")
+        records = [r for r in self.store.list_files(prefix=folder, case_insensitive=self.case_insensitive)
+                   if r.kind is FileKind.IMAGE and r.missing_since is None]
+        started = _time.monotonic()
+        found = naming.Plan(pattern)
+        captions: Dict[str, str] = {}
+        if caption and "{caption}" in pattern and records:
+            ready = self.captions_ready()
+            if ready is not True and "not fetched" in str(ready):
+                for item in embedding_models.CAPTIONS_BY_CHOICE["base"]:
+                    got = models.fetch(item, self.layout.models / "captions", progress, stop)
+                    if isinstance(got, Failure):
+                        return got
+                ready = self.captions_ready()
+            if ready is not True:
+                return Failure(FailureReason.NOT_INSTALLED, ready)
+            from .jobs import CAPTION, path_to_data
+            from .sandbox import SubprocessSandbox
+            gpu = self.settings.caption_gpu if gpu is None else bool(gpu)
+            sandbox = SubprocessSandbox()
+            try:
+                for at in range(0, len(records), 8):
+                    if stop is not None and stop.is_set():
+                        found.stopped = True
+                        break
+                    batch = records[at:at + 8]
+                    if progress is not None:
+                        progress(Progress("caption", "", at, len(records), elapsed=_time.monotonic() - started, current=batch[0].path))
+                    answer = sandbox.run(CAPTION, {"folder": str(self.layout.models / "captions"), "gpu": gpu,
+                                                   "paths": [path_to_data(r.path) for r in batch], "longer": longer},
+                                         Limits(1200.0), stop)
+                    if isinstance(answer, Failure):
+                        return answer
+                    if "failure" in answer:
+                        return Failure(FailureReason(answer["failure"]), str(answer["detail"]))
+                    found.device = str(answer.get("device") or found.device)
+                    for record, text in zip(batch, answer.get("captions") or []):
+                        captions[record.path] = str(text or "")
+                        found.captioned += 1 if text else 0
+            finally:
+                sandbox.close()
+            if progress is not None:
+                progress(Progress("caption", "", len(records), len(records), elapsed=_time.monotonic() - started))
+        protected = [p.strip() for p in self.settings.cleanup_protect.split(";") if p.strip()]
+
+        def clock(modified: float) -> str:
+            return datetime.datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H-%M")
+
+        found.changes = naming.plan(records, pattern, captions, clock, protected, self._fold)
+        found.seconds = _time.monotonic() - started
+        return found
+
+    def apply_names(self, found, journal=None, stop: Optional[StopSignal] = None):
+        """Rename as the plan says (naming.apply); the index follows."""
+        from . import naming
+        return naming.apply(found.to_rename, self.store, journal, stop)
+
+    def undo_names(self, record_text: str, journal=None):
+        from . import naming
+        return naming.undo(naming.read_record(record_text), self.store, journal)
 
     def measure_looks(self, pictures: int = 300, gpu: Optional[bool] = None, questions: Sequence[str] = (),
                       like: Sequence[str] = (), progress: Optional[Callable[[Progress], None]] = None,

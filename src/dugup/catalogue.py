@@ -74,6 +74,10 @@ GROUPS: Tuple[Group, ...] = (
           "DugUp can keep a sketch of what each picture looks like, so you can find pictures like another one, "
           "or pictures of something you name. The sketches are made in the background after indexing, in folders "
           "whose level includes \"Pictures alike\"."),
+    Group("naming", "Naming pictures",
+          "Many pictures have names that say nothing (IMG_4471.jpg). DugUp can rename them from what they show: a "
+          "captioning model writes a sentence about each, and a pattern you set turns it into a name. Always a "
+          "preview first, a record of every change, and an undo."),
     Group("speed", "How hard to work",
           "Building the index for the first time is heavy work, and that is temporary. Afterwards DugUp only "
           "reads what is new or changed. These settings say how much of the computer it may take while it works."),
@@ -202,6 +206,19 @@ def _entries() -> Tuple[Entry, ...]:
           why="Opening and scaling pictures is the slow part, and several readers share it.", low=0, high=32, zero="work it out"),
         E("looks_after_index", "looks", "Look at pictures as part of updating",
           "Updating the index goes on to sketch new pictures, after the sketches of meaning.", choices=YES_NO),
+        E("rename_pattern", "naming", "The name pattern",
+          "What a renamed picture is called. Fields: {caption} the sentence about it, {taken} the day it was taken "
+          "(or saved), {time}, {camera}, {folder}, {original} its name now, {n} a number, {ext}. The ending is kept "
+          "unless {ext} is named.",
+          why="\"{caption} {taken}\" gives names like \"Two dogs on snowy porch 2024-01-13.jpg\". Put {original} in to keep "
+              "the old name in sight.", everyday=True),
+        E("caption_source", "naming", "Where captions come from",
+          "\"model\": the pinned captioning model, fetched on first use. \"server\": a local model server of your own "
+          "(not built yet; the seam is here for it).",
+          choices=(("model", "the pinned model"), ("server", "a local model server (not built yet)"))),
+        E("caption_gpu", "naming", "Write captions on the graphics card",
+          "Use the graphics card for the captioning model when the runtime can use one.",
+          why="It is the slowest model here: seconds a picture on a processor, much less on a card.", choices=YES_NO),
         E("meaning_after_index", "meaning", "Sketch as part of updating",
           "Updating the index goes on to sketch what is new, after reading pictures.",
           why="One button does it all. Turn it off to sketch at a time of your choosing with `dugup meaning fill`.",
