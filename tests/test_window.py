@@ -1051,9 +1051,17 @@ def test_the_rename_tab_previews_lets_names_be_edited_or_kept_renames_with_a_rec
     assert len(tab.plan.to_rename) == 3 and "3 picture(s) would be renamed" in tab.status.get()
     assert [v.get() for v in tab.entries] == ["Cat number 7 IMG_7.jpg", "Cat number 8 IMG_8.jpg", "Cat number 9 IMG_9.jpg"]
     assert str(tab.rename_button["state"]) == "normal" and str(tab.preview_button["state"]) == "normal"
+    # each row says which way it is; the button says how many; tick all and untick all
+    assert tab.rename_button["text"] == "Rename 3 as shown" and all(m[1]["text"] == "WILL BE RENAMED" for m in tab.marks)
+    tab.tick_every(False)
+    assert tab.rename_button["text"] == "Rename as shown" and str(tab.rename_button["state"]) == "disabled"
+    assert all(m[1]["text"] == "kept as it is" for m in tab.marks)
+    tab.tick_every(True)
     # edit one name, untick another, rename; a question is asked first
     tab.entries[0].set("Seven the cat.jpg")
     tab.keep[1].set(False)
+    tab._count()
+    assert tab.rename_button["text"] == "Rename 2 as shown" and tab.marks[1][1]["text"] == "kept as it is" and tab.marks[0][1]["text"] == "WILL BE RENAMED"
     asked = []
     app.ask = lambda title, text: asked.append(title) or True
     told = []

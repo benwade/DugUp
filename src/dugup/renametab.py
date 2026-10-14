@@ -37,6 +37,7 @@ class RenameTab(ttk.Frame):
         self.entries: List[tk.StringVar] = []
         self.keep: List[tk.BooleanVar] = []
         self.photos: dict = {}
+        self.marks: list = []
         self.worker: Optional[threading.Thread] = None
         self.stop = threading.Event()
         self.last_record = ""
@@ -57,6 +58,10 @@ class RenameTab(ttk.Frame):
         self.preview_button.pack(side="left")
         self.stop_button = ttk.Button(bar, text="Stop", command=self.stop.set, state="disabled")
         self.stop_button.pack(side="left", padx=4)
+        self.tick_all_button = ttk.Button(bar, text="Tick all", command=lambda: self.tick_every(True), state="disabled")
+        self.tick_all_button.pack(side="left", padx=(16, 2))
+        self.untick_all_button = ttk.Button(bar, text="Untick all", command=lambda: self.tick_every(False), state="disabled")
+        self.untick_all_button.pack(side="left", padx=2)
         self.rename_button = ttk.Button(bar, text="Rename as shown", command=self.rename, state="disabled")
         self.rename_button.pack(side="left", padx=(16, 4))
         self.undo_button = ttk.Button(bar, text="Undo last rename", command=self.undo, state="disabled")
@@ -133,24 +138,55 @@ class RenameTab(ttk.Frame):
         self.status.set(f"{n:,} picture(s) would be renamed{took}; {len(found.left_alone):,} left alone. Edit any name, untick any "
                         "you want to keep, then press Rename as shown." if n else "Nothing to rename here.")
         self.rename_button.configure(state="normal" if n else "disabled")
+        for button in (self.tick_all_button, self.untick_all_button):
+            button.configure(state="normal" if n else "disabled")
+        self._count()
+
+    def tick_every(self, on: bool) -> None:
+        for keep in self.keep:
+            keep.set(on)
+        self._count()
+
+    def _count(self) -> None:
+        """The button says how many will go, and each row says which way it is."""
+        chosen = sum(1 for keep in self.keep if keep.get())
+        self.rename_button.configure(text=f"Rename {chosen:,} as shown" if chosen else "Rename as shown",
+                                     state="normal" if chosen else "disabled")
+        for index, (keep, marks) in enumerate(zip(self.keep, self.marks)):
+            frame, label = marks
+            if keep.get():
+                label.configure(text="WILL BE RENAMED", foreground="#1b5e20")
+                frame.configure(style="Rename.TFrame")
+            else:
+                label.configure(text="kept as it is", foreground="#777777")
+                frame.configure(style="Keep.TFrame")
 
     def _draw(self) -> None:
         for child in self.inner.winfo_children():
             child.destroy()
-        self.entries, self.keep, self.photos = [], [], {}
+        self.entries, self.keep, self.photos, self.marks = [], [], {}, []
         if self.plan is None:
             return
+        style = ttk.Style(self)
+        style.configure("Rename.TFrame", background="#e8f5e9")
+        style.configure("Keep.TFrame", background="#ececec")
         for index, change in enumerate(self.plan.to_rename):
-            row = ttk.Frame(self.inner, padding=(4, 4))
-            row.grid(row=index, column=0, sticky="ew")
+            row = ttk.Frame(self.inner, padding=(4, 4), style="Rename.TFrame")
+            row.grid(row=index, column=0, sticky="ew", pady=1)
             row.columnconfigure(2, weight=1)
             keep = tk.BooleanVar(value=True)
             self.keep.append(keep)
-            ttk.Checkbutton(row, variable=keep).grid(row=0, column=0, rowspan=3, sticky="n")
+            tick = ttk.Checkbutton(row, variable=keep, command=self._count, text="Rename")
+            tick.grid(row=0, column=0, rowspan=3, sticky="n", padx=(0, 4))
             picture = tk.Label(row, width=THUMB // 7, text="...", background="#e4e4e4", anchor="center")
             picture.grid(row=0, column=1, rowspan=3, padx=(2, 8))
             self._picture(picture, change.old, index)
-            ttk.Label(row, text=os.path.basename(change.old), foreground="#555555").grid(row=0, column=2, sticky="w")
+            head = ttk.Frame(row, style="Rename.TFrame")
+            head.grid(row=0, column=2, sticky="ew")
+            ttk.Label(head, text=os.path.basename(change.old), foreground="#555555").pack(side="left")
+            mark = ttk.Label(head, text="WILL BE RENAMED", foreground="#1b5e20", font=("TkDefaultFont", 9, "bold"))
+            mark.pack(side="right")
+            self.marks.append((row, mark))
             name = tk.StringVar(value=os.path.basename(change.new))
             self.entries.append(name)
             ttk.Entry(row, textvariable=name, width=70).grid(row=1, column=2, sticky="ew", pady=2)
