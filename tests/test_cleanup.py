@@ -166,9 +166,12 @@ def test_extras_are_moved_only_after_the_keeper_is_checked_and_the_index_follows
         assert found.extra_files == 9 and all(s.keep.record.path.startswith(str(drive / "Docs")) for s in found.sets)
         (drive / "Old" / "Docs" / "n1.txt").write_text("changed since the index was made", encoding="utf-8")
         (drive / "Backup" / "Docs" / "n2.txt").unlink()
-        told = []
-        done = service.remove_duplicates(found, tell=lambda at, total, path: told.append((at, total)), mover=mover)
+        told, journal = [], []
+        done = service.remove_duplicates(found, tell=lambda at, total, path: told.append((at, total)), mover=mover,
+                                         journal=journal.append)
         assert len(done.moved) == 7 and not done.stopped and told[-1] == (9, 9)
+        assert len(journal) == 9 and sum(1 for l in journal if l.startswith("moved\t")) == 7, "each outcome journalled as it happened"
+        assert all(l.count("\n") == 0 and l.count("\t") in (2, 3) for l in journal)
         assert sorted(why for _, why in done.skipped) == ["it is not there now", "it no longer holds the same bytes as the copy to keep"]
         assert (drive / "Old" / "Docs" / "n1.txt").exists(), "a changed copy is left where it is"
         assert all((drive / "Docs" / f"n{i}.txt").exists() for i in range(4)) and (drive / "Laptop" / "Docs" / "n0.txt").exists()
@@ -237,3 +240,28 @@ def test_the_trash_itself(tmp_path):
     assert trash.to_trash(str(tmp_path / "nowhere.txt")) == "it is not there (or it is a folder)"
     assert trash.to_trash(str(tmp_path)) == "it is not there (or it is a folder)", "never a folder"
     assert trash.to_trash(str(victim), mover=lambda p: "") == "" and victim.exists(), "a mover of one's own"
+
+
+def test_same_bytes_reads_afresh_and_the_fallback_folder_keeps_every_version(tmp_path, monkeypatch):
+    from dugup import cleanup, trash
+    a, b = tmp_path / "a.bin", tmp_path / "b.bin"
+    a.write_bytes(b"x" * 5000)
+    b.write_bytes(b"x" * 5000)
+    assert cleanup.same_bytes(str(a), str(b))
+    stamp = os.stat(b)
+    b.write_bytes(b"x" * 4999 + b"y")           # the same size ...
+    os.utime(b, (stamp.st_atime, stamp.st_mtime))  # ... and the same time: filecmp would still say equal
+    assert not cleanup.same_bytes(str(a), str(b))
+    assert not cleanup.same_bytes(str(a), str(tmp_path / "nowhere.bin"))
+    # the fallback folder: a run's own folder, and the same path twice in a run keeps both
+    monkeypatch.setattr(trash, "FALLBACK_FOLDER", str(tmp_path / "removed"))
+    monkeypatch.setattr(os.path, "splitdrive", lambda p: ("", p))
+    victim = tmp_path / "v" / "f.txt"
+    victim.parent.mkdir()
+    victim.write_text("one", encoding="utf-8")
+    assert trash._fallback_move(str(victim)) == ""
+    victim.write_text("two", encoding="utf-8")
+    assert trash._fallback_move(str(victim)) == ""
+    kept = sorted(p.read_text(encoding="utf-8") for p in (tmp_path / "removed").rglob("f*.txt"))
+    assert kept == ["one", "two"], "nothing overwritten"
+    assert trash._run_started in str(next((tmp_path / "removed").rglob("f.txt")))

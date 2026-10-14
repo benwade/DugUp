@@ -11,6 +11,7 @@ models are fetched on request into the data folder (models/meaning), like the pl
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,8 +31,12 @@ PIECE_CHARS = 4000         # a piece of text longer than this is sketched from i
 
 
 def model_name(choice: str, dims: int) -> str:
-    """What a stored sketch is tagged with: the model and how many of its numbers were kept, e.g. "larger:768"."""
-    return f"{choice}:{int(dims)}"
+    """What a stored sketch is tagged with: the model choice, how many of its numbers were kept, and the first
+    letters of the pinned model file's hash, e.g. "larger:768:fe3a1c9b". A change of weights or tokenizer
+    changes the pin, so every file wants a new sketch, and old and new are never compared."""
+    pins = embedding_models.BY_CHOICE.get(choice, ())
+    revision = hashlib.sha256("".join(p.sha256 for p in pins).encode("ascii")).hexdigest()[:8] if pins else "unpinned"
+    return f"{choice}:{int(dims)}:{revision}"
 
 
 def dims_for(choice: str, size: str) -> int:
@@ -55,6 +60,7 @@ class FillReport:
     load_seconds: float = 0.0
     stopped: bool = False
     out_of_time: bool = False
+    paused: str = ""               # why the run stopped itself: no room left for the index to grow
     failure: Optional[Failure] = None   # what ended the run early, when something did
     compacted: Optional[Dict[str, int]] = None   # the index's size before and after, when it was compacted at the end
 
@@ -138,12 +144,19 @@ class _Runner:
         return np.concatenate(pieces) if pieces else np.zeros((0, dims or 1), dtype=np.float32)
 
 
+ROOM_EVERY = 50            # files between looks at whether the index may still grow
+
+
 def fill(store, runner: "_Runner", choice: str, dims: int, wanted: Callable[[str], bool] = lambda path: True,
          progress: Optional[Callable[[Progress], None]] = None, stop: Optional[StopSignal] = None,
-         budget_seconds: Optional[float] = None, timer: Callable[[], float] = time.monotonic) -> FillReport:
+         budget_seconds: Optional[float] = None, timer: Callable[[], float] = time.monotonic,
+         room: Optional[Callable[[], str]] = None) -> FillReport:
     """Sketch every file with text that has no sketch by this model yet, the most recently changed first,
-    in the calling thread, until done, stopped, out of time or failed. Each file's sketches are saved as it
-    is done, so a stopped run has lost nothing. `wanted(path)` says whether a file's folder asks for meaning."""
+    in the calling thread, until done, stopped, out of time, out of room or failed. Each file's sketches are
+    saved as it is done, so a stopped run has lost nothing. `wanted(path)` says whether a file's folder asks
+    for meaning. `room()` says why nothing more may be written ("" when there is room; the same guards as
+    indexing: the drive's free space and the index's spending limit); it is asked before the first file and
+    every ROOM_EVERY files after."""
     import numpy as np
     from . import sketches
     name = model_name(choice, dims)
@@ -180,6 +193,10 @@ def fill(store, runner: "_Runner", choice: str, dims: int, wanted: Callable[[str
             if not wanted(record.path):
                 report.left_alone += 1
                 continue
+            if room is not None and report.files % ROOM_EVERY == 0:
+                report.paused = str(room() or "")
+                if report.paused:
+                    break
             if progress is not None:
                 progress(Progress("sketch", "", done_before + report.files, total, elapsed=timer() - started,
                                   current=record.path))
@@ -204,7 +221,7 @@ def fill(store, runner: "_Runner", choice: str, dims: int, wanted: Callable[[str
             store.save_sketches(record.row_id, name, dims, rows)
             report.files += 1
             report.pieces += len(texts)
-        if report.stopped or report.out_of_time or report.failure is not None:
+        if report.stopped or report.out_of_time or report.paused or report.failure is not None:
             break
     report.seconds = timer() - started
     report.done, report.could = store.sketch_counts(name)

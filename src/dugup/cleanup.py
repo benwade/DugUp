@@ -117,18 +117,30 @@ class Removal:
 
 
 def same_bytes(one: str, two: str) -> bool:
-    """True when the two files hold the same bytes now, read in full (the index's marks may be stale)."""
-    import filecmp
+    """True when the two files hold the same bytes now, read in full and afresh (the index's marks may be
+    stale, and so may a cached comparison: filecmp remembers its answers by size and time, which a file can
+    keep while its bytes change)."""
     try:
-        return filecmp.cmp(one, two, shallow=False)
+        if os.path.getsize(one) != os.path.getsize(two):
+            return False
+        with open(one, "rb") as first, open(two, "rb") as second:
+            while True:
+                a, b = first.read(1 << 20), second.read(1 << 20)
+                if a != b:
+                    return False
+                if not a:
+                    return True
     except OSError:
         return False
 
 
 def remove_extras(found: Report, mover: Callable[[str], str], note_missing: Callable[[str], None],
-                  stop=None, tell: Optional[Callable[[int, int, str], None]] = None) -> Removal:
+                  stop=None, tell: Optional[Callable[[int, int, str], None]] = None,
+                  journal: Optional[Callable[[str], None]] = None) -> Removal:
     """Move every "extra" of the report to the trash, one by one, each only after its keeper is found to be
-    there and to hold the same bytes at that moment. `mover(path)` does the moving and answers "" or why
+    there and to hold the same bytes at that moment. `journal(line)` is told of each outcome as it happens
+    (moved or left, as the record file writes them), so a run cut short still has its record so far.
+    `mover(path)` does the moving and answers "" or why
     not; `note_missing(path)` tells the index. A stop request ends it between files; nothing is undone."""
     done = Removal()
     total = found.extra_files
@@ -143,20 +155,28 @@ def remove_extras(found: Report, mover: Callable[[str], str], note_missing: Call
             path = extra.record.path
             if tell is not None:
                 tell(at, total, path)
+            why = ""
             if not os.path.isfile(keeper):
-                done.skipped.append((path, f"the copy to keep is not there now: {keeper}"))
-                continue
-            if not os.path.isfile(path):
-                done.skipped.append((path, "it is not there now"))
-                continue
-            if not same_bytes(keeper, path):
-                done.skipped.append((path, "it no longer holds the same bytes as the copy to keep"))
-                continue
-            problem = mover(path)
-            if problem:
-                done.skipped.append((path, problem))
+                why = f"the copy to keep is not there now: {keeper}"
+            elif not os.path.isfile(path):
+                why = "it is not there now"
+            elif not same_bytes(keeper, path):
+                why = "it no longer holds the same bytes as the copy to keep"
+            else:
+                why = mover(path)
+            if why:
+                done.skipped.append((path, why))
+                if journal is not None:
+                    journal(record_line("left", path, why))
                 continue
             done.moved.append((path, keeper))
+            if journal is not None:
+                journal(record_line("moved", path, "kept", keeper))
             done._bytes += extra.record.size
             note_missing(path)
     return done
+
+
+def record_line(*parts: str) -> str:
+    """One line of the removal record: tab-separated, no line breaks inside a part."""
+    return "\t".join(" ".join(str(p).split()) for p in parts)

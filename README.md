@@ -26,7 +26,10 @@ planned and not built yet.
   has read it; a file that cannot be read says why.
 - Stop with Ctrl+C and run again to continue. Deleted files stay findable, flagged, for 30 days.
 - Files are parsed, and pictures are read, in separate worker processes with a time limit, so a damaged or
-  hostile file can cost one worker and never the index. The workers have no network access.
+  hostile file can cost one worker and never the index. This is crash isolation, not a security boundary:
+  the workers run with your own file permissions, and their lack of network access is a shim inside Python
+  (the socket functions are replaced), not an operating-system restriction. A parser with a real
+  vulnerability could still do what you can do.
 
 ## Set up
 
@@ -147,8 +150,9 @@ content marks, each set with the copy to keep marked (the one in the larger set 
 up) and every other copy's full path; `--save FILE` writes the whole report; folders in `cleanup_protect`
 (or `--protect FOLDER`) are never proposed, for a live backup of this computer on a cloud drive. It lists;
 you do the removing. `dugup status --unreadable` lists files
-that are damaged or need a password, and `--save FILE` writes that list to a file. DugUp never deletes or
-changes a file.
+that are damaged or need a password, and `--save FILE` writes that list to a file. Indexing and searching
+never change a file. The one part that moves files is the clearing out of copies (below), which sends them
+to the trash and only when you ask it to.
 
 Updating the index reads several files side by side, each in a worker of its own, so one slow file (a
 large PDF, or one that must first come down from a cloud drive) does not hold up the rest. The number is
@@ -238,9 +242,15 @@ default; `meaning_model = "small"` chooses the 90 MB one, about seven times fast
 A drive that several computers have backed up to, or that a sync dispute has left in a mess, ends up holding
 the same files in many places. DugUp can find them, say which copy to keep, and move the rest to the trash.
 This is the one thing in DugUp that changes a file, so it is kept apart from indexing and searching, and it
-only ever moves an exact copy whose keeper is there and identical at that moment. The order below has worked
-on one real drive; it is a way of going about it, not the only one, and every step is a command you can run
-again.
+only ever moves an exact copy whose keeper is there and identical at that moment (the bytes are compared
+afresh, not taken from the index). Where it moves to: on Windows the shell's trash, which for a cloud drive
+is that drive's own trash; the shell is told to ask you first in the one case where it could only delete
+outright (a drive with no recycle bin), so nothing is deleted without a word. Elsewhere, the `send2trash`
+package when it is installed, otherwise a "DugUp removed" folder at the top of the drive with a subfolder
+per run. The record file is written a line at a time as files move, so a run cut short still has its
+record. Deleting for good is not something DugUp does today; if it ever does, it will be a separate choice
+with the word in front of you. The order below has worked on one real drive; it is a way of going about
+it, not the only one, and every step is a command you can run again.
 
 1. **Index the drive**, so every file that is read has a mark of its content (`dugup index`). Folders listed
    by name only (book libraries, say) get no marks and take no part; raise their level if you want them in.

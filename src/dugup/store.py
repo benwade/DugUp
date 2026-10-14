@@ -1175,7 +1175,8 @@ class SqliteStore:
         same model). Two stages: the fingerprints of every piece are scanned for the `candidates` likeliest
         FILES (sketches.CANDIDATES; a few pieces each), then those are scored by their full sketches. One row per file (one per
         content, unless filters.every_copy), its closest passage as Evidence, closest first. `rank` is
-        the closeness (1 is the same meaning). Only the file filters apply (folder, kinds, dates, sizes)."""
+        the closeness (1 is the same meaning). Only the file filters apply (folder, kinds, dates, sizes),
+        and they narrow the scan itself, before the candidates are chosen."""
         import numpy as np
         from . import sketches
         if limit < 0 or offset < 0:
@@ -1184,8 +1185,18 @@ class SqliteStore:
         if len(ids) == 0:
             return SearchPage([], 0, offset, limit)
         _, _, _, file_clause, file_args, _ = self._narrow("", filters)
-        keep = candidates if candidates is not None else sketches.CANDIDATES * (4 if file_clause else 1)
-        chosen = ids[sketches.scan_files(prints, files, np.asarray(question, dtype=np.float32), keep)]
+        keep = candidates if candidates is not None else sketches.CANDIDATES
+        if file_clause:
+            # the filters narrow the scan itself, so files outside them take no place among the candidates
+            allowed = np.fromiter((r[0] for r in self.conn.execute(f"SELECT f.id FROM files f WHERE 1=1{file_clause}", file_args)),
+                                  dtype=np.int64)
+            inside = np.flatnonzero(np.isin(files, allowed))
+            if len(inside) == 0:
+                return SearchPage([], 0, offset, limit)
+            picked = sketches.scan_files(prints[inside], files[inside], np.asarray(question, dtype=np.float32), keep)
+            chosen = ids[inside[picked]]
+        else:
+            chosen = ids[sketches.scan_files(prints, files, np.asarray(question, dtype=np.float32), keep)]
         found = self.sketches_of(chosen)
         if not found:
             return SearchPage([], 0, offset, limit)

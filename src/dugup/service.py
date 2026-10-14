@@ -415,7 +415,7 @@ class LocalService:
         return cleanup.report(self.store, _place(drive), [_place(p) for p in kept], self.case_insensitive,
                               [_place(p) for p in home])
 
-    def remove_duplicates(self, found, stop: Optional[StopSignal] = None, tell=None, mover=None):
+    def remove_duplicates(self, found, stop: Optional[StopSignal] = None, tell=None, mover=None, journal=None):
         """Move the report's "extra" copies to the trash (cleanup.remove_extras; trash.to_trash). The one thing
         in DugUp that changes a file, and it only ever moves an exact copy whose keeper is there now."""
         from . import cleanup, trash
@@ -426,7 +426,7 @@ class LocalService:
             if record is not None and record.row_id is not None:
                 self.store.set_missing(record.row_id, clock.time())
 
-        return cleanup.remove_extras(found, mover or trash.to_trash, gone, stop, tell)
+        return cleanup.remove_extras(found, mover or trash.to_trash, gone, stop, tell, journal)
 
     def measure_meaning(self, pieces: int = 2000, choices: Sequence[str] = ("small", "larger"), gpu: Optional[bool] = None,
                         questions: Sequence[str] = (), progress: Optional[Callable[[Progress], None]] = None,
@@ -528,10 +528,11 @@ class LocalService:
                     sandbox = SubprocessSandbox()
                     try:
                         runner = meaning._Runner(sandbox, folder, choice, gpu)
-                        report = meaning.fill(store, runner, choice, dims, asks_for_meaning, tell, stop, budget_seconds)
+                        report = meaning.fill(store, runner, choice, dims, asks_for_meaning, tell, stop, budget_seconds,
+                                              room=self.room)
                     finally:
                         sandbox.close()
-                    if report.failure is None and not report.stopped and not report.out_of_time \
+                    if report.failure is None and not report.stopped and not report.out_of_time and not report.paused \
                             and self._store_thread in (None, threading.get_ident()):
                         report.compacted = self.compact_if_worthwhile()
                     return report

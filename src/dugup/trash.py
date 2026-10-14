@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from typing import Callable, Optional
 
 FALLBACK_FOLDER = "DugUp removed"
@@ -28,10 +29,11 @@ def _windows_trash(path: str) -> str:
                     ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
 
     FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FOF_NOERRORUI = 3, 0x40, 0x10, 0x4, 0x400
+    FOF_WANTNUKEWARNING = 0x4000     # where the shell cannot recycle and would delete outright, it asks first (overrides NOCONFIRMATION for that)
     op = SHFILEOPSTRUCTW()
     op.wFunc = FO_DELETE
     op.pFrom = os.path.abspath(path) + "\0\0"       # a list of names ends with two NULs
-    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI | FOF_WANTNUKEWARNING
     result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
     if result != 0:
         return f"the shell refused to move it to the trash (code {result})"
@@ -54,13 +56,22 @@ def _send2trash(path: str) -> str:
     return ""
 
 
+_run_started = time.strftime("%Y-%m-%d %H-%M-%S")     # this program's run: its own folder, so runs never overwrite each other
+
+
 def _fallback_move(path: str) -> str:
     drive, rest = os.path.splitdrive(os.path.abspath(path))
     top = (drive + os.sep) if drive else os.sep
-    folder = os.path.join(top, FALLBACK_FOLDER)
+    folder = os.path.join(top, FALLBACK_FOLDER, _run_started)
     target = os.path.join(folder, rest.lstrip("/\\"))
     try:
         os.makedirs(os.path.dirname(target), exist_ok=True)
+        if os.path.lexists(target):            # the same path twice in one run: keep both
+            stem, ext = os.path.splitext(target)
+            n = 1
+            while os.path.lexists(f"{stem} ({n}){ext}"):
+                n += 1
+            target = f"{stem} ({n}){ext}"
         shutil.move(path, target)
     except OSError as exc:
         return f"could not be moved aside ({type(exc).__name__}: {exc})"
@@ -78,7 +89,9 @@ def how() -> str:
 
 
 def to_trash(path: str, mover: Optional[Callable[[str], str]] = None) -> str:
-    """Move one file to the trash. "" when done, else why not. Never deletes outright."""
+    """Move one file to the trash. "" when done, else why not. Nothing is deleted outright by this program;
+    on Windows the shell is told to ask the person first where it could only delete (a drive with no
+    recycle bin), rather than do it silently."""
     if not os.path.isfile(path):
         return "it is not there (or it is a folder)"
     if mover is not None:

@@ -229,3 +229,23 @@ def test_words_found_everywhere_are_not_looked_for_and_any_telling_word_earns_a_
         # a question of nothing but everyday words is meaning alone
         alone = store.search_both("I wrote the note", v[0], "larger:768")
         assert alone.total == 2 and all(r.matches == 0 for r in alone.rows)
+
+
+def test_a_filtered_meaning_search_scans_only_the_files_inside_the_filter(tmp_path):
+    from dugup.shapes import SearchFilters
+    with SqliteStore(tmp_path / "index.sqlite") as store:
+        question = unit(1, 768, 21)[0]
+        far = unit(1, 768, 22)[0]
+        # 50 files outside the folder, every one closer to the question than the one file inside it
+        for n in range(50):
+            r = store.upsert_file(FileRecord(f"/out/f{n}.txt", 5, 1.0, state=FileState.DONE))
+            store.replace_segments(r, [SegmentIn(0, 1, SegmentKind.TEXT, "outside")])
+            sketched(store, r, (0.9 * question + 0.1 * unit(1, 768, 100 + n)[0])[None, :])
+        inside = store.upsert_file(FileRecord("/in/only.txt", 5, 1.0, state=FileState.DONE))
+        store.replace_segments(inside, [SegmentIn(0, 1, SegmentKind.TEXT, "inside")])
+        sketched(store, inside, (0.3 * question + 0.7 * far)[None, :])
+        # a pool of 10 candidates: without the filter the inside file is nowhere near it
+        assert all(r.path.startswith("/out/") for r in store.search_meaning(question, "larger:768", candidates=10).rows)
+        page = store.search_meaning(question, "larger:768", filters=SearchFilters(folder="/in"), candidates=10)
+        assert [r.path for r in page.rows] == ["/in/only.txt"] and page.total == 1, "the filter narrows the scan, not just the answer"
+        assert store.search_meaning(question, "larger:768", filters=SearchFilters(folder="/nowhere"), candidates=10).total == 0

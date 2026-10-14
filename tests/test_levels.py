@@ -289,3 +289,38 @@ def test_a_folder_that_asks_only_for_pictures_alike_has_its_documents_listed_by_
     result = world.service.set_level(str(world.docs / "Books"), "alike")
     assert result["level"] == "alike" and result["purged"] == 2, "no words are wanted, so the text is not kept"
     assert world.names("whale") == ["top.txt"] and world.names("novel") == ["novel.txt"]
+
+
+def test_a_level_lowered_while_a_reader_is_busy_does_not_let_the_text_back_in(tmp_path):
+    """The reader has the file open when the folder is set to names; what it brings back must not be kept."""
+    from dugup.indexer import Indexer
+    from dugup.protocols import Extraction
+
+    class SlowExtractor:
+        def __init__(self, on_read):
+            self.on_read = on_read
+
+        def extract(self, record, stop=None):
+            self.on_read(record)
+            return Extraction((SegmentIn(0, 0, SegmentKind.TEXT, "a whale of a text"),))
+
+    docs = tmp_path / "docs"
+    (docs / "Books").mkdir(parents=True)
+    (docs / "Books" / "novel.txt").write_text("a whale of a text", encoding="utf-8")
+    (docs / "top.txt").write_text("a whale on top", encoding="utf-8")
+    layout = DataLayout(tmp_path / "data").ensure()
+    service = LocalService(layout, Settings(content_marks=False))
+    with service:
+        service.set_root(Root(str(docs)))
+
+        def lower_while_reading(record):
+            if record.path.endswith("novel.txt"):
+                service.set_level(str(docs / "Books"), LEVEL_NAMES)       # the change lands while the file is being read
+
+        service.extractor = SlowExtractor(lower_while_reading)
+        service.run_indexing()
+        names = sorted(r.name for r in service.search("whale").rows)
+        assert names == ["top.txt"], "the text read under the old level was not kept"
+        kept = service.store.get_file(str(docs / "Books" / "novel.txt"))
+        assert kept.state is FileState.SKIPPED and kept.error == POLICY_NOTE
+        assert service.run_indexing().read == 0, "and nothing is read again"

@@ -27,7 +27,9 @@ def test_the_pins_are_whole_and_the_sizes_say_what_they_are():
     assert embedding.SIZES["full"] == 768 and 96 <= embedding.SIZES["compact"] < embedding.SIZES["full"]
     assert meaning.dims_for("larger", "compact") == 256 and meaning.dims_for("larger", "full") == 768
     assert meaning.dims_for("small", "compact") == 384, "the small model cannot be cut short"
-    assert meaning.model_name("larger", 768) == "larger:768"
+    tag = meaning.model_name("larger", 768)
+    assert tag.startswith("larger:768:") and len(tag.split(":")[2]) == 8, "the pin's hash is in the tag"
+    assert tag != meaning.model_name("small", 384) and meaning.model_name("larger", 256) != tag
 
 
 class StandInSandbox:
@@ -161,11 +163,12 @@ def test_the_fill_sketches_the_most_recently_changed_first_passes_over_folders_t
     runner = meaning._Runner(StandInSandbox(), tmp_path, "larger", False)
     told = []
     report = meaning.fill(store, runner, "larger", 256, wanted=lambda p: "budget" not in p, progress=told.append)
-    assert (report.model, report.files, report.pieces, report.left_alone, report.done, report.could) == ("larger:256", 2, 4, 1, 2, 3)
+    tag = meaning.model_name("larger", 256)
+    assert (report.model, report.files, report.pieces, report.left_alone, report.done, report.could) == (tag, 2, 4, 1, 2, 3)
     assert report.device == "processor" and report.failure is None and not report.stopped
     assert [p.current for p in told if p.current] == ["/r/garden.txt", "/r/burnout.txt"], "most recently changed first; budget passed over"
     assert told[-1].phase == "sketch" and (told[-1].done, told[-1].total) == (2, 3)
-    ids, _, prints = store.fingerprints("larger:256")
+    ids, _, prints = store.fingerprints(tag)
     assert prints.shape == (4, 96) and all(v[1] == 256 for v in store.sketches_of(list(ids)).values())
     # the folder now asks: the next run takes only what is left
     again = meaning.fill(store, runner, "larger", 256)
@@ -181,8 +184,8 @@ def test_the_fill_sketches_the_most_recently_changed_first_passes_over_folders_t
             return answer
 
     halted = meaning.fill(store, meaning._Runner(StopAfterOne(), tmp_path, "larger", False), "larger", 768, stop=stop)
-    assert halted.stopped and halted.files == 1 and store.sketch_counts("larger:768") == (1, 3)
-    assert store.sketch_counts("larger:256") == (2, 3), "the file now sketched at full size no longer counts for compact"
+    assert halted.stopped and halted.files == 1 and store.sketch_counts(meaning.model_name("larger", 768)) == (1, 3)
+    assert store.sketch_counts(tag) == (2, 3), "the file now sketched at full size no longer counts for compact"
     clock = [0.0]
 
     def timer():
@@ -199,6 +202,14 @@ def test_the_fill_sketches_the_most_recently_changed_first_passes_over_folders_t
 
     failed = meaning.fill(store, meaning._Runner(Broken(), tmp_path, "larger", False), "larger", 768)
     assert failed.failure is not None and failed.failure.reason is FailureReason.CRASHED and failed.files == 0
+    # no room for the index to grow: the run pauses itself before the first file, and says why
+    full = meaning.fill(store, meaning._Runner(StandInSandbox(), tmp_path, "larger", False), "larger", 768,
+                        room=lambda: "the index has reached its spending limit")
+    assert full.paused == "the index has reached its spending limit" and full.files == 0 and not full.stopped
+    left = [""]
+    counting = meaning.fill(store, meaning._Runner(StandInSandbox(), tmp_path, "larger", False), "larger", 768,
+                            room=lambda: left[0])
+    assert counting.files >= 1 and not counting.paused, "with room, it goes on"
 
 
 def test_the_fill_command_and_status_and_the_index_run_goes_on_to_sketch(tmp_path, monkeypatch):
@@ -218,12 +229,12 @@ def test_the_fill_command_and_status_and_the_index_run_goes_on_to_sketch(tmp_pat
     monkeypatch.setattr(LocalService, "meaning_ready", lambda self: True)      # the runtime need not be installed here
     out = io.StringIO()
     assert cli.main(["meaning", "status", "--data-dir", str(data)], stdout=out) == 0
-    assert "Sketches of meaning: 0 of 3 file(s) with text (0%), with larger:768." in out.getvalue()
+    assert f"Sketches of meaning: 0 of 3 file(s) with text (0%), with {meaning.model_name('larger', 768)}." in out.getvalue()
     out = io.StringIO()
     code = cli.main(["meaning", "fill", "--no-gpu", "--data-dir", str(data)], stdout=out)
     text = out.getvalue()
     assert code == 0, text
-    assert "Sketching the meaning of 3 file(s) with the larger model (larger:768)." in text
+    assert f"Sketching the meaning of 3 file(s) with the larger model ({meaning.model_name('larger', 768)})." in text
     assert "Sketched 3 file(s), 6 piece(s) of text on the processor" in text and "Now 3 of 3 file(s) with text have sketches (100%)." in text
     out = io.StringIO()
     assert cli.main(["meaning", "status", "--data-dir", str(data)], stdout=out) == 0 and "3 of 3" in out.getvalue()

@@ -1455,6 +1455,9 @@ def print_meaning_report(report, out: TextIO) -> int:
         return 130
     if report.out_of_time:
         safe_write("Out of time for this run. Run `dugup meaning fill` again to continue.", out)
+    if report.paused:
+        safe_write(f"It paused itself: {report.paused}. Make room (or raise the limit) and run `dugup meaning fill` again.", out)
+        return 1
     return 1 if report.failure is not None else 0
 
 
@@ -1597,20 +1600,38 @@ def _remove_duplicates(found, service, args, out, environ, stop, install_signals
         width[0] = len(line)
         safe_write("\r" + line + pad, out, end="")
 
+    # the record is written as it goes, one line per file, flushed each time, so a run cut short has its record so far
+    record_problem = [""]
     try:
-        done = service.remove_duplicates(found, stop, tell)
+        handle = open(record_path, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n")
+    except OSError as exc:
+        handle = None
+        record_problem[0] = f"{type(exc).__name__}: {exc}"
+
+    def journal(line: str) -> None:
+        if handle is None or record_problem[0]:
+            return
+        try:
+            handle.write(line + "\n")
+            handle.flush()
+        except OSError as exc:
+            record_problem[0] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        done = service.remove_duplicates(found, stop, tell, journal=journal)
     finally:
         if previous is not None:
             signal.signal(signal.SIGINT, previous)
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError as exc:
+                record_problem[0] = record_problem[0] or f"{type(exc).__name__}: {exc}"
     safe_write("", out)
     lines = [f"moved\t{path}\tkept\t{kept}" for path, kept in done.moved] + \
         [f"left\t{path}\t{why}" for path, why in done.skipped]
-    try:
-        with open(record_path, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n") as handle:
-            for line in lines:
-                handle.write(line + "\n")
-    except OSError as exc:
-        safe_write(f"The record could not be written ({type(exc).__name__}: {exc}); here it is:", out)
+    if record_problem[0]:
+        safe_write(f"The record could not be written ({record_problem[0]}); here it is:", out)
         for line in lines:
             safe_write("  " + line, out)
     safe_write(f"Moved {len(done.moved):,} file(s) to the trash, about {format_bytes(done.bytes_freed)}; left {len(done.skipped):,} alone"

@@ -664,9 +664,27 @@ class Indexer:
             return mark if mark.reason in (FailureReason.STOPPED, FailureReason.UNREACHABLE) else None
         return mark or None
 
+    def _still_wants_text(self, path: str) -> bool:
+        """The folder's level as it is NOW: a level lowered to "names" while a reader was busy with the file
+        means the text it brought back must not be kept."""
+        fold = (lambda p: p.casefold()) if self.case_insensitive else (lambda p: p)
+        for root in self.store.list_roots():
+            base = fold(root.path.rstrip("/\\"))
+            folded = fold(path)
+            if folded == base or folded.startswith(base + "/") or folded.startswith(base + "\\"):
+                return wants(level_for(root, path, self.case_insensitive), OPTION_WORDS)
+        return True
+
     def _keep(self, record: FileRecord, result, report: IndexReport, patient: bool) -> Optional[FileState]:
         """The storing half: always on the indexer's own thread. `result` is what _read returned."""
         result, mark = result if isinstance(result, tuple) else (result, None)
+        if not self._still_wants_text(record.path):
+            with self.store.transaction():
+                self.store.replace_segments(record.row_id, ())
+                self.store.set_pages(record.row_id, ())
+                self.store.set_state(record.row_id, FileState.SKIPPED, POLICY_NOTE)
+            report.skipped += 1
+            return FileState.SKIPPED
         if result is SAME_AS_ANOTHER:
             state = self._keep_copy(record, mark, report)
             if state is None:              # the copy it was to be taken from is gone since: read it after all
