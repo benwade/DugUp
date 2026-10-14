@@ -44,6 +44,43 @@ def fingerprint_of(vector) -> bytes:
     return np.clip(np.rint(head / widest * 127.0), -127, 127).astype(np.int8).tobytes()
 
 
+PIECES_EACH = 3             # how many of one file's pieces the scan hands on, at most
+
+
+def scan_files(fingerprints, file_ids, question, keep: int = CANDIDATES, each: int = PIECES_EACH):
+    """The row numbers of the fingerprints to re-score, chosen so that `keep` different FILES are covered:
+    each file's best `each` rows by the fingerprint, best file first. A file with many pages near the
+    question then takes a few places, not the whole list. `file_ids` is an int64 row per fingerprint."""
+    import numpy as np
+    rows = fingerprints.shape[0]
+    if rows == 0 or keep <= 0:
+        return np.zeros(0, dtype=np.int64)
+    head = np.asarray(question, dtype=np.float32)[:FINGERPRINT]
+    asked = np.clip(np.rint(head / max(float(np.abs(head).max()), 1e-9) * 127.0), -127, 127).astype(np.int32)
+    scores = fingerprints @ asked
+    files = np.asarray(file_ids, dtype=np.int64)
+    take = min(rows, keep * 4)
+    while True:      # widen until enough different files are in, or every row is
+        top = np.argpartition(-scores, take - 1)[:take] if take < rows else np.arange(rows)
+        top = top[np.argsort(-scores[top], kind="stable")]
+        chosen_files = np.unique(files[top])
+        if len(chosen_files) >= keep or take >= rows:
+            break
+        take = min(rows, take * 4)
+    # walk the best first: a file's first `each` rows are kept, until `keep` files have been seen
+    kept, seen, counts = [], {}, {}
+    for row in top:
+        f = int(files[row])
+        if f not in seen:
+            if len(seen) >= keep:
+                continue
+            seen[f] = True
+        if counts.get(f, 0) < each:
+            counts[f] = counts.get(f, 0) + 1
+            kept.append(int(row))
+    return np.asarray(kept, dtype=np.int64)
+
+
 def scan(fingerprints, question, keep: int = CANDIDATES):
     """The row numbers of the `keep` fingerprints closest to the question's, best first. `fingerprints` is
     an int8 matrix (rows, FINGERPRINT); `question` the question's full sketch."""

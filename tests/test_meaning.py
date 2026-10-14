@@ -165,7 +165,7 @@ def test_the_fill_sketches_the_most_recently_changed_first_passes_over_folders_t
     assert report.device == "processor" and report.failure is None and not report.stopped
     assert [p.current for p in told if p.current] == ["/r/garden.txt", "/r/burnout.txt"], "most recently changed first; budget passed over"
     assert told[-1].phase == "sketch" and (told[-1].done, told[-1].total) == (2, 3)
-    ids, prints = store.fingerprints("larger:256")
+    ids, _, prints = store.fingerprints("larger:256")
     assert prints.shape == (4, 96) and all(v[1] == 256 for v in store.sketches_of(list(ids)).values())
     # the folder now asks: the next run takes only what is left
     again = meaning.fill(store, runner, "larger", 256)

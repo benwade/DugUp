@@ -34,6 +34,15 @@ def test_the_fingerprint_scan_keeps_the_best_within_the_candidates():
     assert len(set(truth) & set(kept)) >= 7, "most of the true best ten are among the 800 the scan hands on (random data is the worst case)"
     assert len(sketches.scan(prints[:3], question, keep=800)) == 3, "asked for more than there are: all of them"
     assert len(sketches.scan(prints, question, keep=0)) == 0
+    # by files: a file with many pages near the question takes a few places, not the whole list
+    files = np.arange(5000, dtype=np.int64) // 50          # 100 files of 50 pieces
+    files[:2000] = 0                                        # one file holds 2000 pieces, among them 123
+    rows = sketches.scan_files(prints, files, question, keep=10)
+    assert rows[0] == 123 and len(set(files[rows])) == 10 and max(np.bincount(files[rows])) == sketches.PIECES_EACH
+    assert len(rows) <= 10 * sketches.PIECES_EACH
+    everything = sketches.scan_files(prints, files, question, keep=1000)
+    assert len(set(files[everything])) == 61, "every file is in when more are asked for than there are"
+    assert len(sketches.scan_files(prints[:0], files[:0], question)) == 0
 
 
 @pytest.fixture(params=["fake", "sqlite"])
@@ -61,14 +70,14 @@ def test_the_store_keeps_sketches_by_model_and_forgets_them_when_the_text_change
     store.save_sketches(one, "larger", 768, rows)
     assert store.sketch_counts("larger") == (1, 2) and [r.path for r in store.unsketched("larger")] == ["/r/b.txt"]
     assert store.unsketched("small") and store.sketch_counts("small") == (0, 2), "another model's sketches are another thing"
-    ids, matrix = store.fingerprints("larger")
-    assert list(ids) == [seg for seg, _, _ in pieces] and matrix.shape == (2, sketches.FINGERPRINT)
+    ids, files, matrix = store.fingerprints("larger")
+    assert list(ids) == [seg for seg, _, _ in pieces] and list(files) == [one, one] and matrix.shape == (2, sketches.FINGERPRINT)
     found = store.sketches_of(list(ids) + [999])
     assert set(found) == set(ids) and found[ids[0]][0] == one and found[ids[0]][1] == 768
     back = sketches.dequantize(found[ids[1]][3], 768, [found[ids[1]][2]])[0]
     assert np.abs(back - vectors[1]).max() < 0.02
     store.replace_segments(one, [SegmentIn(1, 0, SegmentKind.TEXT, "alpha changed")])
-    assert store.sketch_counts("larger") == (0, 2) and store.fingerprints("larger")[1].shape[0] == 0, "new text, no sketches"
+    assert store.sketch_counts("larger") == (0, 2) and store.fingerprints("larger")[2].shape[0] == 0, "new text, no sketches"
     seg = store.text_of(one)[0][0]
     store.save_sketches(one, "larger", 768, [(seg,) + rows[0][1:]])
     assert store.sketch_counts("larger") == (1, 2)
@@ -86,9 +95,9 @@ def test_a_missing_file_s_sketches_are_not_scanned_and_a_removed_file_s_are_gone
         v = unit(1, 768, 6)
         data, scales = sketches.quantize(v)
         store.save_sketches(row, "larger", 768, [(seg, scales[0], data, sketches.fingerprint_of(v[0]))])
-        assert store.fingerprints("larger")[1].shape[0] == 1
+        assert store.fingerprints("larger")[2].shape[0] == 1
         store.set_missing(row, 5.0)
-        assert store.fingerprints("larger")[1].shape[0] == 0 and store.sketch_counts("larger") == (0, 0)
+        assert store.fingerprints("larger")[2].shape[0] == 0 and store.sketch_counts("larger") == (0, 0)
         store.set_missing(row, None)
         store.remove_files([row])
         assert store.conn.execute("SELECT COUNT(*) FROM sketches").fetchone()[0] == 0, "the cascade"

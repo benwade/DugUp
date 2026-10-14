@@ -495,7 +495,7 @@ class SqliteStore:
             raise StoreError(f"the folder for the index does not exist: {self.path.parent}")
         self._depth = 0
         self._conn: Optional[sqlite3.Connection] = None
-        self._prints: Optional[Tuple[str, int, int, object, object]] = None   # (model, data version, own writes, ids, matrix)
+        self._prints: Optional[Tuple[str, int, int, object, object, object]] = None   # (model, data version, own writes, ids, files, matrix)
         self._sketch_writes = 0
         conn = sqlite3.connect(str(self.path), isolation_level=None)
         conn.row_factory = sqlite3.Row
@@ -1130,16 +1130,17 @@ class SqliteStore:
         return int(done), int(could)
 
     def fingerprints(self, model: str):
-        """Every fingerprint by this model, for files there at the last scan: (segment ids, int8 matrix)."""
+        """Every fingerprint by this model, for files there at the last scan: (segment ids, file ids, int8 matrix)."""
         import numpy as np
         from .sketches import FINGERPRINT
         rows = self.conn.execute(
-            "SELECT k.segment_id, k.fingerprint FROM sketches k JOIN files f ON f.id = k.file_id "
+            "SELECT k.segment_id, k.file_id, k.fingerprint FROM sketches k JOIN files f ON f.id = k.file_id "
             "WHERE k.model=? AND f.missing_since IS NULL ORDER BY k.segment_id", (model,)).fetchall()
         ids = np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows))
-        matrix = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
+        files = np.fromiter((r[1] for r in rows), dtype=np.int64, count=len(rows))
+        matrix = np.frombuffer(b"".join(r[2] for r in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
             else np.zeros((0, FINGERPRINT), dtype=np.int8)
-        return ids, matrix
+        return ids, files, matrix
 
     def sketches_of(self, segment_ids: Sequence[int]) -> Dict[int, Tuple[int, int, float, bytes]]:
         """segment id -> (file id, dims, scale, sketch bytes) for these pieces."""
@@ -1157,27 +1158,27 @@ class SqliteStore:
         sketch writes and other connections' commits both count)."""
         version = int(self.conn.execute("PRAGMA data_version").fetchone()[0])
         if self._prints is None or self._prints[:3] != (model, version, self._sketch_writes):
-            ids, matrix = self.fingerprints(model)
-            self._prints = (model, version, self._sketch_writes, ids, matrix)
-        return self._prints[3], self._prints[4]
+            ids, files, matrix = self.fingerprints(model)
+            self._prints = (model, version, self._sketch_writes, ids, files, matrix)
+        return self._prints[3], self._prints[4], self._prints[5]
 
     def search_meaning(self, question, model: str, limit: int = 100, offset: int = 0,
                        filters: Optional[SearchFilters] = None, candidates: Optional[int] = None) -> SearchPage:
         """Files whose text is closest in meaning to `question` (a sketch of it, as float32 numbers, from the
-        same model). Two stages: the fingerprints of every piece are scanned for `candidates` likely ones
-        (sketches.CANDIDATES), then those are scored by their full sketches. One row per file (one per
+        same model). Two stages: the fingerprints of every piece are scanned for the `candidates` likeliest
+        FILES (sketches.CANDIDATES; a few pieces each), then those are scored by their full sketches. One row per file (one per
         content, unless filters.every_copy), its closest passage as Evidence, closest first. `rank` is
         the closeness (1 is the same meaning). Only the file filters apply (folder, kinds, dates, sizes)."""
         import numpy as np
         from . import sketches
         if limit < 0 or offset < 0:
             raise ValueError("limit and offset must not be negative")
-        ids, prints = self._fingerprints_cached(model)
+        ids, files, prints = self._fingerprints_cached(model)
         if len(ids) == 0:
             return SearchPage([], 0, offset, limit)
         _, _, _, file_clause, file_args, _ = self._narrow("", filters)
         keep = candidates if candidates is not None else sketches.CANDIDATES * (4 if file_clause else 1)
-        chosen = ids[sketches.scan(prints, np.asarray(question, dtype=np.float32), keep)]
+        chosen = ids[sketches.scan_files(prints, files, np.asarray(question, dtype=np.float32), keep)]
         found = self.sketches_of(chosen)
         if not found:
             return SearchPage([], 0, offset, limit)

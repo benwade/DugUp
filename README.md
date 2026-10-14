@@ -217,8 +217,9 @@ default; `meaning_model = "small"` chooses the 90 MB one, about seven times fast
   are still being made the answer says how far they reach ("cover 4,210 of 20,000 files so far").
   Changing the model or the size makes every file want a new sketch; the old ones go as the new are made.
 - **How it finds them.** Two stages: the first 96 numbers of every sketch are scanned at once (a few tens of
-  milliseconds for a quarter of a million passages), then the 800 most likely are scored by their full
-  sketches. `dugup meaning status` says how much of the index is covered.
+  milliseconds for a quarter of a million passages) to pick the 800 likeliest files, a few passages each,
+  and those are scored by their full sketches. A file with many pages near the question takes a few
+  places in that pool, not the whole of it. `dugup meaning status` says how much of the index is covered.
 - **Measuring.** `dugup meaning measure --ask "a sentence"` tries both models on a sample of your own index
   and reports speed, disk and what the questions find, without storing anything.
 

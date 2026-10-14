@@ -291,7 +291,7 @@ class Store(Protocol):
         """(files sketched by this model, files with text that could be)."""
 
     def fingerprints(self, model: str):
-        """(segment ids, int8 matrix of fingerprints) for every sketch by this model."""
+        """(segment ids, file ids, int8 matrix of fingerprints) for every sketch by this model."""
 
     def sketches_of(self, segment_ids: Sequence[int]) -> Mapping[int, Tuple[int, int, float, bytes]]:
         """segment id -> (file id, dims, scale, sketch bytes)."""

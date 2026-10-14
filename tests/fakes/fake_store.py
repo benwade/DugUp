@@ -249,9 +249,10 @@ class FakeStore:
         sk = self._sk()
         rows = sorted((seg, v[5]) for seg, v in sk.items() if v[1] == model and v[0] in self.files and self.files[v[0]].missing_since is None)
         ids = np.array([seg for seg, _ in rows], dtype=np.int64)
+        files = np.array([sk[seg][0] for seg, _ in rows], dtype=np.int64)
         matrix = np.frombuffer(b"".join(fp for _, fp in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
             else np.zeros((0, FINGERPRINT), dtype=np.int8)
-        return ids, matrix
+        return ids, files, matrix
 
     def search_meaning(self, question, model, limit=100, offset=0, filters=None, candidates=None):
         import numpy as np
