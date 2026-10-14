@@ -244,6 +244,17 @@ default; `meaning_model = "small"` chooses the 90 MB one, about seven times fast
 - **Measuring.** `dugup meaning measure --ask "a sentence"` tries both models on a sample of your own index
   and reports speed, disk and what the questions find, without storing anything.
 
+## Pictures by likeness (being measured)
+
+`dugup alike measure --ask "a dog on a beach" --like C:\path\to\a\photo.jpg` makes sketches of a sample of the
+index's pictures with a pinned picture model (the picture half of CLIP, 352 MB, and its sentence half, 254 MB,
+fetched on first use into the data folder) on the processor and, where the runtime can, the graphics card, and
+reports speed, the disk every picture's sketch would take, and what the sentences and the example picture find
+in the sample. Nothing is stored in the index yet; the numbers decide how it is built. Expect scores of about
+0.30 for a close match to a sentence and 0.20 for none (that is how this kind of model is), and above 0.9
+for pictures that are nearly the same. Screenshots and scanned pages all look like "a page of text" to it;
+OCR serves those.
+
 ## Clearing out copies
 
 A drive that several computers have backed up to, or that a sync dispute has left in a mess, ends up holding

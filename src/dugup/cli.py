@@ -111,6 +111,9 @@ def progress_text(p: Progress) -> str:
         line = (f"[same files] marking what was read before: {p.done:,} of {p.total:,} ({p.percent:.1f}%)  "
                 f"{p.rate:.1f} files/s  {left_text}")
         return line + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else "")
+    if p.phase == "look":
+        if p.current:
+            return f"[alike] {p.root} on the {p.current}: {p.done:,} of {p.total:,}"
     if p.phase == "sketch":
         left = p.remaining_seconds
         left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
@@ -346,6 +349,18 @@ def build_parser() -> argparse.ArgumentParser:
     filling.add_argument("--gpu", dest="gpu", action="store_true", default=None, help="sketch on the graphics card")
     filling.add_argument("--no-gpu", dest="gpu", action="store_false", help="sketch on the processor (default: as the setting meaning_gpu says)")
     meaning_sub.add_parser("status", parents=[common], help="how much of the index has sketches of meaning")
+    alike = sub.add_parser("alike", parents=[common], help="pictures by likeness: like one another, or like a sentence (measured first)")
+    alike_sub = alike.add_subparsers(dest="alike_command", required=True)
+    gauge2 = alike_sub.add_parser("measure", parents=[common],
+                                  help="make sketches of a sample of the index's pictures with the pinned picture model and report "
+                                       "speed, disk, and what a few sentences or an example picture find (fetches the model; stores nothing)")
+    gauge2.add_argument("--pictures", type=int, default=300, help="how many pictures to sample (default 300)")
+    gauge2.add_argument("--gpu", dest="gpu", action="store_true", default=None, help="the graphics card only")
+    gauge2.add_argument("--no-gpu", dest="gpu", action="store_false", help="the processor only (default: both when the runtime can)")
+    gauge2.add_argument("--ask", action="append", default=[], metavar="SENTENCE",
+                        help="a sentence to look for in the sample, such as \"a dog on a beach\"; may be repeated")
+    gauge2.add_argument("--like", action="append", default=[], metavar="PICTURE",
+                        help="a picture whose likes to find in the sample; may be repeated")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")
@@ -1461,6 +1476,58 @@ def print_meaning_report(report, out: TextIO) -> int:
     return 1 if report.failure is not None else 0
 
 
+def cmd_alike(args, env, out, environ, stop: Optional[threading.Event] = None, install_signals: bool = True) -> int:
+    service = _service(args, environ, out, create=False)
+    if service is None:
+        return 1
+    stop = stop or threading.Event()
+    printer = ProgressPrinter(out)
+    previous = None
+
+    def on_interrupt(signum, frame):
+        if stop.is_set():
+            raise KeyboardInterrupt
+        stop.set()
+        printer.finish()
+        safe_write("Stopping.", out)
+
+    if install_signals and threading.current_thread() is threading.main_thread():
+        previous = signal.signal(signal.SIGINT, on_interrupt)
+    try:
+        with service:
+            safe_write(f"Measuring pictures by likeness on {args.pictures:,} of this index's pictures. The picture model is "
+                       "fetched on first use (352 MB, and 254 MB more for sentences). Nothing is stored in the index. Ctrl+C stops.", out)
+            found = service.measure_looks(args.pictures, args.gpu, args.ask, args.like, printer, stop)
+            printer.finish()
+            if isinstance(found, Failure):
+                return _fail(found, out)
+            print_looks_measurement(found, out)
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
+    return 0
+
+
+def print_looks_measurement(found, out: TextIO) -> None:
+    safe_write(f"Sample: {found.pictures:,} picture(s); the index lists {found.in_index:,}.", out)
+    for note in found.notes:
+        safe_write(f"  note: {note}", out)
+    safe_write("Speed (the model already loaded; the first load is given apart):", out)
+    for t in found.timings:
+        whole = found.in_index / t.per_second if t.per_second > 0 else 0.0
+        failed = f"   {t.failed} could not be read" if t.failed else ""
+        safe_write(f"  {t.device:<24} {t.per_second:8,.1f} pictures/s   load {t.load_seconds:5.1f} s   "
+                   f"all the pictures: about {format_seconds(whole)}{failed}", out)
+    safe_write(f"Disk for sketches of every picture: {format_bytes(found.disk_for(1))} as bytes "
+               f"({format_bytes(found.disk_for(4))} as full numbers).", out)
+    if found.answers:
+        safe_write("What was found in the sample (the closest 5; with this kind of model 0.30 is close and 0.20 is far):", out)
+        for answer in found.answers:
+            safe_write(f"  \"{answer.asked}\"", out)
+            for hit in answer.hits:
+                safe_write(f"     {hit.score:.3f}  {hit.path}", out)
+
+
 def print_measurement(found, out: TextIO) -> None:
     from .embedding import SHAPES, SIZES
     safe_write(f"Sample: {found.pieces:,} piece(s); the whole index holds {found.in_index:,}.", out)
@@ -1644,7 +1711,7 @@ def _remove_duplicates(found, service, args, out, environ, stop, install_signals
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
+            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

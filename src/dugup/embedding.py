@@ -104,3 +104,85 @@ def unpack(text: str, rows: int, dims: int):
     import base64
     import numpy as np
     return np.frombuffer(base64.b64decode(text), dtype=np.float32).reshape(rows, dims)
+
+
+# ---- pictures ---------------------------------------------------------------------------------------------
+
+LOOKS_DIMS = 512
+LOOKS_SIDE = 224            # the model looks at a 224 by 224 picture
+LOOKS_MEAN = (0.48145466, 0.4578275, 0.40821073)
+LOOKS_STD = (0.26862954, 0.26130258, 0.27577711)
+LOOKS_TOKENS = 77
+LOOKS_FILES = {"pictures": "looks-pictures.onnx", "words": "looks-words.onnx", "tokenizer": "looks-tokenizer.json"}
+
+
+class Looker:
+    """One model in two halves: pictures and sentences into the same LOOKS_DIMS numbers, each of length 1,
+    so a picture can be compared with a picture or with a sentence. The sentence half is loaded on first
+    use only; a fill of pictures never needs it."""
+
+    def __init__(self, folder: str, gpu: bool = False, threads: int = 0) -> None:
+        import numpy as np
+        import onnxruntime as ort
+        self.np = np
+        self.folder = folder
+        self.options = ort.SessionOptions()
+        if threads > 0:
+            self.options.intra_op_num_threads = threads
+        self.providers = ["CPUExecutionProvider"]
+        self.device = "processor"
+        if gpu:
+            have = set(ort.get_available_providers())
+            for name in ("CUDAExecutionProvider", "DmlExecutionProvider"):
+                if name in have:
+                    self.providers = [name, "CPUExecutionProvider"]
+                    self.device = "graphics card (" + ("CUDA" if name.startswith("CUDA") else "DirectML") + ")"
+                    break
+        self.pictures = ort.InferenceSession(os.path.join(folder, LOOKS_FILES["pictures"]), self.options, providers=self.providers)
+        self._words = None
+        self._tokenizer = None
+
+    @staticmethod
+    def prepare(picture) -> "object":
+        """A PIL picture as the model's input: RGB, the shorter side scaled to LOOKS_SIDE, the middle square cut
+        out, scaled and normalised, channels first."""
+        import numpy as np
+        from PIL import Image, ImageOps
+        picture = ImageOps.exif_transpose(picture).convert("RGB")
+        w, h = picture.size
+        scale = LOOKS_SIDE / max(1, min(w, h))
+        picture = picture.resize((max(LOOKS_SIDE, round(w * scale)), max(LOOKS_SIDE, round(h * scale))), Image.BICUBIC)
+        w, h = picture.size
+        left, top = (w - LOOKS_SIDE) // 2, (h - LOOKS_SIDE) // 2
+        picture = picture.crop((left, top, left + LOOKS_SIDE, top + LOOKS_SIDE))
+        array = np.asarray(picture, dtype=np.float32) / 255.0
+        array = (array - np.array(LOOKS_MEAN, dtype=np.float32)) / np.array(LOOKS_STD, dtype=np.float32)
+        return array.transpose(2, 0, 1)
+
+    def look(self, pictures: Sequence[object], batch: int = 16):
+        """Sketches for prepared pictures (prepare), one row each, length 1."""
+        np = self.np
+        out = np.zeros((len(pictures), LOOKS_DIMS), dtype=np.float32)
+        for at in range(0, len(pictures), batch):
+            rows = np.stack(pictures[at:at + batch]).astype(np.float32)
+            vectors = self.pictures.run(None, {"pixel_values": rows})[0]
+            out[at:at + len(rows)] = vectors / np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-9)
+        return out
+
+    def read(self, sentences: Sequence[str]):
+        """Sketches for sentences, in the pictures' space, one row each, length 1."""
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
+        np = self.np
+        if self._words is None:
+            self._words = ort.InferenceSession(os.path.join(self.folder, LOOKS_FILES["words"]), self.options, providers=self.providers)
+            self._tokenizer = Tokenizer.from_file(os.path.join(self.folder, LOOKS_FILES["tokenizer"]))
+            self._tokenizer.enable_truncation(LOOKS_TOKENS)
+        encoded = self._tokenizer.encode_batch([s or " " for s in sentences])
+        end = encoded[0].ids[-1] if encoded and encoded[0].ids else 49407      # the end token pads too, as CLIP does
+        width = max(len(e.ids) for e in encoded) if encoded else 1
+        ids = np.full((len(encoded), width), end, dtype=np.int64)
+        for row, e in enumerate(encoded):
+            ids[row, :len(e.ids)] = e.ids
+        vectors = self._words.run(None, {"input_ids": ids})[0]
+        return (vectors / np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-9)).astype(np.float32)

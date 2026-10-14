@@ -1395,6 +1395,15 @@ class SqliteStore:
             "WHERE s.kind != 'name' AND f.missing_since IS NULL ORDER BY random() LIMIT ?", (max(0, count),))
         return [(r["id"], decode_path(r["path"], r["path_raw"]), r["page"], unpack_text(r["text"], r["z"])) for r in rows]
 
+    def sample_pictures(self, count: int) -> List[Tuple[int, str]]:
+        """`count` picture files drawn at random, there at the last scan: (file id, path). For measuring."""
+        rows = self.conn.execute("SELECT id, path, path_raw FROM files WHERE kind=? AND missing_since IS NULL ORDER BY random() LIMIT ?",
+                                 (FileKind.IMAGE.value, max(0, count)))
+        return [(r["id"], decode_path(r["path"], r["path_raw"])) for r in rows]
+
+    def picture_count(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM files WHERE kind=? AND missing_since IS NULL", (FileKind.IMAGE.value,)).fetchone()[0]
+
     def segment_count(self, include_names: bool = False) -> int:
         clause = "" if include_names else "WHERE kind != 'name'"
         return self.conn.execute(f"SELECT COUNT(*) FROM segments {clause}").fetchone()[0]

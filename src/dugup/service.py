@@ -443,6 +443,16 @@ class LocalService:
         return meaning.measure(self.store, SubprocessSandbox, self.layout.models / "meaning", choices, pieces, gpu,
                                questions, progress=progress, stop=stop)
 
+    def measure_looks(self, pictures: int = 300, gpu: Optional[bool] = None, questions: Sequence[str] = (),
+                      like: Sequence[str] = (), progress: Optional[Callable[[Progress], None]] = None,
+                      stop: Optional[StopSignal] = None):
+        """Measure pictures by likeness on a sample of this index's pictures (looks.measure). Fetches the
+        picture model on first use into the data folder. Stores nothing in the index."""
+        from . import looks
+        from .sandbox import SubprocessSandbox
+        return looks.measure(self.store, SubprocessSandbox, self.layout.models / "looks", pictures, gpu, questions,
+                             [os.path.abspath(os.path.expanduser(p)) for p in like], progress=progress, stop=stop)
+
     def meaning_model(self) -> str:
         """The tag of the sketches the settings ask for (meaning.model_name)."""
         from . import meaning

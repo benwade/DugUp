@@ -36,6 +36,26 @@ LARGER: Tuple[Pinned, ...] = (
 
 BY_CHOICE: Dict[str, Tuple[Pinned, ...]] = {"small": SMALL, "larger": LARGER}
 
+# ---- pictures by likeness: one model that reads pictures and sentences into the same numbers -------------
+_LOOKS = _HF + "Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/"
+LOOKS_BASE: Tuple[Pinned, ...] = (
+    Pinned("looks-pictures.onnx", _LOOKS + "onnx/vision_model.onnx",
+           351685709, "fd6e1402a588279d1723c7534d4bcba5bc0b14b47dfab0e46f8c47b8270d7d40",
+           "a picture model (352 MB; 512 numbers a picture), the picture half of CLIP ViT-B/32",
+           "MIT, https://huggingface.co/Xenova/clip-vit-base-patch32 (OpenAI's CLIP weights)"),
+    Pinned("looks-words.onnx", _LOOKS + "onnx/text_model.onnx",
+           254058553, "3f6571f5bad13a97c469c1622e1cfc4d9aef78b79fdbfcff804ca357bfada8cc",
+           "its sentence half (254 MB), so a sentence can be compared with pictures"),
+    Pinned("looks-tokenizer.json", _LOOKS + "tokenizer.json",
+           2224119, "f7f3b7af117d467b58374797691a6438d3e6b9e9cef800dfd5dced7f697a90cd",
+           "its tokenizer (2.2 MB)"),
+)
+LOOKS_BY_CHOICE: Dict[str, Tuple[Pinned, ...]] = {"base": LOOKS_BASE}
+
+
+def looks_present(folder: Path, choice: str = "base") -> bool:
+    return all((Path(folder) / item.name).exists() for item in LOOKS_BY_CHOICE[choice])
+
 
 def present(folder: Path, choice: str) -> bool:
     return all((Path(folder) / item.name).exists() for item in BY_CHOICE[choice])
