@@ -29,7 +29,7 @@ from .filesource import SUGGESTED_EXCLUDES
 from .indexer import KEEP, REFUSE, REREAD, IndexReport, Progress
 from .protocols import WARN_MASS_LOSS, WARN_ROOT_EMPTY
 from .service import LocalService
-from .shapes import LEVEL_WORDS, LEVELS, OPTION_OCR, POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow, WHERE_MEANING
+from .shapes import LEVEL_WORDS, LEVELS, OPTION_OCR, POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow, WHERE_BOTH, WHERE_MEANING
 from .store import SORT_COLUMNS, StoreError
 from .suggest import SAFE, Suggestion
 
@@ -307,6 +307,8 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--meaning", action="store_true",
                         help="find passages by what they are about rather than by the words: a question in your own words "
                              "(needs sketches: dugup meaning fill)")
+    search.add_argument("--both", action="store_true",
+                        help="the words and the meaning together: a name in the question counts, and so does the sense")
     search.add_argument("--context", type=int, default=60, help="characters shown on each side of a match")
 
     dup = sub.add_parser("duplicates", parents=[common],
@@ -932,13 +934,13 @@ ALSO_AT_SHOWN = 8
 
 
 def print_results(page: SearchPage, query: str, service: LocalService, context: int, out: TextIO,
-                  by_meaning: bool = False) -> None:
+                  by_meaning: bool = False, both: bool = False) -> None:
     if page.total == 0:
         safe_write(f"No files found for: {query}", out)
         return
     first = page.offset + 1 if page.rows else 0
     last = page.offset + len(page.rows)
-    way = "closest in meaning to" if by_meaning else "for"
+    way = "closest in words and meaning to" if both else "closest in meaning to" if by_meaning else "for"
     safe_write(f"Showing {first:,} to {last:,} of {page.total:,} file(s) {way}: {query}", out)
     for number, row in enumerate(page.rows, first):
         state = "" if row.state == "done" else f"  [{row.state}]"
@@ -992,13 +994,13 @@ def cmd_search(args, env, out, environ) -> int:
     query = " ".join(args.words)
     with service:
         filters = SearchFilters(exact=args.exact, every_copy=args.every_copy) if (args.exact or args.every_copy) else None
-        if args.meaning:
-            filters = replace(filters or SearchFilters(), where=WHERE_MEANING)
+        if args.meaning or args.both:
+            filters = replace(filters or SearchFilters(), where=WHERE_BOTH if args.both else WHERE_MEANING)
         page = service.search(query, max(0, args.limit), max(0, args.offset), args.sort, args.desc, filters)
         if isinstance(page, Failure):
             return _fail(page, out)
-        print_results(page, query, service, max(0, args.context), out, by_meaning=args.meaning)
-        if args.meaning:
+        print_results(page, query, service, max(0, args.context), out, by_meaning=args.meaning or args.both, both=args.both)
+        if args.meaning or args.both:
             done, could = service.meaning_coverage()
             if could > done:
                 safe_write(f"(Sketches of meaning cover {done:,} of {could:,} file(s) with text so far; "

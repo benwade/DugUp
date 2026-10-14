@@ -32,7 +32,7 @@ from .cli import (format_bytes, format_date, format_seconds, megabytes, print_co
 from .desktop import Desktop
 from .waitwindow import bring_to_front
 from .indexer import KEEP, REFUSE, REREAD, Progress
-from .shapes import (MAX_SORT_KEYS, WHERE_ANYWHERE, WHERE_MEANING, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind,
+from .shapes import (MAX_SORT_KEYS, WHERE_ANYWHERE, WHERE_BOTH, WHERE_MEANING, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind,
                      Root, SearchFilters, SearchRow)
 
 PAGE_ROWS = 200          # rows fetched at a time; "More" fetches the next lot
@@ -77,7 +77,7 @@ def parse_day(text: str, end_of_day: bool = False) -> Optional[float]:
 
 
 WHERE_LABELS = (("Anywhere", WHERE_ANYWHERE), ("In the text", WHERE_TEXT), ("In the file name", WHERE_NAME),
-                ("In text read by OCR", WHERE_OCR), ("By meaning", WHERE_MEANING))
+                ("In text read by OCR", WHERE_OCR), ("By meaning", WHERE_MEANING), ("Words and meaning", WHERE_BOTH))
 KIND_LABELS = (("PDF", FileKind.PDF.value), ("Office", FileKind.OFFICE.value), ("Text", FileKind.TEXT.value),
                ("Pictures", FileKind.IMAGE.value))
 ALL_FOLDERS = "All indexed folders"
@@ -496,7 +496,7 @@ class App:
             self.rows.append(row)
         self.total = page.total
         self.more_button.configure(state="normal" if len(self.rows) < self.total else "disabled")
-        by_meaning = filters is not None and filters.where == WHERE_MEANING
+        by_meaning = filters is not None and filters.where in (WHERE_MEANING, WHERE_BOTH)
         coverage = ""
         if by_meaning:
             done, could = self.service.meaning_coverage()
@@ -505,7 +505,8 @@ class App:
         if self.total == 0:
             self.say(f"No files found for: {words}{coverage}")
         else:
-            way = "closest in meaning to" if by_meaning else "for"
+            way = ("closest in words and meaning to" if filters is not None and filters.where == WHERE_BOTH
+                   else "closest in meaning to" if by_meaning else "for")
             self.say(f"Showing {len(self.rows):,} of {self.total:,} file(s) {way}: {words}{coverage}")
         if offset == 0 and self.rows:
             self.tree.selection_set("0")

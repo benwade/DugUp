@@ -275,6 +275,44 @@ class FakeStore:
                                   (Evidence(file_id, page, 0, 0, None, seg),), missing_since=r.missing_since))
         return SearchPage(rows, len(ordered), offset, limit)
 
+    def closeness_of_files(self, question, model, file_ids):
+        import numpy as np
+        from dugup.sketches import closeness, dequantize
+        sk = self._sk()
+        found = {}
+        for seg, (file_id, m, dims, scale, sketch, _) in sk.items():
+            if m == model and file_id in set(file_ids):
+                score = float(closeness(dequantize(sketch, dims, [scale]), np.asarray(question, dtype=np.float32)[:dims])[0])
+                if file_id not in found or score > found[file_id][0]:
+                    found[file_id] = (score, seg)
+        return found
+
+    def search_both(self, query, question, model, limit=100, offset=0, filters=None, word_weight=0.5, word_pool=2000):
+        from dataclasses import replace as _replace
+        from dugup.shapes import WHERE_ANYWHERE
+        words = self.search_words(query, max(1, word_pool), 0, "rank", False,
+                                  _replace(filters, where=WHERE_ANYWHERE) if filters is not None else None)
+        meaning = self.search_meaning(question, model, 800, 0, filters)
+        word_rows = {r.file_id: r for r in words.rows}
+        meaning_rows = {r.file_id: r for r in meaning.rows}
+        # the fake's word ranks are not bm25: the share falls off by place instead
+        shares = {r.file_id: 1.0 - i / max(1, len(words.rows)) for i, r in enumerate(words.rows)}
+        near = self.closeness_of_files(question, model, [i for i in word_rows if i not in meaning_rows])
+        scored = []
+        for file_id in set(word_rows) | set(meaning_rows):
+            close = meaning_rows[file_id].rank if file_id in meaning_rows else max(0.0, near.get(file_id, (0.0, 0))[0])
+            share = shares.get(file_id, 0.0)
+            scored.append((close + word_weight * max(0.0, min(1.0, share)), file_id))
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        rows = []
+        for score, file_id in scored[offset:offset + limit]:
+            base = word_rows.get(file_id) or meaning_rows[file_id]
+            evidence = list(word_rows[file_id].evidence) if file_id in word_rows else []
+            if file_id in meaning_rows:
+                evidence.extend(e for e in meaning_rows[file_id].evidence if e.segment_id not in {w.segment_id for w in evidence})
+            rows.append(_replace(base, rank=score, evidence=tuple(evidence)))
+        return SearchPage(rows, len(scored), offset, limit)
+
     def sketches_of(self, segment_ids):
         sk = self._sk()
         return {seg: (sk[seg][0], sk[seg][2], sk[seg][3], sk[seg][4]) for seg in segment_ids if seg in sk}

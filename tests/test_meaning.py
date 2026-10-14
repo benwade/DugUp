@@ -323,3 +323,34 @@ def test_searching_by_meaning_without_the_runtime_or_the_model_says_what_is_miss
     out = io.StringIO()
     assert cli.main(["search", "--meaning", "anything", "--data-dir", str(data)], stdout=out) == 1
     assert "Could not do that" in out.getvalue()
+
+
+def test_words_and_meaning_through_the_service_the_command_and_the_settings(tmp_path, monkeypatch):
+    from dugup import cli
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.shapes import SearchFilters, WHERE_BOTH
+    data = tmp_path / "data"
+    data.mkdir()
+    with LocalService(DataLayout(data).ensure()) as svc:
+        filled_store(svc.store)
+        folder = data / "models" / "meaning"
+        folder.mkdir(parents=True)
+        for item in BY_CHOICE["larger"]:
+            (folder / item.name).write_bytes(b"stand-in")
+    monkeypatch.setattr("dugup.sandbox.SubprocessSandbox", StandInSandbox)
+    monkeypatch.setattr(LocalService, "meaning_ready", lambda self: True)
+    with LocalService(DataLayout(data).ensure()) as svc:
+        assert svc.run_meaning(gpu=False).files == 3
+        page = svc.search("budget", filters=SearchFilters(where=WHERE_BOTH))
+        assert page.rows[0].path == "/r/budget.txt" and page.rows[0].matches >= 1 and page.total == 3
+        assert svc.search("budget", filters=SearchFilters(where=WHERE_BOTH)).rows[0].rank > \
+            svc.search("budget", filters=SearchFilters(where="meaning")).rows[0].rank, "the word bonus is in"
+    out = io.StringIO()
+    assert cli.main(["config", "set", "meaning_word_weight", "0", "--data-dir", str(data)], stdout=out) == 0
+    out = io.StringIO()
+    code = cli.main(["search", "--both", "budget", "--data-dir", str(data)], stdout=out)
+    text = out.getvalue()
+    assert code == 0 and "closest in words and meaning to: budget" in text and "budget.txt" in text, text
+    out = io.StringIO()
+    assert cli.main(["config", "set", "meaning_word_weight", "-1", "--data-dir", str(data)], stdout=out) != 0

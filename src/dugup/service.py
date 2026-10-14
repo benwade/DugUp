@@ -35,7 +35,7 @@ from .sandbox import SubprocessSandbox
 from .settings import Settings
 from dataclasses import replace
 
-from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, OPTION_MEANING, OPTION_WORDS, WHERE_MEANING, level_for, level_reaches, level_words, normalize_level, wants, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
+from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, OPTION_MEANING, OPTION_WORDS, WHERE_BOTH, WHERE_MEANING, level_for, level_reaches, level_words, normalize_level, wants, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
                      Passage, Root, SearchPage)
 from .store import SqliteStore
 from .suggest import Suggestion, suggest_excludes
@@ -172,11 +172,15 @@ class LocalService:
         if filters is not None and filters.folder is not None and filters.case_insensitive is None:
             filters = replace(filters, case_insensitive=self.case_insensitive)
         try:
-            if filters is not None and filters.where == WHERE_MEANING:
+            if filters is not None and filters.where in (WHERE_MEANING, WHERE_BOTH):
                 question = self.sketch_question(query)
                 if isinstance(question, Failure):
                     return question
-                page = self.store.search_meaning(question, self.meaning_model(), limit, offset, filters)
+                if filters.where == WHERE_BOTH:
+                    page = self.store.search_both(query, question, self.meaning_model(), limit, offset, filters,
+                                                  self.settings.meaning_word_weight, self.settings.meaning_word_pool)
+                else:
+                    page = self.store.search_meaning(question, self.meaning_model(), limit, offset, filters)
             else:
                 page = self.store.search_words(query, limit, offset, sort, descending, filters)
         except ValueError as exc:

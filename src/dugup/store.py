@@ -15,11 +15,12 @@ import os
 import sqlite3
 import unicodedata
 import zlib
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .protocols import OCR_DONE, OCR_FAILED, OCR_WAITING, OcrResult, OcrTask, PageInfo, PageVerdict
-from .shapes import (WHERE_ANYWHERE, WHERE_MEANING, WHERE_NAME, WHERE_OCR, WHERE_TEXT, SearchFilters, sort_keys, Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SearchPage, SearchRow, SegmentIn,
+from .shapes import (WHERE_ANYWHERE, WHERE_BOTH, WHERE_MEANING, WHERE_NAME, WHERE_OCR, WHERE_TEXT, SearchFilters, sort_keys, Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SearchPage, SearchRow, SegmentIn,
                      SegmentKind)
 
 __all__ = ["SqliteStore", "StoreError", "StoreVersionError", "SearchPage", "SearchRow", "SORT_COLUMNS",
@@ -482,6 +483,11 @@ def closeness_matches(query: str, near_words: int) -> Optional[Tuple[str, str]]:
 
 
 # ---- the store -------------------------------------------------------------
+
+def sketches_module():
+    from . import sketches
+    return sketches
+
 
 class SqliteStore:
     def __init__(self, path: os.PathLike | str, near_words: int = 15, compress_text: bool = True,
@@ -1229,6 +1235,70 @@ class SqliteStore:
             for row in rows:
                 row.also_at = tuple(others.get(row.file_id, ()))
         return SearchPage(rows, len(ordered), offset, limit)
+
+    def closeness_of_files(self, question, model: str, file_ids: Sequence[int]) -> Dict[int, Tuple[float, int]]:
+        """For each of these files, how close its closest piece is to the question: file id -> (closeness,
+        segment id). A file with no sketch by this model is left out."""
+        import numpy as np
+        from . import sketches
+        found: Dict[int, Tuple[float, int]] = {}
+        ids = [int(i) for i in file_ids]
+        asked = np.asarray(question, dtype=np.float32)
+        for at in range(0, len(ids), 400):
+            chunk = ids[at:at + 400]
+            marks = ",".join("?" * len(chunk))
+            rows = self.conn.execute(f"SELECT segment_id, file_id, dims, scale, sketch FROM sketches "
+                                     f"WHERE model=? AND file_id IN ({marks})", [model] + chunk).fetchall()
+            if not rows:
+                continue
+            dims = rows[0][2]
+            full = sketches.dequantize(b"".join(r[4] for r in rows), dims, [r[3] for r in rows])
+            scores = sketches.closeness(full, asked[:dims])
+            for r, score in zip(rows, scores):
+                held = found.get(r[1])
+                if held is None or score > held[0]:
+                    found[r[1]] = (float(score), r[0])
+        return found
+
+    def search_both(self, query: str, question, model: str, limit: int = 100, offset: int = 0,
+                    filters: Optional[SearchFilters] = None, word_weight: float = 0.5, word_pool: int = 2000) -> SearchPage:
+        """The words and the meaning together. The best `word_pool` word matches (anywhere) and the likeliest
+        files by meaning are put on one footing: each file's closeness in meaning (0 to 1; its own sketches
+        are scored even when the meaning stage did not pick it) plus `word_weight` times its share of the
+        best word score (the best word match counts 1, a file with no word match 0). One row per file,
+        closest first; `rank` is that sum; the word evidence first, then the closest passage by meaning."""
+        if limit < 0 or offset < 0:
+            raise ValueError("limit and offset must not be negative")
+        word_filters = replace(filters, where=WHERE_ANYWHERE) if filters is not None else None
+        words = self.search_words(query, max(1, word_pool), 0, "rank", False, word_filters)
+        by_meaning = self.search_meaning(question, model, sketches_module().CANDIDATES, 0, filters)
+        meaning_rows = {r.file_id: r for r in by_meaning.rows}
+        word_rows = {r.file_id: r for r in words.rows}
+        best_word = min((r.rank for r in words.rows), default=0.0)        # bm25 ranks are negative: lower is better
+        closeness = self.closeness_of_files(question, model, [i for i in word_rows if i not in meaning_rows])
+        scored: List[Tuple[float, int]] = []
+        for file_id in set(word_rows) | set(meaning_rows):
+            if file_id in meaning_rows:
+                near = float(meaning_rows[file_id].rank)
+            else:
+                near = max(0.0, closeness.get(file_id, (0.0, 0))[0])
+            share = (word_rows[file_id].rank / best_word) if file_id in word_rows and best_word < 0 else 0.0
+            scored.append((near + word_weight * max(0.0, min(1.0, share)), file_id))
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        rows: List[SearchRow] = []
+        for score, file_id in scored[offset:offset + limit]:
+            base = word_rows.get(file_id) or meaning_rows[file_id]
+            evidence = list(word_rows[file_id].evidence) if file_id in word_rows else []
+            if file_id in meaning_rows:
+                extra = meaning_rows[file_id].evidence
+            else:
+                seg = closeness.get(file_id, (0.0, 0))[1]
+                page = self.conn.execute("SELECT page FROM segments WHERE id=?", (seg,)).fetchone() if seg else None
+                extra = (Evidence(file_id, page["page"] if page else 0, 0, 0, None, seg),) if seg else ()
+            evidence.extend(e for e in extra if e.segment_id not in {w.segment_id for w in evidence})
+            rows.append(replace(base, matches=word_rows[file_id].matches if file_id in word_rows else 0, rank=score,
+                                evidence=tuple(evidence)))
+        return SearchPage(rows, len(scored), offset, limit)
 
     def sample_text(self, count: int) -> List[Tuple[int, str, int, str]]:
         """`count` pieces of text drawn at random: (segment id, file path, page, text). For measuring."""

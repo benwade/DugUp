@@ -168,6 +168,15 @@ def _entries() -> Tuple[Entry, ...]:
           "Use the graphics card for making sketches when the runtime can use one. Where it cannot, the processor is used.",
           why="On a graphics card the larger model is about ten times faster than on the processor.",
           everyday=True, choices=YES_NO),
+        E("meaning_word_weight", "meaning", "Words and meaning: weight of the words",
+          "In a \"Words and meaning\" search, the most that a word match can add to a file's closeness in meaning "
+          "(closeness runs from 0 to 1). The best word match adds this much; weaker ones add less in proportion.",
+          why="At 0.5 a name in the question lifts its file above files that are merely close in sense, without "
+              "letting any word match outrank a strong meaning on its own. 0 is meaning alone; above 1 the words rule.",
+          low=0.0, high=5.0),
+        E("meaning_word_pool", "meaning", "Words and meaning: how many word matches",
+          "How many of the best word matches are brought into a \"Words and meaning\" search.",
+          low=1, high=100000, unit="files"),
         E("meaning_after_index", "meaning", "Sketch as part of updating",
           "Updating the index goes on to sketch what is new, after reading pictures.",
           why="One button does it all. Turn it off to sketch at a time of your choosing with `dugup meaning fill`.",

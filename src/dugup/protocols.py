@@ -364,6 +364,14 @@ class Store(Protocol):
         """Files closest in meaning to a sketch of a question (float32 numbers from `model`), one row per
         file (per content unless filters.every_copy) with its closest passage as Evidence; rank is closeness."""
 
+    def closeness_of_files(self, question, model: str, file_ids: Sequence[int]) -> Mapping[int, Tuple[float, int]]:
+        """file id -> (closeness of its closest piece to the question, that segment id); files with no sketch left out."""
+
+    def search_both(self, query: str, question, model: str, limit: int = 100, offset: int = 0,
+                    filters: Optional[SearchFilters] = None, word_weight: float = 0.5, word_pool: int = 2000) -> SearchPage:
+        """Words and meaning together: closeness plus `word_weight` times the file's share of the best word
+        score; one row per file, closest first; word evidence first, then the closest passage by meaning."""
+
     def file_evidence(self, file_id: int, query: str, filters: Optional[SearchFilters] = None,
                       limit: int = 2000) -> Sequence[Evidence]:
         """Every place in one file where the words were found, in reading order (by page, then position;

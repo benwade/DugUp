@@ -161,3 +161,41 @@ def test_searching_by_meaning_gives_one_row_per_file_with_its_closest_passage_an
         assert store.search_meaning(question, "larger:768").total == 2
         with pytest.raises(ValueError):
             store.search_meaning(question, "larger:768", limit=-1)
+
+
+def test_words_and_meaning_together_let_a_name_count_without_drowning_the_sense(tmp_path):
+    from dugup.shapes import SearchFilters, WHERE_BOTH
+    with SqliteStore(tmp_path / "index.sqlite") as store:
+        base = unit(6, 768, 11)
+        question = base[0]
+        near = lambda w: (w * question + (1 - w) * base[5]) / np.linalg.norm(w * question + (1 - w) * base[5])
+        sense = store.upsert_file(FileRecord("/r/sense.txt", 5, 10.0, state=FileState.DONE))      # close in meaning, no word
+        named = store.upsert_file(FileRecord("/r/named.txt", 5, 20.0, state=FileState.DONE))      # the name, some meaning
+        wordy = store.upsert_file(FileRecord("/r/wordy.txt", 5, 30.0, state=FileState.DONE))      # the name twice, no meaning
+        unsketched = store.upsert_file(FileRecord("/r/plain.txt", 5, 40.0, state=FileState.DONE))  # the name, no sketch at all
+        store.replace_segments(sense, [SegmentIn(0, 1, SegmentKind.TEXT, "a passage about the thing itself")])
+        store.replace_segments(named, [SegmentIn(0, 1, SegmentKind.TEXT, "ezdrive receipt"), SegmentIn(0, 2, SegmentKind.TEXT, "other")])
+        store.replace_segments(wordy, [SegmentIn(0, 1, SegmentKind.TEXT, "ezdrive ezdrive ezdrive notice")])
+        store.replace_segments(unsketched, [SegmentIn(0, 1, SegmentKind.TEXT, "ezdrive mentioned once")])
+        sketched(store, sense, np.stack([near(0.95)]))
+        sketched(store, named, np.stack([near(0.6), near(0.1)]))
+        sketched(store, wordy, np.stack([near(0.0)]))
+        page = store.search_both("ezdrive", question, "larger:768", word_weight=0.5)
+        order = [r.path for r in page.rows]
+        assert page.total == 4 and order[0] in ("/r/named.txt",), order
+        assert set(order[:2]) == {"/r/named.txt", "/r/sense.txt"}, "the named file and the close one lead; the word-only files follow"
+        assert order[-1] == "/r/plain.txt", "no sketch and one mention: last, but there"
+        named_row = next(r for r in page.rows if r.path == "/r/named.txt")
+        assert named_row.matches == 1 and named_row.rank > 1.0, "closeness plus the word bonus"
+        assert named_row.evidence[0].start < named_row.evidence[0].end, "the word evidence first (it has a span)"
+        assert len(named_row.evidence) == 1, "its closest passage by meaning is the same piece: shown once"
+        sense_row = next(r for r in page.rows if r.path == "/r/sense.txt")
+        assert sense_row.matches == 0 and sense_row.evidence[0].start == sense_row.evidence[0].end
+        # the weight is the person's: at 0 it is meaning alone, at a large value the words rule
+        assert [r.path for r in store.search_both("ezdrive", question, "larger:768", word_weight=0.0).rows][0] == "/r/sense.txt"
+        assert [r.path for r in store.search_both("ezdrive", question, "larger:768", word_weight=5.0).rows][0] == "/r/wordy.txt"
+        # paging, filters, and a question with no word matches at all
+        assert [r.path for r in store.search_both("ezdrive", question, "larger:768", limit=1, offset=1).rows] == [order[1]]
+        only = store.search_both("ezdrive", question, "larger:768", filters=SearchFilters(where=WHERE_BOTH, modified_after=25.0))
+        assert {r.path for r in only.rows} == {"/r/wordy.txt", "/r/plain.txt"}
+        assert [r.path for r in store.search_both("nothingness", question, "larger:768").rows][0] == "/r/sense.txt"
