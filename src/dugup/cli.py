@@ -390,6 +390,8 @@ def build_parser() -> argparse.ArgumentParser:
                             help="name the pictures in a folder by what they show (a preview; --apply renames; --undo puts names back)")
     rename.add_argument("folder", nargs="?", help="an indexed folder, or a folder inside one")
     rename.add_argument("--pattern", help="the name pattern (default: the setting rename_pattern, \"{caption} {taken}\")")
+    rename.add_argument("--all", dest="every", action="store_true",
+                        help="every picture, not only those whose name is a camera's (IMG_..., 20220401_142335, Screenshot ...)")
     rename.add_argument("--no-caption", action="store_true", help="do not write captions; {caption} is then empty and such files are left alone")
     rename.add_argument("--longer", action="store_true", help="ask the model for a longer description (slower; more words to choose from)")
     rename.add_argument("--apply", action="store_true", help="rename as the preview says (needs --record)")
@@ -1636,7 +1638,7 @@ def cmd_rename(args, env, out, environ, stop: Optional[threading.Event] = None, 
         if not args.no_caption and service.captions_ready() is not True and "not fetched" in str(service.captions_ready()):
             safe_write("The captioning model is fetched now, once (about 1.1 GB, checked against known checksums). Ctrl+C stops.", out)
         try:
-            found = service.plan_names(args.folder, args.pattern, not args.no_caption, args.longer, printer, stop, args.gpu)
+            found = service.plan_names(args.folder, args.pattern, not args.no_caption, args.longer, printer, stop, args.gpu, args.every)
             printer.finish()
         finally:
             if previous is not None:

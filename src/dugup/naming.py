@@ -24,7 +24,34 @@ from .shapes import Failure, FailureReason, FileKind, FileRecord
 
 DEFAULT_PATTERN = "{caption} {taken}"
 FIELDS = ("caption", "taken", "time", "camera", "folder", "original", "n", "ext")
-MAX_CAPTION_WORDS = 8
+MAX_CAPTION_WORDS = 10
+_TRAILING = {"a", "an", "the", "of", "in", "on", "at", "to", "with", "and", "or", "for", "by", "from", "near", "next", "over",
+             "under", "into", "onto", "front", "top", "side", "is", "are", "its", "it", "their", "his", "her", "that", "which",
+             "while", "as", "up", "down", "out", "off", "through", "behind", "beside", "between", "above", "below", "some", "two",
+             "three", "four", "several", "many", "one", "holding", "wearing", "sitting", "standing",
+             "body", "piece", "pair", "group", "couple", "bunch", "lot", "kind", "type", "sort", "number", "variety",
+             "series", "stack", "pile", "row", "set"}      # nouns that need their "of ..." to mean anything
+# a name a camera or a phone gave, which says nothing about the picture
+MEANINGLESS = re.compile(
+    r"^(?:img|dsc|dscn|dscf|dcim|pxl|mvimg|p|pic|picture|image|photo|snapshot|scan|screenshot|screen shot|capture|"
+    r"fb_img|received|signal|whatsapp image|snapchat|vid|mov|clip|untitled|new image|unnamed|download|"
+    r"\d{4}-?\d{2}-?\d{2}|\d{8}|\d{6}|[0-9a-f]{16,}|[A-Z]{2,4}\d{3,}|\d{3,}|wp_\d+|gopr\d+|sam_\d+)"
+    r"(?:[-_ ]?\d[\d_\-: .()]*)?(?:\s*\(\d+\))?(?:[-_ ]?(?:copy|edit|edited|hdr|burst|\d+))*$",
+    re.IGNORECASE)
+
+
+def is_meaningless(name: str) -> bool:
+    """Whether a file's name (without its ending) is the kind a camera or a phone gives: a prefix such as
+    IMG, DSC or Screenshot with numbers, or numbers alone, with nothing a person wrote in it."""
+    base = os.path.splitext(name)[0].strip()
+    if not base:
+        return True
+    if MEANINGLESS.match(base):
+        return True
+    letters = re.findall(r"[^\W\d_]{3,}", base)
+    words = [w for w in letters if w.lower() not in ("img", "dsc", "pic", "photo", "image", "screenshot", "shot", "copy", "edit",
+                                                      "hdr", "burst", "scan", "capture", "snapshot", "picture", "untitled")]
+    return not words
 MAX_NAME = 120          # characters, without the ending: well under what any file system allows for a path
 _BAD = set('<>:"/\\|?*') | {chr(c) for c in range(32)}
 _RESERVED = {"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} | {f"lpt{i}" for i in range(1, 10)}
@@ -83,7 +110,14 @@ def safe_words(text: str, most: int = MAX_CAPTION_WORDS) -> str:
             break
     words = re.findall(r"[^\W_]+(?:['’-][^\W_]+)*", text, flags=re.UNICODE)
     kept = [w for w in words if w.lower() not in _FILLER]
-    kept = (kept or words)[:most]
+    kept = (kept or words)
+    if len(kept) > most:
+        cut = most
+        while cut < len(kept) and cut < most + 2 and kept[cut - 1].lower() in _TRAILING:
+            cut += 1                       # a cut on "in front of": a word or two more finishes the phrase ...
+        kept = kept[:cut]
+        while len(kept) > 2 and kept[-1].lower() in _TRAILING:
+            kept.pop()                     # ... or, when it does not, back off to the last whole phrase
     phrase = " ".join(w.replace("’", "'") for w in kept)
     return phrase[:1].upper() + phrase[1:] if phrase else ""
 
@@ -127,17 +161,20 @@ def fill(pattern: str, fields: Dict[str, str]) -> str:
 
 
 def plan(records: Sequence[FileRecord], pattern: str, captions: Dict[str, str], clock: Callable[[float], str],
-         protected: Sequence[str] = (), fold: Callable[[str], str] = lambda p: p) -> List[Change]:
+         protected: Sequence[str] = (), fold: Callable[[str], str] = lambda p: p, every: bool = False) -> List[Change]:
     """What each picture would be called. `captions` maps path -> sentence ("" when none). `clock(modified)`
-    gives the day as YYYY-MM-DD HH-MM for files with no record of their own. Protected folders and files
-    whose new name would be the old one are left alone, with a reason."""
+    gives the day as YYYY-MM-DD HH-MM for files with no record of their own. Protected folders, files whose
+    new name would be the old one, and (unless `every`) files whose name already says something are left
+    alone, with a reason."""
     changes: List[Change] = []
-    taken: Dict[str, int] = {}           # new path (folded) -> how many want it
     for record in records:
         old = record.path
         folder = os.path.dirname(old)
         if any(fold(old).startswith(fold(p.rstrip("/\\")) + sep) for p in protected for sep in ("/", "\\")):
             changes.append(Change(record, old, "", captions.get(old, ""), "in a protected folder"))
+            continue
+        if not every and not is_meaningless(os.path.basename(old)):
+            changes.append(Change(record, old, "", captions.get(old, ""), "its name already says something"))
             continue
         base, ext = os.path.splitext(os.path.basename(old))
         facts = picture_facts(old) if "{taken}" in pattern or "{time}" in pattern or "{camera}" in pattern else {}

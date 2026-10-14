@@ -18,7 +18,15 @@ def test_patterns_are_checked_and_sentences_become_safe_words():
     assert "cannot" in naming.check_pattern("{caption}: {taken}")
     assert naming.safe_words("A green car parked in front of a yellow building.") == "Green car parked in front of yellow building"
     assert naming.safe_words("There is a dog on the beach") == "Dog on beach"
-    assert naming.safe_words("a photo of two dogs playing in snow by a lake at dusk, with trees") == "Two dogs playing in snow by lake at"
+    assert naming.safe_words("a photo of two dogs playing in snow by a lake at dusk, with trees and a big red barn") == \
+        "Two dogs playing in snow by lake at dusk with trees", "cut at a whole phrase (a word more to finish it), never on a dangling word"
+    assert naming.safe_words("A woman in a red dress stands in front of a body of water near the pier") == "Woman in red dress stands in front of body of water", "a noun that needs its of-phrase is kept whole"
+    assert naming.safe_words("A man in a car with a hat on.") == "Man in car with hat on", "a sentence that ends on a particle is left as written"
+    for name in ("IMG_20220321_224244.jpg", "20220401_105609.jpg", "DSC_0012.JPG", "Screenshot 2025-03-01 101010.png", "PXL_20230101_123.jpg",
+                 "IMG_1234 (2).jpg", "image.png", "1.jpg", "20240916_220851 copy.jpg", "a9f3c2d1e8b7a6c5d4e3f2a1.jpg"):
+        assert naming.is_meaningless(name), name
+    for name in ("Alex Rivera MA License BACK.jpg", "Grandma_Rivera.jpg", "Brain-blue.jpg", "Shot on OnePlus.jpg", "Alex.jpg", "holiday 2024 day 3.jpg"):
+        assert not naming.is_meaningless(name), name
     assert naming.safe_words("") == "" and naming.safe_words("the the the") == "The the the", "nothing but filler: kept rather than empty"
     assert naming.safe_name('what: "a" <name>?') == "what a name" and naming.safe_name("con") == "con_" and naming.safe_name("...") == "picture"
     assert len(naming.safe_name("x" * 500)) == naming.MAX_NAME
@@ -29,13 +37,13 @@ def test_the_plan_fills_the_pattern_numbers_clashes_and_leaves_protected_and_unc
     folder.mkdir()
     (tmp_path / "Laptop").mkdir()
     records = []
-    for name, when in (("IMG_1.jpg", 1.0), ("IMG_2.jpg", 2.0), ("IMG_3.png", 3.0), ("Dog on beach 1970-01-01.jpg", 4.0)):
+    for name, when in (("IMG_1.jpg", 1.0), ("IMG_2.jpg", 2.0), ("IMG_3.png", 3.0), ("Dog on beach 1970-01-01.jpg", 4.0), ("Grandma at the lake.jpg", 6.0)):
         (folder / name).write_bytes(b"x")
         records.append(FileRecord(str(folder / name), 1, when, kind=FileKind.IMAGE, state=FileState.DONE))
     (tmp_path / "Laptop" / "IMG_9.jpg").write_bytes(b"x")
     records.append(FileRecord(str(tmp_path / "Laptop" / "IMG_9.jpg"), 1, 5.0, kind=FileKind.IMAGE, state=FileState.DONE))
     captions = {records[0].path: "a dog on the beach", records[1].path: "A dog on the beach.", records[2].path: "",
-                records[3].path: "a dog on the beach", records[4].path: "a laptop"}
+                records[3].path: "a dog on the beach", records[4].path: "an old woman", records[5].path: "a laptop"}
     clock = lambda modified: "1970-01-01 00-00"
     changes = naming.plan(records, "{caption} {taken}", captions, clock, protected=[str(tmp_path / "Laptop")])
     by = {os.path.basename(c.old): c for c in changes}
@@ -44,6 +52,8 @@ def test_the_plan_fills_the_pattern_numbers_clashes_and_leaves_protected_and_unc
     assert by["IMG_3.png"].new == "" and by["IMG_3.png"].why == "no caption could be made for it"
     assert by["Dog on beach 1970-01-01.jpg"].new == "" and "already" in by["Dog on beach 1970-01-01.jpg"].why
     assert by["IMG_9.jpg"].new == "" and by["IMG_9.jpg"].why == "in a protected folder"
+    assert by["Grandma at the lake.jpg"].new == "" and by["Grandma at the lake.jpg"].why == "its name already says something"
+    assert naming.plan(records[4:5], "{caption} {taken}", captions, clock, every=True)[0].new == str(folder / "Old woman 1970-01-01.jpg")
     # a name that is free but held by an existing file on disk gets a number too; other fields fill
     (folder / "Dog on beach 1970-01-01 (1).jpg").write_bytes(b"there")
     again = naming.plan(records[:1], "{caption} {taken}", captions, clock)

@@ -614,10 +614,11 @@ class LocalService:
 
     def plan_names(self, folder: str, pattern: Optional[str] = None, caption: bool = True, longer: bool = False,
                    progress: Optional[Callable[[Progress], None]] = None, stop: Optional[StopSignal] = None,
-                   gpu: Optional[bool] = None) -> "naming.Plan | Failure":
+                   gpu: Optional[bool] = None, every: bool = False) -> "naming.Plan | Failure":
         """What the pictures below a folder would be called (naming.plan). Captions are written now, by the
         captioning model in a worker (fetched on first use), when the pattern asks for {caption} and `caption`
-        is on. Changes nothing."""
+        is on. Only pictures whose name is a camera's (IMG_..., 20220401_142335, Screenshot ...) unless `every`;
+        the others are left alone, and no caption is written for them. Changes nothing."""
         import time as _time
         from . import embedding_models, naming
         pattern = pattern if pattern is not None else self.settings.rename_pattern
@@ -636,7 +637,8 @@ class LocalService:
         started = _time.monotonic()
         found = naming.Plan(pattern)
         captions: Dict[str, str] = {}
-        if caption and "{caption}" in pattern and records:
+        to_caption = records if every else [r for r in records if naming.is_meaningless(os.path.basename(r.path))]
+        if caption and "{caption}" in pattern and to_caption:
             ready = self.captions_ready()
             if ready is not True and "not fetched" in str(ready):
                 for item in embedding_models.CAPTIONS_BY_CHOICE["base"]:
@@ -651,13 +653,13 @@ class LocalService:
             gpu = self.settings.caption_gpu if gpu is None else bool(gpu)
             sandbox = SubprocessSandbox()
             try:
-                for at in range(0, len(records), 8):
+                for at in range(0, len(to_caption), 8):
                     if stop is not None and stop.is_set():
                         found.stopped = True
                         break
-                    batch = records[at:at + 8]
+                    batch = to_caption[at:at + 8]
                     if progress is not None:
-                        progress(Progress("caption", "", at, len(records), elapsed=_time.monotonic() - started, current=batch[0].path))
+                        progress(Progress("caption", "", at, len(to_caption), elapsed=_time.monotonic() - started, current=batch[0].path))
                     answer = sandbox.run(CAPTION, {"folder": str(self.layout.models / "captions"), "gpu": gpu,
                                                    "paths": [path_to_data(r.path) for r in batch], "longer": longer},
                                          Limits(1200.0), stop)
@@ -672,13 +674,13 @@ class LocalService:
             finally:
                 sandbox.close()
             if progress is not None:
-                progress(Progress("caption", "", len(records), len(records), elapsed=_time.monotonic() - started))
+                progress(Progress("caption", "", len(to_caption), len(to_caption), elapsed=_time.monotonic() - started))
         protected = [p.strip() for p in self.settings.cleanup_protect.split(";") if p.strip()]
 
         def clock(modified: float) -> str:
             return datetime.datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H-%M")
 
-        found.changes = naming.plan(records, pattern, captions, clock, protected, self._fold)
+        found.changes = naming.plan(records, pattern, captions, clock, protected, self._fold, every)
         found.seconds = _time.monotonic() - started
         return found
 

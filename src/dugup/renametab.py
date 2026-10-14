@@ -31,6 +31,7 @@ class RenameTab(ttk.Frame):
         self.folder = tk.StringVar()
         self.pattern = tk.StringVar(value=host.service.settings.rename_pattern)
         self.with_caption = tk.BooleanVar(value=True)
+        self.every = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Choose a folder and press Preview. Nothing is renamed until you say so.")
         self.plan = None
         self.entries: List[tk.StringVar] = []
@@ -46,7 +47,10 @@ class RenameTab(ttk.Frame):
         ttk.Button(self, text="Choose...", command=self.choose).grid(row=0, column=2, padx=2)
         ttk.Label(self, text="Pattern:").grid(row=1, column=0, sticky="w")
         ttk.Entry(self, textvariable=self.pattern).grid(row=1, column=1, sticky="ew", padx=4, pady=2)
-        ttk.Checkbutton(self, text="Describe each picture", variable=self.with_caption).grid(row=1, column=2, sticky="w")
+        ticks = ttk.Frame(self)
+        ticks.grid(row=1, column=2, sticky="w")
+        ttk.Checkbutton(ticks, text="Describe each picture", variable=self.with_caption).pack(side="left")
+        ttk.Checkbutton(ticks, text="Also pictures with real names", variable=self.every).pack(side="left", padx=(8, 0))
         bar = ttk.Frame(self)
         bar.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(2, 4))
         self.preview_button = ttk.Button(bar, text="Preview", command=self.preview)
@@ -94,12 +98,12 @@ class RenameTab(ttk.Frame):
             return
         self.stop.clear()
         service, events = self.host.service, self.host.events
-        pattern, caption = self.pattern.get().strip() or None, self.with_caption.get()
+        pattern, caption, every = self.pattern.get().strip() or None, self.with_caption.get(), self.every.get()
         stop = self.stop
 
         def work() -> None:
             try:
-                found = service.plan_names(folder, pattern, caption, False, events.put, stop)
+                found = service.plan_names(folder, pattern, caption, False, events.put, stop, every=every)
             except Exception as exc:
                 found = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
             events.put(("rename-plan", found))

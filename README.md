@@ -279,8 +279,11 @@ nothing; `--apply --record FILE` renames as shown and writes every rename to the
 FILE` puts the names back, last first. The index follows each rename at once, so the new names are searchable
 and nothing is read again.
 
+- **Which pictures**: by default only those whose name is a camera's or a phone's (`IMG_4471`, `20220401_142335`,
+  `DSC_0012`, `Screenshot 2025-03-01 ...`, numbers alone); a picture someone has named is left alone and
+  said so. `--all` (or the tab's "Also pictures with real names") includes them.
 - **The pattern** (`rename_pattern`, default `{caption} {taken}`): `{caption}` the sentence made safe for a
-  name ("Green car parked in front of yellow building"), `{taken}` the day the photo was taken from the
+  name ("Green car parked in front of yellow building"; at most about ten words, cut at a whole phrase), `{taken}` the day the photo was taken from the
   camera's own record, else the day it was saved, `{time}`, `{camera}`, `{folder}`, `{original}` the name it
   has now, `{n}`, `{ext}` (the ending is kept unless named). Two pictures that would get the same name are
   numbered. `--pattern` tries another one for a run.
