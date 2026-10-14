@@ -1004,3 +1004,76 @@ def test_pictures_by_looks_fill_the_pictures_tab_and_like_this_shows_a_picture_s
     assert "note.txt" in names and [r.name for r in app.grid.rows] == [n for n in names if n.endswith(".png")] and not app.grid.scores
     assert app.tabs.index(app.tabs.select()) == 0
     assert app.like_of is None
+
+
+def test_the_rename_tab_previews_lets_names_be_edited_or_kept_renames_with_a_record_and_undoes(bench, monkeypatch):
+    pytest.importorskip("PIL")
+    from PIL import Image
+    from dugup.service import LocalService
+    from fakes.fake_store import FakeStore  # noqa: F401  (the bench uses the real store)
+    trip = bench.docs / "trip"
+    trip.mkdir()
+    for name in ("IMG_7.jpg", "IMG_8.jpg", "IMG_9.jpg"):
+        Image.new("RGB", (40, 30), (200, 10, 10)).save(trip / name)
+    bench.ready()
+    app, tab = bench.app, bench.app.renamer
+    assert str(tab.rename_button["state"]) == "disabled" and str(tab.undo_button["state"]) == "disabled"
+    tab.preview()
+    assert "Choose a folder first" in tab.status.get()
+    # the captions come from a stand-in, through the same background path as the real ones
+    import dugup.service as service_module
+
+    class StandIn:
+        def __init__(self):
+            pass
+
+        def run(self, job, payload, limits, stop=None):
+            from dugup.jobs import path_from_data
+            paths = [path_from_data(p) for p in payload["paths"]]
+            return {"captions": ["a cat number " + os.path.splitext(os.path.basename(p))[0][-1] for p in paths], "failed": {}, "device": "processor"}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dugup.sandbox.SubprocessSandbox", StandIn)
+    monkeypatch.setattr(LocalService, "captions_ready", lambda self: True)
+    tab.folder.set(str(trip))
+    tab.pattern.set("{caption} {original}")
+    tab.preview()
+    assert str(tab.preview_button["state"]) == "disabled" and str(tab.stop_button["state"]) == "normal"
+    for _ in range(200):
+        if not tab.busy():
+            break
+        tab.worker.join(0.05)
+    app.drain()
+    bench.root.update()
+    assert tab.plan is not None, tab.status.get()
+    assert len(tab.plan.to_rename) == 3 and "3 picture(s) would be renamed" in tab.status.get()
+    assert [v.get() for v in tab.entries] == ["Cat number 7 IMG_7.jpg", "Cat number 8 IMG_8.jpg", "Cat number 9 IMG_9.jpg"]
+    assert str(tab.rename_button["state"]) == "normal" and str(tab.preview_button["state"]) == "normal"
+    # edit one name, untick another, rename; a question is asked first
+    tab.entries[0].set("Seven the cat.jpg")
+    tab.keep[1].set(False)
+    asked = []
+    app.ask = lambda title, text: asked.append(title) or True
+    told = []
+    app.tell = lambda title, text: told.append((title, text))
+    tab.rename()
+    assert asked == ["Rename these pictures?"] and told and told[0][0] == "Renamed"
+    assert (trip / "Seven the cat.jpg").exists() and (trip / "IMG_8.jpg").exists() and (trip / "Cat number 9 IMG_9.jpg").exists()
+    assert "Renamed 2 picture(s)" in told[0][1] and os.path.exists(tab.last_record)
+    assert app.service.store.get_file(str(trip / "Seven the cat.jpg")) is not None, "the index followed"
+    assert str(tab.undo_button["state"]) == "normal" and str(tab.rename_button["state"]) == "disabled"
+    tab.undo()
+    assert told[-1][0] == "Undone" and "Put back 2 name(s)" in told[-1][1]
+    assert (trip / "IMG_7.jpg").exists() and (trip / "IMG_9.jpg").exists() and str(tab.undo_button["state"]) == "disabled"
+    # saying no renames nothing
+    tab.preview()
+    for _ in range(200):
+        if not tab.busy():
+            break
+        tab.worker.join(0.05)
+    app.drain()
+    app.ask = lambda title, text: False
+    tab.rename()
+    assert (trip / "IMG_7.jpg").exists() and (trip / "IMG_8.jpg").exists()

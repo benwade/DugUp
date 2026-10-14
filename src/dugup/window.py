@@ -350,6 +350,10 @@ class App:
         self.grid = PictureGrid(right, self.thumbnails, self._grid_selected, self._grid_opened)
         right.add(self.grid, text="Pictures")
 
+        from .renametab import RenameTab
+        self.renamer = RenameTab(right, self)
+        right.add(self.renamer, text="Rename")
+
         index = ttk.Frame(right, padding=4)
         index.columnconfigure(0, weight=1)
         index.rowconfigure(2, weight=1)
@@ -1139,7 +1143,7 @@ class App:
                 finished.append(item)    # type: ignore[arg-type]
         if latest is not None and not finished:
             self.progress_text.set(progress_text(latest))
-            if latest.phase in ("read", "ocr", "download", "record", "mark", "sketch") and latest.total > 0:
+            if latest.phase in ("read", "ocr", "download", "record", "mark", "sketch", "look", "caption") and latest.total > 0:
                 self._bar_at(latest.percent)
             elif latest.phase != "estimate":           # an estimate is a note on the side: the bar stays as it is
                 self._bar_moving()                     # no total yet (listing, unpacking, measuring): it moves
@@ -1150,6 +1154,9 @@ class App:
                 self._sketched(report)
             elif what == "thumb":
                 self.grid.thumb_arrived(report)
+                self.renamer.thumb_arrived(report)
+            elif what == "rename-plan":
+                self.renamer.planned(report)
             elif what == "warm":
                 self._warmed(report)
             else:

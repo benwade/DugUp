@@ -625,10 +625,14 @@ class LocalService:
         if problem:
             return Failure(FailureReason.UNSUPPORTED, f"the pattern cannot be used: {problem}")
         folder = os.path.abspath(os.path.expanduser(folder))
-        if not any(_under(folder, r.path, self._fold) for r in self.store.list_roots()):
-            return Failure(FailureReason.OTHER, f"that folder is not inside an indexed folder: {folder}")
-        records = [r for r in self.store.list_files(prefix=folder, case_insensitive=self.case_insensitive)
-                   if r.kind is FileKind.IMAGE and r.missing_since is None]
+        store = self._open_store()           # its own connection: a window calls this from a background thread
+        try:
+            if not any(_under(folder, r.path, self._fold) for r in store.list_roots()):
+                return Failure(FailureReason.OTHER, f"that folder is not inside an indexed folder: {folder}")
+            records = [r for r in store.list_files(prefix=folder, case_insensitive=self.case_insensitive)
+                       if r.kind is FileKind.IMAGE and r.missing_since is None]
+        finally:
+            store.close()
         started = _time.monotonic()
         found = naming.Plan(pattern)
         captions: Dict[str, str] = {}
