@@ -828,12 +828,14 @@ def test_by_meaning_is_a_where_choice_that_searches_the_sketches_and_says_how_fa
         return v / np.linalg.norm(v)
 
     from dugup import sketches
+    from dugup.meaning import model_name
+    tag = model_name("larger", 768)
     for name in ("shifts.txt", "garden.txt"):
         record = store.get_file(str(bench.docs / name))
         pieces = store.text_of(record.row_id)
         vectors = np.stack([sketch(t) for _, _, t in pieces])
         data, scales = sketches.quantize(vectors)
-        store.save_sketches(record.row_id, "larger:768", 768, [(seg, scales[i], data[i * 768:(i + 1) * 768], sketches.fingerprint_of(vectors[i]))
+        store.save_sketches(record.row_id, tag, 768, [(seg, scales[i], data[i * 768:(i + 1) * 768], sketches.fingerprint_of(vectors[i]))
                                                               for i, (seg, _, _) in enumerate(pieces)])
     monkeypatch.setattr(LocalService, "sketch_question", lambda self, question: sketch(question))
     bench.app.where.set("By meaning")
