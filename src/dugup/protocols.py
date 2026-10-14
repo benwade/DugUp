@@ -275,8 +275,9 @@ class Store(Protocol):
 
     # sketches of meaning (sketches.py): the store keeps bytes and a model name, and compares nothing
     def unsketched(self, model: str, limit: int = 200, prefix: Optional[str] = None,
-                   case_insensitive: Optional[bool] = None) -> Sequence[FileRecord]:
-        """Files with text that have no sketches by this model yet, the most recently changed first."""
+                   case_insensitive: Optional[bool] = None, after: Optional[Tuple[float, int]] = None) -> Sequence[FileRecord]:
+        """Files with text that have no sketches by this model yet, the most recently changed first;
+        `after` (modified, id) continues past the last one seen."""
 
     def text_of(self, row_id: int) -> Sequence[Tuple[int, int, str]]:
         """(segment id, page, text) of a file's pieces of text, in order."""
@@ -357,6 +358,11 @@ class Store(Protocol):
                      sort="rank", descending: bool = False, filters: Optional[SearchFilters] = None) -> SearchPage:
         """`sort` is one key (with `descending`), or up to three (key, descending) pairs applied in order.
         Filtering and sorting happen before the page is cut, so the total and the order are honest."""
+
+    def search_meaning(self, question, model: str, limit: int = 100, offset: int = 0,
+                       filters: Optional[SearchFilters] = None, candidates: Optional[int] = None) -> SearchPage:
+        """Files closest in meaning to a sketch of a question (float32 numbers from `model`), one row per
+        file (per content unless filters.every_copy) with its closest passage as Evidence; rank is closeness."""
 
     def file_evidence(self, file_id: int, query: str, filters: Optional[SearchFilters] = None,
                       limit: int = 2000) -> Sequence[Evidence]:

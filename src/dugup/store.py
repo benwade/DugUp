@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .protocols import OCR_DONE, OCR_FAILED, OCR_WAITING, OcrResult, OcrTask, PageInfo, PageVerdict
-from .shapes import (WHERE_ANYWHERE, WHERE_NAME, WHERE_OCR, WHERE_TEXT, SearchFilters, sort_keys, Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SearchPage, SearchRow, SegmentIn,
+from .shapes import (WHERE_ANYWHERE, WHERE_MEANING, WHERE_NAME, WHERE_OCR, WHERE_TEXT, SearchFilters, sort_keys, Box, Evidence, FileKind, FileRecord, FileState, Passage, Root, SearchPage, SearchRow, SegmentIn,
                      SegmentKind)
 
 __all__ = ["SqliteStore", "StoreError", "StoreVersionError", "SearchPage", "SearchRow", "SORT_COLUMNS",
@@ -495,6 +495,8 @@ class SqliteStore:
             raise StoreError(f"the folder for the index does not exist: {self.path.parent}")
         self._depth = 0
         self._conn: Optional[sqlite3.Connection] = None
+        self._prints: Optional[Tuple[str, int, int, object, object]] = None   # (model, data version, own writes, ids, matrix)
+        self._sketch_writes = 0
         conn = sqlite3.connect(str(self.path), isolation_level=None)
         conn.row_factory = sqlite3.Row
         try:
@@ -887,6 +889,7 @@ class SqliteStore:
 
     def replace_segments(self, row_id: int, segments: Sequence[SegmentIn]) -> None:
         """Make the stored text of a file exactly `segments` (safe to repeat)."""
+        self._sketch_writes += 1
         with self.transaction():
             name_row = self.conn.execute("SELECT name FROM files WHERE id=?", (row_id,)).fetchone()
             if name_row is None:
@@ -1074,12 +1077,16 @@ class SqliteStore:
     # -- sketches of meaning (sketches.py); the store does not know what a sketch means
 
     def unsketched(self, model: str, limit: int = 200, prefix: Optional[str] = None,
-                   case_insensitive: Optional[bool] = None) -> List[FileRecord]:
+                   case_insensitive: Optional[bool] = None, after: Optional[Tuple[float, int]] = None) -> List[FileRecord]:
         """Files with text that have no sketches by this model yet, the most recently changed first. Files
-        listed by name only (no text) are not among them."""
+        listed by name only (no text) are not among them. `after` (modified, id) of the last one seen
+        continues the list past it, so a caller that leaves some files alone still gets to the rest."""
         clauses, args = ["f.sketched <> ?", "f.missing_since IS NULL", "f.state IN (?,?)",
                          "EXISTS (SELECT 1 FROM segments s WHERE s.file_id = f.id AND s.kind != 'name')"], \
             [model, FileState.DONE.value, FileState.PARTIAL.value]
+        if after is not None:
+            clauses.append("(f.modified < ? OR (f.modified = ? AND f.id > ?))")
+            args.extend([after[0], after[0], after[1]])
         if prefix is not None:
             clause, more = _under_clause(prefix, case_insensitive, "f.path")
             clauses.append(clause)
@@ -1096,6 +1103,7 @@ class SqliteStore:
     def save_sketches(self, row_id: int, model: str, dims: int, rows: Sequence[Tuple[int, float, bytes, bytes]]) -> None:
         """Keep the sketches of a file's pieces: (segment id, scale, sketch bytes, fingerprint bytes). Older
         sketches of the file by any model go, and the file is marked as sketched by this one."""
+        self._sketch_writes += 1
         with self.transaction():
             if self.conn.execute("SELECT 1 FROM files WHERE id=?", (row_id,)).fetchone() is None:
                 raise StoreError(f"no file with id {row_id}")
@@ -1107,6 +1115,7 @@ class SqliteStore:
 
     def forget_sketches(self, row_id: int) -> None:
         """A file's text changed (or its level no longer asks for meaning): its sketches are stale."""
+        self._sketch_writes += 1
         with self.transaction():
             self.conn.execute("DELETE FROM sketches WHERE file_id=?", (row_id,))
             self.conn.execute("UPDATE files SET sketched='' WHERE id=?", (row_id,))
@@ -1142,6 +1151,83 @@ class SqliteStore:
             for r in self.conn.execute(f"SELECT segment_id, file_id, dims, scale, sketch FROM sketches WHERE segment_id IN ({marks})", chunk):
                 found[r[0]] = (r[1], r[2], r[3], r[4])
         return found
+
+    def _fingerprints_cached(self, model: str):
+        """The fingerprints, kept between searches while nothing has written to the index (this connection's own
+        sketch writes and other connections' commits both count)."""
+        version = int(self.conn.execute("PRAGMA data_version").fetchone()[0])
+        if self._prints is None or self._prints[:3] != (model, version, self._sketch_writes):
+            ids, matrix = self.fingerprints(model)
+            self._prints = (model, version, self._sketch_writes, ids, matrix)
+        return self._prints[3], self._prints[4]
+
+    def search_meaning(self, question, model: str, limit: int = 100, offset: int = 0,
+                       filters: Optional[SearchFilters] = None, candidates: Optional[int] = None) -> SearchPage:
+        """Files whose text is closest in meaning to `question` (a sketch of it, as float32 numbers, from the
+        same model). Two stages: the fingerprints of every piece are scanned for `candidates` likely ones
+        (sketches.CANDIDATES), then those are scored by their full sketches. One row per file (one per
+        content, unless filters.every_copy), its closest passage as Evidence, closest first. `rank` is
+        the closeness (1 is the same meaning). Only the file filters apply (folder, kinds, dates, sizes)."""
+        import numpy as np
+        from . import sketches
+        if limit < 0 or offset < 0:
+            raise ValueError("limit and offset must not be negative")
+        ids, prints = self._fingerprints_cached(model)
+        if len(ids) == 0:
+            return SearchPage([], 0, offset, limit)
+        _, _, _, file_clause, file_args, _ = self._narrow("", filters)
+        keep = candidates if candidates is not None else sketches.CANDIDATES * (4 if file_clause else 1)
+        chosen = ids[sketches.scan(prints, np.asarray(question, dtype=np.float32), keep)]
+        found = self.sketches_of(chosen)
+        if not found:
+            return SearchPage([], 0, offset, limit)
+        # the full sketches, scored; then the closest piece of each file
+        seg_ids = list(found)
+        dims = found[seg_ids[0]][1]
+        data = b"".join(found[i][3] for i in seg_ids)
+        full = sketches.dequantize(data, dims, [found[i][2] for i in seg_ids])
+        scores = sketches.closeness(full, np.asarray(question, dtype=np.float32)[:dims])
+        best: Dict[int, Tuple[float, int]] = {}
+        for seg, score in zip(seg_ids, scores):
+            file_id = found[seg][0]
+            if file_id not in best or score > best[file_id][0]:
+                best[file_id] = (float(score), seg)
+        # the files themselves, filtered; copies grouped as a word search groups them
+        grouped = not (filters is not None and filters.every_copy)
+        rows_by_id: Dict[int, sqlite3.Row] = {}
+        file_ids = list(best)
+        for at in range(0, len(file_ids), 400):
+            chunk = file_ids[at:at + 400]
+            marks = ",".join("?" * len(chunk))
+            sql = (f"SELECT f.*, ROW_NUMBER() OVER (PARTITION BY COALESCE(f.content, '#' || f.id) ORDER BY "
+                   f"(f.missing_since IS NOT NULL), {self._elsewhere_sql()}, {_BACKUP_SQL}, {_DEPTH_SQL}, length(f.path), f.id) AS place "
+                   f"FROM files f WHERE f.id IN ({marks}){file_clause}")
+            for r in self.conn.execute(sql, chunk + list(file_args)):
+                rows_by_id[r["id"]] = r
+        members: Dict[object, List[int]] = {}
+        for file_id in best:
+            r = rows_by_id.get(file_id)
+            if r is not None:
+                members.setdefault((r["content"] or f"#{file_id}") if grouped else f"#{file_id}", []).append(file_id)
+        groups: List[Tuple[float, int, int]] = []       # (score, segment, shown file): the best-placed copy is shown
+        for files in members.values():
+            shown = min(files, key=lambda i: rows_by_id[i]["place"])
+            groups.append((max(best[i][0] for i in files), best[shown][1], shown))
+        ordered = sorted(groups, key=lambda g: (-g[0], g[2]))
+        page = ordered[offset:offset + limit]
+        rows: List[SearchRow] = []
+        for score, seg, file_id in page:
+            r = rows_by_id[file_id]
+            evidence = self.conn.execute("SELECT page FROM segments WHERE id=?", (seg,)).fetchone()
+            rows.append(SearchRow(r["id"], decode_path(r["path"], r["path_raw"]), r["name"], r["folder"], r["size"],
+                                  r["modified"], r["kind"], r["state"], 1, score,
+                                  (Evidence(file_id, evidence["page"] if evidence else 0, 0, 0, None, seg),),
+                                  missing_since=r["missing_since"]))
+        if grouped and rows:
+            others = self.copies_of([row.file_id for row in rows])
+            for row in rows:
+                row.also_at = tuple(others.get(row.file_id, ()))
+        return SearchPage(rows, len(ordered), offset, limit)
 
     def sample_text(self, count: int) -> List[Tuple[int, str, int, str]]:
         """`count` pieces of text drawn at random: (segment id, file path, page, text). For measuring."""
@@ -1356,6 +1442,8 @@ class SqliteStore:
         end = min(max(evidence.end, start), len(text))
         left = max(0, start - max(context, 0))
         right = min(len(text), end + max(context, 0))
+        if start == end == 0:      # nothing in particular to mark (a passage found by meaning): the room goes to the text
+            right = min(len(text), 2 * max(context, 0))
         return Passage(text[left:right], start - left, end - left, r["page"], kind)
 
     # -- roots

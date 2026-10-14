@@ -100,6 +100,11 @@ class Settings:
     ocr_gpu_readers: int = 0               # readers sharing the card in fast mode; 0 works it out as for the processor, at most 8
                                            # [measured on one machine: 2, 4 and 8 readers gave 250, 451 and 695 pages a minute]
     ocr_after_index: bool = True           # the window's "Update the index" goes straight on to OCR where a folder asks for it
+    # -- searching by meaning (meaning.py): sketches of every piece of text, made in the background
+    meaning_model: str = "larger"          # "larger" (the better one; 547 MB) or "small" (90 MB, faster, less exact)
+    meaning_size: str = "full"             # "full" keeps every number of a sketch; "compact" keeps 256 (a third of the disk, a few results lost)
+    meaning_gpu: bool = True               # sketch on a graphics card when the runtime can use one; the processor is used when it cannot
+    meaning_after_index: bool = True       # updating the index goes on to sketch what is new, after OCR
     # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
     book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
     book_folder_level: str = "names"       # what a folder with such a name starts at; "" makes no guess about books
@@ -171,6 +176,10 @@ def validate(s: Settings) -> List[str]:
         problems.append("picture_heavy_fraction must be above 0 and at most 1, and picture_heavy_min must not be negative")
     if s.ocr_gpu_readers < 0:
         problems.append("ocr_gpu_readers must not be negative")
+    if s.meaning_model not in ("small", "larger"):
+        problems.append('meaning_model must be "small" or "larger"')
+    if s.meaning_size not in ("full", "compact"):
+        problems.append('meaning_size must be "full" or "compact"')
     if s.ocr_fast_readers < 0 or s.ocr_reader_threads < 1 or s.ocr_reader_memory_mb < 0:
         problems.append("ocr_fast_readers and ocr_reader_memory_mb must not be negative, and ocr_reader_threads must be at least 1")
     if s.missing_retention_days < 0:

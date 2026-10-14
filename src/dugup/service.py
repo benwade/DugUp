@@ -35,7 +35,7 @@ from .sandbox import SubprocessSandbox
 from .settings import Settings
 from dataclasses import replace
 
-from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, OPTION_WORDS, level_for, level_reaches, level_words, normalize_level, wants, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
+from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, OPTION_MEANING, OPTION_WORDS, WHERE_MEANING, level_for, level_reaches, level_words, normalize_level, wants, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
                      Passage, Root, SearchPage)
 from .store import SqliteStore
 from .suggest import Suggestion, suggest_excludes
@@ -75,6 +75,7 @@ class LocalService:
         self.layout = layout
         self._ocr_backend = ocr_backend      # made on first use: most commands never read a picture
         self._intent = intent
+        self._asker = None               # the worker that sketches questions for searching by meaning, kept once made
         self._intent_looked = intent is not None
         self.settings = settings or Settings()
         self.source = source or DirectoryScan()
@@ -135,6 +136,9 @@ class LocalService:
             close_readers()      # ends any worker process and everything it started
         if self._intent is not None:
             self._intent.close()         # ends a model server this program started
+        if self._asker is not None:
+            self._asker[0].close()
+            self._asker = None
         close_ocr = getattr(self._ocr_backend, "close", None)
         if close_ocr is not None:
             close_ocr()
@@ -168,7 +172,13 @@ class LocalService:
         if filters is not None and filters.folder is not None and filters.case_insensitive is None:
             filters = replace(filters, case_insensitive=self.case_insensitive)
         try:
-            page = self.store.search_words(query, limit, offset, sort, descending, filters)
+            if filters is not None and filters.where == WHERE_MEANING:
+                question = self.sketch_question(query)
+                if isinstance(question, Failure):
+                    return question
+                page = self.store.search_meaning(question, self.meaning_model(), limit, offset, filters)
+            else:
+                page = self.store.search_words(query, limit, offset, sort, descending, filters)
         except ValueError as exc:
             return Failure(FailureReason.UNSUPPORTED, str(exc))
         away = [r.path for r in self.store.list_roots() if not r.reachable]
@@ -422,6 +432,110 @@ class LocalService:
         from .sandbox import SubprocessSandbox
         return meaning.measure(self.store, SubprocessSandbox, self.layout.models / "meaning", choices, pieces, gpu,
                                questions, progress=progress, stop=stop)
+
+    def meaning_model(self) -> str:
+        """The tag of the sketches the settings ask for (meaning.model_name)."""
+        from . import meaning
+        return meaning.model_name(self.settings.meaning_model, meaning.dims_for(self.settings.meaning_model, self.settings.meaning_size))
+
+    def meaning_coverage(self) -> Tuple[int, int]:
+        """(files sketched with the chosen model and size, files with text that could be)."""
+        return self.store.sketch_counts(self.meaning_model())
+
+    def sketch_question(self, question: str):
+        """A sketch of a question, from the model the sketches in the index were made with, as float32
+        numbers; or a Failure when that cannot be done here. The worker that does it is made on first use
+        and kept, on the processor: one question is quick, and a card may be busy sketching the index."""
+        from . import meaning
+        ready = self.meaning_ready()
+        if ready is not True:
+            return Failure(FailureReason.NOT_INSTALLED, ready)
+        choice = self.settings.meaning_model
+        dims = meaning.dims_for(choice, self.settings.meaning_size)
+        if self._asker is None or self._asker[1].choice != choice:
+            from .sandbox import SubprocessSandbox
+            if self._asker is not None:
+                self._asker[0].close()
+            sandbox = SubprocessSandbox()
+            self._asker = (sandbox, meaning._Runner(sandbox, self.layout.models / "meaning", choice, False))
+        vectors = self._asker[1].embed([question], "query", dims, None, meaning.LOAD_SECONDS)
+        if isinstance(vectors, Failure):
+            self._asker[0].close()
+            self._asker = None
+            return vectors
+        return vectors[0]
+
+    def meaning_ready(self) -> "bool | str":
+        """True when sketches can be made now: the runtime is installed and the chosen model is fetched.
+        Otherwise a line saying what is missing (an updating run does not fetch half a gigabyte by itself)."""
+        from . import embedding_models
+        try:
+            import onnxruntime  # noqa: F401
+            import tokenizers  # noqa: F401
+        except ImportError:
+            return "the runtime for searching by meaning is not installed (pip install dugup[meaning])"
+        if not embedding_models.present(self.layout.models / "meaning", self.settings.meaning_model):
+            size = sum(i.size for i in embedding_models.BY_CHOICE[self.settings.meaning_model]) / 1048576
+            return f"the {self.settings.meaning_model} model is not fetched yet ({size:,.0f} MB); `dugup meaning fill` fetches it"
+        return True
+
+    def meaning_waiting(self) -> int:
+        """Files with text that have no sketch yet: what a `run_meaning` would take up (its folder may stop
+        short of meaning; that is settled file by file as it runs)."""
+        done, could = self.meaning_coverage()
+        return max(0, could - done)
+
+    def run_meaning(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
+                    budget_seconds: Optional[float] = None, gpu: Optional[bool] = None):
+        """Make sketches of meaning (meaning.fill) for the files that have none, in the calling thread, until
+        done, stopped or out of time. Fetches the model on first use into the data folder. Writes to the index,
+        so it takes the same lock as indexing and OCR: one at a time. Files in folders whose level stops short
+        of meaning are left alone. Returns a meaning.FillReport or a Failure."""
+        from . import embedding_models, meaning
+        from .sandbox import SubprocessSandbox
+        gpu = self.settings.meaning_gpu if gpu is None else bool(gpu)
+        choice = self.settings.meaning_model
+        dims = meaning.dims_for(choice, self.settings.meaning_size)
+        if not self._run_guard.acquire(blocking=False):
+            return Failure(FailureReason.BUSY, "indexing or OCR is already going on in this program")
+        try:
+            if not self._lock.acquire():
+                return Failure(FailureReason.BUSY, "another program is writing to this data folder right now")
+            try:
+                folder = self.layout.models / "meaning"
+                if not embedding_models.present(folder, choice):
+                    fetched = meaning.fetch_models(folder, choice, progress, stop)
+                    if isinstance(fetched, Failure):
+                        return fetched
+                store = self._open_store()
+                try:
+                    roots = list(store.list_roots())
+
+                    def asks_for_meaning(file_path: str) -> bool:
+                        owner = next((r for r in roots if _under(file_path, r.path, self._fold)), None)
+                        return owner is None or wants(level_for(owner, file_path, self.case_insensitive), OPTION_MEANING)
+
+                    def tell(p: Progress) -> None:
+                        self._progress = p
+                        if progress is not None:
+                            progress(p)
+
+                    sandbox = SubprocessSandbox()
+                    try:
+                        runner = meaning._Runner(sandbox, folder, choice, gpu)
+                        report = meaning.fill(store, runner, choice, dims, asks_for_meaning, tell, stop, budget_seconds)
+                    finally:
+                        sandbox.close()
+                    if report.failure is None and not report.stopped and not report.out_of_time \
+                            and self._store_thread in (None, threading.get_ident()):
+                        report.compacted = self.compact_if_worthwhile()
+                    return report
+                finally:
+                    store.close()
+            finally:
+                self._lock.release()
+        finally:
+            self._run_guard.release()
 
     def copies(self, path: str, stop: Optional[StopSignal] = None):
         """Folders below `path` that look like copies of each other (copies.Pair, most files first), or a

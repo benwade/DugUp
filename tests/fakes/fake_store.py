@@ -205,12 +205,13 @@ class FakeStore:
             self.sketches, self.sketched = {}, {}       # segment id -> (file, model, dims, scale, sketch, fp); file -> model
         return self.sketches
 
-    def unsketched(self, model, limit=200, prefix=None, case_insensitive=None):
+    def unsketched(self, model, limit=200, prefix=None, case_insensitive=None, after=None):
         self._sk()
         read = (FileState.DONE, FileState.PARTIAL)
         ids = set(self.files) if prefix is None else set(self._below(prefix, case_insensitive))
         found = [r for i, r in self.files.items() if i in ids and r.missing_since is None and r.state in read
-                 and self.sketched.get(i, "") != model and any(s.kind is not SegmentKind.NAME for s in self.segments.get(i, []))]
+                 and self.sketched.get(i, "") != model and any(s.kind is not SegmentKind.NAME for s in self.segments.get(i, []))
+                 and (after is None or (r.modified, -i) < (after[0], -after[1]))]
         found.sort(key=lambda r: (-r.modified, r.row_id))
         return [copy.copy(r) for r in found[:max(0, limit)]]
 
@@ -251,6 +252,27 @@ class FakeStore:
         matrix = np.frombuffer(b"".join(fp for _, fp in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
             else np.zeros((0, FINGERPRINT), dtype=np.int8)
         return ids, matrix
+
+    def search_meaning(self, question, model, limit=100, offset=0, filters=None, candidates=None):
+        import numpy as np
+        from dugup.sketches import closeness, dequantize
+        sk = self._sk()
+        best = {}
+        for seg, (file_id, m, dims, scale, sketch, _) in sk.items():
+            if m != model or file_id not in self.files:
+                continue
+            score = float(closeness(dequantize(sketch, dims, [scale]), np.asarray(question, dtype=np.float32)[:dims])[0])
+            if file_id not in best or score > best[file_id][0]:
+                best[file_id] = (score, seg)
+        ordered = sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0]))
+        rows = []
+        for file_id, (score, seg) in ordered[offset:offset + limit]:
+            r = self.files[file_id]
+            page = next((s.page for s, i in zip(self.segments.get(file_id, []), self.segment_ids.get(file_id, [])) if i == seg), 0)
+            rows.append(SearchRow(file_id, r.path, os.path.basename(r.path), os.path.dirname(r.path), r.size, r.modified,
+                                  r.kind.value if hasattr(r.kind, "value") else str(r.kind), r.state.value, 1, score,
+                                  (Evidence(file_id, page, 0, 0, None, seg),), missing_since=r.missing_since))
+        return SearchPage(rows, len(ordered), offset, limit)
 
     def sketches_of(self, segment_ids):
         sk = self._sk()

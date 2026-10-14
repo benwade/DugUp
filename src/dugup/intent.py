@@ -36,7 +36,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import launcher
 from .settings import Settings
-from .shapes import WHERE_ANYWHERE, WHERE_CHOICES, Failure, FailureReason, FileKind
+from .shapes import WHERE_ANYWHERE, WHERE_WORD_CHOICES as WHERE_CHOICES, Failure, FailureReason, FileKind
 
 PERIODS = ("", "today", "yesterday", "this_week", "last_week", "this_month", "last_month", "this_year", "last_year")
 KINDS = (FileKind.PDF.value, FileKind.OFFICE.value, FileKind.TEXT.value, FileKind.IMAGE.value)

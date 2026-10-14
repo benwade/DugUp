@@ -194,14 +194,33 @@ folder; see `src/dugup/settings.py` for the names and defaults. The ones most li
     min_free_mb = 200          # a run stops when the drive has less than this free
     figure_fraction = 0.1      # a picture this share of a typed page gets the page read by OCR too; 0: off
 
-## Searching by meaning (being measured)
+## Searching by meaning
 
-`dugup meaning measure --ask "a sentence"` makes sketches of a sample of the index's text with two pinned
-embedding models (a small one, 90 MB, and a larger one, 547 MB, whose sketches can be cut short) on the
-processor and, where the OCR runtime can use one, the graphics card, and reports speed, the disk the whole
-index would take at each vector size, and what the questions find in the sample. It needs
-`pip install numpy tokenizers` beside the OCR runtime. Nothing is stored in the index yet: the numbers decide
-how searching by meaning is built.
+Besides the words themselves, DugUp can keep a sketch of what each passage is about, so that a question in
+your own words ("a receipt for a licence I paid online") finds passages that say the same thing in other
+words. It is an optional part: `pip install dugup[meaning]` adds the runtime (onnxruntime, numpy,
+tokenizers), and the model is fetched once, on first use, into the data folder (the larger one, 547 MB, by
+default; `meaning_model = "small"` chooses the 90 MB one, about seven times faster and less exact).
+
+- **Filling.** `dugup meaning fill` sketches every file with text that has no sketch yet, the most recently
+  changed first, and keeps the sketches in the index as bytes (about 170 MB for 200,000 passages at full
+  size; `meaning_size = "compact"` keeps a third of that and loses a few results from the top ten). Ctrl+C
+  stops it and the next run continues where it left off. A folder whose level stops short of meaning is
+  passed over. By default an index update (`dugup index`, or the window's Update) goes on to sketch what is
+  new after OCR, once the model is there; `meaning_after_index = false` or `--no-meaning` leaves that out,
+  and an update never fetches the model by itself. On a graphics card the larger model is about ten times
+  faster than on the processor (`meaning_gpu`); where the card cannot be used, the processor is.
+- **Searching.** `dugup search --meaning "a question in your own words"`, or "By meaning" in the window's
+  where-choice. Each result is one file with its closest passage, closest first, paged with the same More
+  button or `--offset`. A file kept in several places is shown once, as in a word search. The file filters
+  (folder, kinds, dates, sizes) apply; the word ones (exact form, in the name) do not. While the sketches
+  are still being made the answer says how far they reach ("cover 4,210 of 20,000 files so far").
+  Changing the model or the size makes every file want a new sketch; the old ones go as the new are made.
+- **How it finds them.** Two stages: the first 96 numbers of every sketch are scanned at once (a few tens of
+  milliseconds for a quarter of a million passages), then the 800 most likely are scored by their full
+  sketches. `dugup meaning status` says how much of the index is covered.
+- **Measuring.** `dugup meaning measure --ask "a sentence"` tries both models on a sample of your own index
+  and reports speed, disk and what the questions find, without storing anything.
 
 ## Clearing out copies
 

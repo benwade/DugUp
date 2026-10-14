@@ -66,6 +66,10 @@ GROUPS: Tuple[Group, ...] = (
     Group("pictures", "Reading pictures and scans",
           "Words in photos, screenshots and scanned pages are read by a separate reader (OCR). It is the slowest "
           "part of building an index, so where it runs and how hard it works make the most difference."),
+    Group("meaning", "Searching by meaning",
+          "Besides the words themselves, DugUp can keep a sketch of what each passage is about, so a question in "
+          "your own words finds passages that say the same thing differently. The sketches are made in the "
+          "background after indexing; searching by meaning works on what has been sketched so far."),
     Group("speed", "How hard to work",
           "Building the index for the first time is heavy work, and that is temporary. Afterwards DugUp only "
           "reads what is new or changed. These settings say how much of the computer it may take while it works."),
@@ -149,6 +153,25 @@ def _entries() -> Tuple[Entry, ...]:
           "Updating the index goes straight on to reading pictures and scans, as one job.",
           why="Most people want one button. Turn it off to read pictures at a time of your choosing.",
           everyday=True, choices=YES_NO),
+        # -- meaning
+        E("meaning_model", "meaning", "Which model",
+          "The model that makes the sketches. Changing it means sketching everything again.",
+          why="The larger one (547 MB) finds the right passage noticeably more often; the small one (90 MB) is "
+              "about seven times faster to run.",
+          everyday=True, choices=(("larger", "larger (better)"), ("small", "small (faster)"))),
+        E("meaning_size", "meaning", "Size of each sketch",
+          "How much of each sketch is kept. Changing it means sketching everything again.",
+          why="Full keeps every number: about 170 MB for 200,000 passages. Compact keeps a third of the disk "
+              "and loses a few results from the top ten.",
+          choices=(("full", "full"), ("compact", "compact"))),
+        E("meaning_gpu", "meaning", "Sketch on the graphics card",
+          "Use the graphics card for making sketches when the runtime can use one. Where it cannot, the processor is used.",
+          why="On a graphics card the larger model is about ten times faster than on the processor.",
+          everyday=True, choices=YES_NO),
+        E("meaning_after_index", "meaning", "Sketch as part of updating",
+          "Updating the index goes on to sketch what is new, after reading pictures.",
+          why="One button does it all. Turn it off to sketch at a time of your choosing with `dugup meaning fill`.",
+          choices=YES_NO),
         E("ocr_dpi", "pictures", "Sharpness for scanned pages",
           "A scanned PDF page is drawn at this many dots per inch before it is read. Higher is slower and reads small print better.",
           low=50, high=600, unit="dpi"),

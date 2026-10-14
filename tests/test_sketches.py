@@ -5,7 +5,7 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from dugup import sketches
-from dugup.shapes import FileRecord, FileState, SegmentIn, SegmentKind
+from dugup.shapes import FileKind, FileRecord, FileState, SegmentIn, SegmentKind
 from dugup.store import SqliteStore
 
 from fakes.fake_store import FakeStore
@@ -93,3 +93,62 @@ def test_a_missing_file_s_sketches_are_not_scanned_and_a_removed_file_s_are_gone
         store.remove_files([row])
         assert store.conn.execute("SELECT COUNT(*) FROM sketches").fetchone()[0] == 0, "the cascade"
         store.check_word_index()
+
+
+def sketched(store, row, vectors, model="larger:768"):
+    pieces = store.text_of(row)
+    assert len(pieces) == len(vectors)
+    data, scales = sketches.quantize(vectors)
+    dims = vectors.shape[1]
+    store.save_sketches(row, model, dims, [(seg, scales[i], data[i * dims:(i + 1) * dims], sketches.fingerprint_of(vectors[i]))
+                                           for i, (seg, _, _) in enumerate(pieces)])
+
+
+def test_searching_by_meaning_gives_one_row_per_file_with_its_closest_passage_and_pages_like_a_word_search(tmp_path):
+    from dugup.shapes import SearchFilters, WHERE_MEANING
+    with SqliteStore(tmp_path / "index.sqlite", prefer_under="/main") as store:
+        base = unit(6, 768, 7)
+        a = store.upsert_file(FileRecord("/main/a.txt", 5, 10.0, state=FileState.DONE))
+        b = store.upsert_file(FileRecord("/main/b.pdf", 5, 20.0, state=FileState.DONE, kind=FileKind.PDF))
+        c = store.upsert_file(FileRecord("/other/c.txt", 5, 30.0, state=FileState.DONE))
+        store.replace_segments(a, [SegmentIn(0, 1, SegmentKind.TEXT, "a first"), SegmentIn(0, 2, SegmentKind.TEXT, "a second, the close one")])
+        store.replace_segments(b, [SegmentIn(3, 1, SegmentKind.TEXT, "b on page three")])
+        store.replace_segments(c, [SegmentIn(0, 1, SegmentKind.TEXT, "c far away")])
+        question = base[0]
+        near = lambda w: (w * question + (1 - w) * base[5]) / np.linalg.norm(w * question + (1 - w) * base[5])
+        sketched(store, a, np.stack([near(0.2), near(0.9)]))
+        sketched(store, b, np.stack([near(0.6)]))
+        sketched(store, c, np.stack([near(0.4)]))
+        page = store.search_meaning(question, "larger:768", limit=10)
+        assert [r.path for r in page.rows] == ["/main/a.txt", "/main/b.pdf", "/other/c.txt"] and page.total == 3
+        assert page.rows[0].rank > page.rows[1].rank > page.rows[2].rank > 0.3 and page.rows[0].matches == 1
+        ev = page.rows[0].evidence[0]
+        assert store.get_passage(ev, 5).text == "a second, " and ev.page == 0, "the closest piece, shown from its start"
+        assert page.rows[1].evidence[0].page == 3
+        # paged as a word search is paged: the total is honest, the offset continues
+        second = store.search_meaning(question, "larger:768", limit=2, offset=2)
+        assert [r.path for r in second.rows] == ["/other/c.txt"] and second.total == 3 and not second.truncated
+        assert store.search_meaning(question, "larger:768", limit=2).truncated
+        # the file filters narrow it; the word filters do not apply
+        only = store.search_meaning(question, "larger:768", filters=SearchFilters(folder="/other", where=WHERE_MEANING))
+        assert [r.path for r in only.rows] == ["/other/c.txt"] and only.total == 1
+        assert store.search_meaning(question, "larger:768", filters=SearchFilters(kinds=("pdf",))).total == 1
+        assert store.search_meaning(question, "larger:768", filters=SearchFilters(modified_after=25.0)).total == 1
+        # another model's sketches are not this search's
+        assert store.search_meaning(question, "small:384").total == 0
+        # a file kept in two places is shown once, in the main place, with the other place listed
+        twin = store.upsert_file(FileRecord("/other/backup/a.txt", 5, 10.0, state=FileState.DONE))
+        store.replace_segments(twin, [SegmentIn(0, 1, SegmentKind.TEXT, "a first"), SegmentIn(0, 2, SegmentKind.TEXT, "a second, the close one")])
+        sketched(store, twin, np.stack([near(0.2), near(0.95)]))
+        store.set_content(a, b"mark-a")
+        store.set_content(twin, b"mark-a")
+        grouped = store.search_meaning(question, "larger:768")
+        assert [r.path for r in grouped.rows][0] == "/main/a.txt" and grouped.total == 3
+        assert grouped.rows[0].also_at == ("/other/backup/a.txt",) and grouped.rows[0].evidence[0].file_id == a
+        every = store.search_meaning(question, "larger:768", filters=SearchFilters(every_copy=True))
+        assert every.total == 4 and [r.path for r in every.rows][:2] == ["/other/backup/a.txt", "/main/a.txt"]
+        # new text takes a file's sketches with it, and the cached fingerprints notice
+        store.replace_segments(c, [SegmentIn(0, 1, SegmentKind.TEXT, "c rewritten")])
+        assert store.search_meaning(question, "larger:768").total == 2
+        with pytest.raises(ValueError):
+            store.search_meaning(question, "larger:768", limit=-1)

@@ -27,12 +27,12 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .cli import (format_bytes, format_date, format_seconds, megabytes, print_compacted, print_ocr_report, print_report,
+from .cli import (format_bytes, format_date, format_seconds, megabytes, print_compacted, print_meaning_report, print_ocr_report, print_report,
                   progress_text)
 from .desktop import Desktop
 from .waitwindow import bring_to_front
 from .indexer import KEEP, REFUSE, REREAD, Progress
-from .shapes import (MAX_SORT_KEYS, WHERE_ANYWHERE, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind,
+from .shapes import (MAX_SORT_KEYS, WHERE_ANYWHERE, WHERE_MEANING, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind,
                      Root, SearchFilters, SearchRow)
 
 PAGE_ROWS = 200          # rows fetched at a time; "More" fetches the next lot
@@ -77,7 +77,7 @@ def parse_day(text: str, end_of_day: bool = False) -> Optional[float]:
 
 
 WHERE_LABELS = (("Anywhere", WHERE_ANYWHERE), ("In the text", WHERE_TEXT), ("In the file name", WHERE_NAME),
-                ("In text read by OCR", WHERE_OCR))
+                ("In text read by OCR", WHERE_OCR), ("By meaning", WHERE_MEANING))
 KIND_LABELS = (("PDF", FileKind.PDF.value), ("Office", FileKind.OFFICE.value), ("Text", FileKind.TEXT.value),
                ("Pictures", FileKind.IMAGE.value))
 ALL_FOLDERS = "All indexed folders"
@@ -496,10 +496,17 @@ class App:
             self.rows.append(row)
         self.total = page.total
         self.more_button.configure(state="normal" if len(self.rows) < self.total else "disabled")
+        by_meaning = filters is not None and filters.where == WHERE_MEANING
+        coverage = ""
+        if by_meaning:
+            done, could = self.service.meaning_coverage()
+            if could > done:
+                coverage = f"  (sketches of meaning cover {done:,} of {could:,} file(s) with text so far)"
         if self.total == 0:
-            self.say(f"No files found for: {words}")
+            self.say(f"No files found for: {words}{coverage}")
         else:
-            self.say(f"Showing {len(self.rows):,} of {self.total:,} file(s) for: {words}")
+            way = "closest in meaning to" if by_meaning else "for"
+            self.say(f"Showing {len(self.rows):,} of {self.total:,} file(s) {way}: {words}{coverage}")
         if offset == 0 and self.rows:
             self.tree.selection_set("0")
             self.tree.focus("0")
@@ -865,6 +872,8 @@ class App:
                     report = service.install_models(stop, events.put)
                 elif what == "ocr":
                     report = service.run_ocr(stop, events.put)
+                elif what == "meaning":
+                    report = service.run_meaning(stop, events.put)
                 else:
                     report = service.run_indexing(stop, events.put, None, on_settings_change)
             except Exception as exc:      # never die silently in the background
@@ -954,7 +963,7 @@ class App:
                 finished.append(item)    # type: ignore[arg-type]
         if latest is not None and not finished:
             self.progress_text.set(progress_text(latest))
-            if latest.phase in ("read", "ocr", "download", "record", "mark") and latest.total > 0:
+            if latest.phase in ("read", "ocr", "download", "record", "mark", "sketch") and latest.total > 0:
                 self._bar_at(latest.percent)
             elif latest.phase != "estimate":           # an estimate is a note on the side: the bar stays as it is
                 self._bar_moving()                     # no total yet (listing, unpacking, measuring): it moves
@@ -975,7 +984,7 @@ class App:
         out = io.StringIO()
         if what == "plan":
             self._close_waiting()
-        if self.waiting_fast and what in ("index", "ocr", "fast"):
+        if self.waiting_fast and what in ("index", "ocr", "fast", "meaning"):
             # a folder was asked for "now": the run that was going has stopped, so that one starts
             folder, self.waiting_fast = self.waiting_fast, ""
             self.carried = ""
@@ -1031,12 +1040,16 @@ class App:
             return
         if what in ("ocr", "fast"):
             print_ocr_report(report, out)
+        elif what == "meaning":
+            print_meaning_report(report, out)
         else:
             print_report(report, out, self.service.settings.missing_retention_days)
-        if report.paused:
+        if getattr(report, "paused", ""):
             out.write(f"It paused itself: {report.paused}.\n")
         if report.stopped:
             out.write("Stopped. Start it again to continue where it stopped.\n")
+        elif what == "meaning":
+            pass                       # the run tidied the index itself, when that was worth doing
         elif not report.paused:
             # the background thread leaves tidying to this one, which owns the reading connection
             self.progress_text.set("Finishing ...")
@@ -1045,6 +1058,8 @@ class App:
         text = out.getvalue()
         if what == "ocr" and self.carried:
             text = self.carried.rstrip() + "\n\nThen pictures and scans were read (OCR):\n" + text
+        elif what == "meaning" and self.carried:
+            text = self.carried.rstrip() + "\n\nThen sketches of meaning were made:\n" + text
         self.carried = ""
         if what == "index" and not report.stopped and not report.paused and self.service.settings.ocr_after_index:
             # an index update goes straight on to the pictures and scans its folders ask for: one run, one Stop
@@ -1058,6 +1073,20 @@ class App:
                 self.refresh_status(text.rstrip() + f"\n\nNow reading {waiting:,} picture(s) and scanned page(s) (OCR). "
                                     "Stop keeps what is done; the rest waits for next time.")
                 self.start("ocr")
+                return
+        if what in ("index", "ocr") and not report.stopped and not getattr(report, "paused", "") \
+                and self.service.settings.meaning_after_index:
+            # ... and then on to sketches of meaning for what is new, when that can be done here
+            try:
+                waiting = self.service.meaning_waiting() if self.service.meaning_ready() is True else 0
+            except Exception:
+                waiting = 0
+            if waiting:
+                self.carried = text
+                self.refresh_folders()
+                self.refresh_status(text.rstrip() + f"\n\nNow making sketches of meaning for {waiting:,} file(s), the most "
+                                    "recently changed first. Stop keeps what is done; the rest waits for next time.")
+                self.start("meaning")
                 return
         self.progress_text.set(f"Finished in {format_seconds(report.seconds)}." if not report.stopped else "Stopped.")
         self.refresh_folders()

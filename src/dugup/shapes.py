@@ -150,7 +150,9 @@ Pair = Tuple[int, int]
 # ---- search results --------------------------------------------------------------------------------------
 
 WHERE_ANYWHERE, WHERE_TEXT, WHERE_NAME, WHERE_OCR = "anywhere", "text", "name", "ocr"
-WHERE_CHOICES = (WHERE_ANYWHERE, WHERE_TEXT, WHERE_NAME, WHERE_OCR)
+WHERE_MEANING = "meaning"      # not the words but what the passage is about (sketches of meaning)
+WHERE_WORD_CHOICES = (WHERE_ANYWHERE, WHERE_TEXT, WHERE_NAME, WHERE_OCR)
+WHERE_CHOICES = WHERE_WORD_CHOICES + (WHERE_MEANING,)
 MAX_SORT_KEYS = 3
 
 

@@ -32,7 +32,7 @@ SHAPES = {
     "small": Shape("small", 384, 256, "", "", False, False, "small.onnx", "small-tokenizer.json"),
     "larger": Shape("larger", 768, 512, "search_document: ", "search_query: ", True, True, "larger.onnx", "larger-tokenizer.json"),
 }
-SIZES = {"compact": 128, "balanced": 256, "full": 768}     # the vector-size choice, in numbers kept (the larger model)
+SIZES = {"compact": 256, "full": 768}     # the vector-size choice, in numbers kept (the larger model; measured: 128 lost too much)
 
 
 class Embedder:

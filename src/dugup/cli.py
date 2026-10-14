@@ -29,7 +29,7 @@ from .filesource import SUGGESTED_EXCLUDES
 from .indexer import KEEP, REFUSE, REREAD, IndexReport, Progress
 from .protocols import WARN_MASS_LOSS, WARN_ROOT_EMPTY
 from .service import LocalService
-from .shapes import LEVEL_WORDS, LEVELS, OPTION_OCR, POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow
+from .shapes import LEVEL_WORDS, LEVELS, OPTION_OCR, POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow, WHERE_MEANING
 from .store import SORT_COLUMNS, StoreError
 from .suggest import SAFE, Suggestion
 
@@ -110,6 +110,11 @@ def progress_text(p: Progress) -> str:
         left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
         line = (f"[same files] marking what was read before: {p.done:,} of {p.total:,} ({p.percent:.1f}%)  "
                 f"{p.rate:.1f} files/s  {left_text}")
+        return line + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else "")
+    if p.phase == "sketch":
+        left = p.remaining_seconds
+        left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
+        line = f"[meaning] sketching: {p.done:,} of {p.total:,} file(s) ({p.percent:.1f}%)  {p.rate:.1f} files/s  {left_text}"
         return line + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else "")
     if p.phase == "measure":
         if p.current:
@@ -226,6 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("--retry-failed", action="store_true", help="try the files that failed last time again")
     index.add_argument("--no-ocr", action="store_true",
                        help="stop after the index is up to date; do not go on to read pictures and scans (dugup ocr does that later)")
+    index.add_argument("--no-meaning", action="store_true",
+                       help="do not go on to sketch meaning after reading (dugup meaning fill does that later)")
     choice = index.add_mutually_exclusive_group()
     choice.add_argument("--reread", action="store_true", help="after a settings change: read every file again")
     choice.add_argument("--keep", action="store_true", help="after a settings change: keep what is stored as it is")
@@ -297,6 +304,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="only the very word forms typed: education then does not find educate")
     search.add_argument("--every-copy", action="store_true",
                         help="list every file; the usual is to show a file kept in several places once, with its other places")
+    search.add_argument("--meaning", action="store_true",
+                        help="find passages by what they are about rather than by the words: a question in your own words "
+                             "(needs sketches: dugup meaning fill)")
     search.add_argument("--context", type=int, default=60, help="characters shown on each side of a match")
 
     dup = sub.add_parser("duplicates", parents=[common],
@@ -316,7 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
     dup.add_argument("--yes", action="store_true", help="with --remove: do not ask; answer yes")
     dup.add_argument("--try-trash", metavar="FILE", dest="try_trash",
                      help="move this one file to the trash and say where it went, to see how the trash behaves here")
-    meaning = sub.add_parser("meaning", parents=[common], help="searching by meaning (measured first)")
+    meaning = sub.add_parser("meaning", parents=[common], help="searching by meaning: sketches of what each passage is about")
     meaning_sub = meaning.add_subparsers(dest="meaning_command", required=True)
     gauge = meaning_sub.add_parser("measure", parents=[common],
                                    help="make sketches of a sample of the index with the pinned models and report speed, "
@@ -327,6 +337,13 @@ def build_parser() -> argparse.ArgumentParser:
     gauge.add_argument("--no-gpu", dest="gpu", action="store_false", help="the processor only (default: both when the runtime can)")
     gauge.add_argument("--ask", action="append", default=[], metavar="SENTENCE",
                        help="a question to try on the sample, in plain words; may be repeated")
+    filling = meaning_sub.add_parser("fill", parents=[common],
+                                     help="make sketches of meaning for the files that have none yet, the most recently "
+                                          "changed first (Ctrl+C stops; run again to continue)")
+    filling.add_argument("--budget", type=float, default=None, metavar="SECONDS", help="stop after this long; run again to continue")
+    filling.add_argument("--gpu", dest="gpu", action="store_true", default=None, help="sketch on the graphics card")
+    filling.add_argument("--no-gpu", dest="gpu", action="store_false", help="sketch on the processor (default: as the setting meaning_gpu says)")
+    meaning_sub.add_parser("status", parents=[common], help="how much of the index has sketches of meaning")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")
@@ -736,33 +753,51 @@ def cmd_index(args, env, out, environ, stop: Optional[threading.Event] = None, i
             if report.stopped:
                 safe_write("[Interrupted] Stopped cleanly. Run `dugup index` again to continue where it stopped.", out)
                 return 130
-            if args.no_ocr or not service.settings.ocr_after_index:
-                return 0
-            waiting = service.ocr_waiting()
-            if not waiting:
-                return 0
-            # the same run goes on to the pictures and scans the folders ask for; Ctrl+C stops it as before
-            threshold = service.settings.ocr_fast_pages
-            way = (f" Fast, with several readers, since {waiting:,} pages is a lot: the computer will be busier until this ends."
-                   if threshold > 0 and waiting >= threshold else "")
-            safe_write(f"Now reading {waiting:,} picture(s) and scanned page(s) (OCR).{way} Ctrl+C stops; what is done is kept "
-                       "and `dugup ocr` continues later. (`dugup index --no-ocr` leaves this step out.)", out)
-            pages = service.run_ocr(stop, printer, roots)
+            code = 0
+            if not args.no_ocr and service.settings.ocr_after_index and service.ocr_waiting():
+                code = _index_then_ocr(service, args, roots, stop, printer, out)
+                if code == 130:
+                    return code
+            if args.no_meaning or not service.settings.meaning_after_index or not service.meaning_waiting():
+                return code
+            ready = service.meaning_ready()
+            if ready is not True:
+                safe_write(f"Sketches of meaning were not made: {ready}.", out)
+                return code
+            safe_write(f"Now sketching the meaning of {service.meaning_waiting():,} file(s), the most recently changed "
+                       "first. Ctrl+C stops; what is done is kept and `dugup meaning fill` continues later. "
+                       "(`dugup index --no-meaning` leaves this step out.)", out)
+            report = service.run_meaning(stop, printer)
             printer.finish()
-            if isinstance(pages, Failure):
-                return _fail(pages, out)
-            print_ocr_report(pages, out)
-            print_compacted(pages.compacted, out)
-            if pages.stopped:
-                safe_write("[Interrupted] Stopped cleanly. The index is up to date; run `dugup ocr` to read the rest.", out)
-                return 130
-            return 1 if pages.paused else 0
+            if isinstance(report, Failure):
+                return _fail(report, out)
+            return print_meaning_report(report, out) or code
     finally:
         if previous is not None:
             signal.signal(signal.SIGINT, previous)
         if handler is not None:
             logging.getLogger("dugup").removeHandler(handler)
             handler.close()
+
+
+def _index_then_ocr(service, args, roots, stop, printer, out) -> int:
+    waiting = service.ocr_waiting()
+    # the same run goes on to the pictures and scans the folders ask for; Ctrl+C stops it as before
+    threshold = service.settings.ocr_fast_pages
+    way = (f" Fast, with several readers, since {waiting:,} pages is a lot: the computer will be busier until this ends."
+           if threshold > 0 and waiting >= threshold else "")
+    safe_write(f"Now reading {waiting:,} picture(s) and scanned page(s) (OCR).{way} Ctrl+C stops; what is done is kept "
+               "and `dugup ocr` continues later. (`dugup index --no-ocr` leaves this step out.)", out)
+    pages = service.run_ocr(stop, printer, roots)
+    printer.finish()
+    if isinstance(pages, Failure):
+        return _fail(pages, out)
+    print_ocr_report(pages, out)
+    print_compacted(pages.compacted, out)
+    if pages.stopped:
+        safe_write("[Interrupted] Stopped cleanly. The index is up to date; run `dugup ocr` to read the rest.", out)
+        return 130
+    return 1 if pages.paused else 0
 
 
 def _chosen_roots(service: LocalService, asked: Optional[List[str]], out: TextIO) -> "Optional[List[str]] | int":
@@ -896,16 +931,19 @@ def _flags(row: SearchRow, retention_days: float) -> List[str]:
 ALSO_AT_SHOWN = 8
 
 
-def print_results(page: SearchPage, query: str, service: LocalService, context: int, out: TextIO) -> None:
+def print_results(page: SearchPage, query: str, service: LocalService, context: int, out: TextIO,
+                  by_meaning: bool = False) -> None:
     if page.total == 0:
         safe_write(f"No files found for: {query}", out)
         return
     first = page.offset + 1 if page.rows else 0
     last = page.offset + len(page.rows)
-    safe_write(f"Showing {first:,} to {last:,} of {page.total:,} file(s) for: {query}", out)
+    way = "closest in meaning to" if by_meaning else "for"
+    safe_write(f"Showing {first:,} to {last:,} of {page.total:,} file(s) {way}: {query}", out)
     for number, row in enumerate(page.rows, first):
         state = "" if row.state == "done" else f"  [{row.state}]"
-        safe_write(f"{number:>3}. {row.name}{state}", out)
+        score = f"  ({row.rank:.2f})" if by_meaning else ""
+        safe_write(f"{number:>3}. {row.name}{state}{score}", out)
         safe_write(f"     {row.folder}", out)
         for note in _flags(row, service.settings.missing_retention_days):
             safe_write(f"     ! {note}", out)
@@ -927,8 +965,11 @@ def print_results(page: SearchPage, query: str, service: LocalService, context: 
             else:
                 where = f"p.{passage.page}" if passage.page else "text"
             before, match, after = passage.text[:passage.start], passage.text[passage.start:passage.end], passage.text[passage.end:]
-            shown = one_line(before) + (" " if before[-1:].isspace() else "") + "[" + one_line(match) + "]" \
-                + (" " if after[:1].isspace() else "") + one_line(after)
+            if passage.start == passage.end:       # nothing in particular to mark (a passage found by meaning)
+                shown = one_line(passage.text)
+            else:
+                shown = one_line(before) + (" " if before[-1:].isspace() else "") + "[" + one_line(match) + "]" \
+                    + (" " if after[:1].isspace() else "") + one_line(after)
             line = f"{where}: {shown.strip()}"
             # overlapping pieces of text can hold the same passage twice: show it once, in its longer form
             core = line.split(": ", 1)[1]
@@ -951,10 +992,17 @@ def cmd_search(args, env, out, environ) -> int:
     query = " ".join(args.words)
     with service:
         filters = SearchFilters(exact=args.exact, every_copy=args.every_copy) if (args.exact or args.every_copy) else None
+        if args.meaning:
+            filters = replace(filters or SearchFilters(), where=WHERE_MEANING)
         page = service.search(query, max(0, args.limit), max(0, args.offset), args.sort, args.desc, filters)
         if isinstance(page, Failure):
             return _fail(page, out)
-        print_results(page, query, service, max(0, args.context), out)
+        print_results(page, query, service, max(0, args.context), out, by_meaning=args.meaning)
+        if args.meaning:
+            done, could = service.meaning_coverage()
+            if could > done:
+                safe_write(f"(Sketches of meaning cover {done:,} of {could:,} file(s) with text so far; "
+                           "`dugup meaning fill` continues.)", out)
     return 0
 
 
@@ -1343,6 +1391,19 @@ def cmd_meaning(args, env, out, environ, stop: Optional[threading.Event] = None,
         previous = signal.signal(signal.SIGINT, on_interrupt)
     try:
         with service:
+            if args.meaning_command == "status":
+                print_meaning_status(service, out)
+                return 0
+            if args.meaning_command == "fill":
+                waiting = service.meaning_waiting()
+                safe_write(f"Sketching the meaning of {waiting:,} file(s) with the {service.settings.meaning_model} model "
+                           f"({service.meaning_model()}). The model is fetched on first use. Ctrl+C stops; what is done "
+                           "is kept and the next run continues.", out)
+                report = service.run_meaning(stop, printer, args.budget, args.gpu)
+                printer.finish()
+                if isinstance(report, Failure):
+                    return _fail(report, out)
+                return print_meaning_report(report, out)
             choices = ("small", "larger") if args.model == "both" else (args.model,)
             safe_write(f"Measuring searching by meaning on {args.pieces:,} piece(s) of this index's text, with the "
                        f"{' and '.join(choices)} model(s). The models are fetched on first use (90 MB and 547 MB). "
@@ -1356,6 +1417,36 @@ def cmd_meaning(args, env, out, environ, stop: Optional[threading.Event] = None,
         if previous is not None:
             signal.signal(signal.SIGINT, previous)
     return 0
+
+
+def print_meaning_status(service, out: TextIO) -> None:
+    done, could = service.meaning_coverage()
+    share = f" ({100.0 * done / could:.0f}%)" if could else ""
+    safe_write(f"Sketches of meaning: {done:,} of {could:,} file(s) with text{share}, with {service.meaning_model()}.", out)
+    if could > done:
+        safe_write(f"{could - done:,} file(s) wait (those in folders that stop short of meaning are passed over). "
+                   "`dugup meaning fill` continues.", out)
+
+
+def print_meaning_report(report, out: TextIO) -> int:
+    """Prints a FillReport; returns the exit code."""
+    if report.failure is not None:
+        safe_write(f"Stopped early: {report.failure.detail}", out)
+    device = f" on the {report.device}" if report.device else ""
+    safe_write(f"Sketched {report.files:,} file(s), {report.pieces:,} piece(s) of text{device} in "
+               f"{format_seconds(report.seconds)} ({report.per_second:,.1f} pieces/s; the model took "
+               f"{report.load_seconds:.1f} s to load).", out)
+    if report.left_alone:
+        safe_write(f"{report.left_alone:,} file(s) were passed over: their folder stops short of meaning.", out)
+    share = f" ({100.0 * report.done / report.could:.0f}%)" if report.could else ""
+    safe_write(f"Now {report.done:,} of {report.could:,} file(s) with text have sketches{share}.", out)
+    print_compacted(report.compacted, out)
+    if report.stopped:
+        safe_write("[Interrupted] Stopped cleanly. Run `dugup meaning fill` again to continue.", out)
+        return 130
+    if report.out_of_time:
+        safe_write("Out of time for this run. Run `dugup meaning fill` again to continue.", out)
+    return 1 if report.failure is not None else 0
 
 
 def print_measurement(found, out: TextIO) -> None:

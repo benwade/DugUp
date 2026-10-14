@@ -1,6 +1,9 @@
-"""Searching by meaning: measured before it is built.
+"""Searching by meaning: sketches of every piece of text, filled in the background, and found in two stages.
 
-`measure()` takes a sample of the index's own text, makes sketches of it with one or both pinned models,
+`fill()` makes sketches (sketches.py) of the files that have none yet, the most recently changed first, and
+keeps them in the store as bytes; it can be stopped at any point and carries on from there next time.
+`model_name()` names what was stored (the model choice and how many numbers), so a change of either makes
+every file want a new sketch. `measure()` takes a sample of the index's own text, makes sketches of it with one or both pinned models,
 on the processor and (when the runtime can) on a graphics card, and reports speed, the disk a full index
 would take at each vector size, and, for questions given, what the sample finds. Nothing is stored. The
 models are fetched on request into the data folder (models/meaning), like the plain-words model.
@@ -22,6 +25,42 @@ from .shapes import Failure, FailureReason
 BATCH = 64
 LOAD_SECONDS = 600.0       # a first load reads half a gigabyte and may be on a slow disk
 BATCH_SECONDS = 300.0
+FILES_PER_STEP = 100       # files fetched from the store per step of the fill
+PIECE_CHARS = 4000         # a piece of text longer than this is sketched from its start (the model reads about 512 tokens anyway)
+
+
+def model_name(choice: str, dims: int) -> str:
+    """What a stored sketch is tagged with: the model and how many of its numbers were kept, e.g. "larger:768"."""
+    return f"{choice}:{int(dims)}"
+
+
+def dims_for(choice: str, size: str) -> int:
+    """How many numbers the sketches keep for a model choice and a size choice (embedding.SIZES); a model
+    that cannot be cut short keeps all of its own."""
+    shape = embedding.SHAPES[choice]
+    asked = embedding.SIZES.get(size, shape.dims)
+    return min(asked, shape.dims) if shape.cuttable else shape.dims
+
+
+@dataclass
+class FillReport:
+    model: str = ""
+    files: int = 0                 # files sketched in this run
+    pieces: int = 0                # pieces of text sketched
+    left_alone: int = 0            # files passed over because their folder does not ask for meaning
+    done: int = 0                  # files sketched by this model, all told, at the end
+    could: int = 0                 # files with text that could be
+    device: str = ""
+    seconds: float = 0.0
+    load_seconds: float = 0.0
+    stopped: bool = False
+    out_of_time: bool = False
+    failure: Optional[Failure] = None   # what ended the run early, when something did
+    compacted: Optional[Dict[str, int]] = None   # the index's size before and after, when it was compacted at the end
+
+    @property
+    def per_second(self) -> float:
+        return self.pieces / self.seconds if self.seconds > 0 else 0.0
 
 
 @dataclass
@@ -97,6 +136,81 @@ class _Runner:
             self.device = str(answer.get("device") or self.device)
             pieces.append(embedding.unpack(answer["vectors"], int(answer["rows"]), int(answer["dims"])))
         return np.concatenate(pieces) if pieces else np.zeros((0, dims or 1), dtype=np.float32)
+
+
+def fill(store, runner: "_Runner", choice: str, dims: int, wanted: Callable[[str], bool] = lambda path: True,
+         progress: Optional[Callable[[Progress], None]] = None, stop: Optional[StopSignal] = None,
+         budget_seconds: Optional[float] = None, timer: Callable[[], float] = time.monotonic) -> FillReport:
+    """Sketch every file with text that has no sketch by this model yet, the most recently changed first,
+    in the calling thread, until done, stopped, out of time or failed. Each file's sketches are saved as it
+    is done, so a stopped run has lost nothing. `wanted(path)` says whether a file's folder asks for meaning."""
+    import numpy as np
+    from . import sketches
+    name = model_name(choice, dims)
+    report = FillReport(model=name)
+    started = timer()
+    warm = runner.embed(["ready"], "document", dims, stop, LOAD_SECONDS)
+    if isinstance(warm, Failure):
+        report.failure, report.stopped = warm, warm.reason is FailureReason.STOPPED
+        report.done, report.could = store.sketch_counts(name)
+        return report
+    report.load_seconds = timer() - started
+    report.device = runner.device
+    started = timer()
+    done_before, total = store.sketch_counts(name)
+    after = None
+    while True:
+        if stop is not None and stop.is_set():
+            report.stopped = True
+            break
+        if budget_seconds is not None and timer() - started > budget_seconds:
+            report.out_of_time = True
+            break
+        batch = store.unsketched(name, FILES_PER_STEP, after=after)
+        if not batch:
+            break
+        for record in batch:
+            after = (record.modified, record.row_id)
+            if stop is not None and stop.is_set():
+                report.stopped = True
+                break
+            if budget_seconds is not None and timer() - started > budget_seconds:
+                report.out_of_time = True
+                break
+            if not wanted(record.path):
+                report.left_alone += 1
+                continue
+            if progress is not None:
+                progress(Progress("sketch", "", done_before + report.files, total, elapsed=timer() - started,
+                                  current=record.path))
+            pieces = store.text_of(record.row_id)
+            texts = [t[:PIECE_CHARS] for _, _, t in pieces]
+            if not texts:
+                store.save_sketches(record.row_id, name, dims, [])
+                continue
+            vectors = runner.embed(texts, "document", dims, stop)
+            if isinstance(vectors, Failure):
+                if vectors.reason is FailureReason.STOPPED:
+                    report.stopped = True
+                else:
+                    report.failure = vectors
+                break
+            if vectors.shape[0] != len(texts):
+                report.failure = Failure(FailureReason.CRASHED, f"the model gave {vectors.shape[0]} sketches for {len(texts)} pieces")
+                break
+            data, scales = sketches.quantize(vectors)
+            rows = [(seg, scales[i], data[i * dims:(i + 1) * dims], sketches.fingerprint_of(vectors[i]))
+                    for i, (seg, _, _) in enumerate(pieces)]
+            store.save_sketches(record.row_id, name, dims, rows)
+            report.files += 1
+            report.pieces += len(texts)
+        if report.stopped or report.out_of_time or report.failure is not None:
+            break
+    report.seconds = timer() - started
+    report.done, report.could = store.sketch_counts(name)
+    if progress is not None:
+        progress(Progress("sketch", "", report.done, report.could, elapsed=report.seconds))
+    return report
 
 
 def measure(store, sandbox_factory, folder: Path, choices: Sequence[str] = ("small", "larger"), pieces: int = 2000,

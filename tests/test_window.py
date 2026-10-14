@@ -8,6 +8,7 @@ import gc
 import os
 
 import pytest
+import zlib
 
 import helpers
 from corpus.images import build_png
@@ -15,7 +16,7 @@ from dugup import window as w
 from dugup.datadir import DataLayout
 from dugup.service import LocalService
 from dugup.settings import Settings
-from dugup.shapes import SearchRow, WHERE_NAME, WHERE_OCR, WHERE_TEXT
+from dugup.shapes import Failure, FailureReason, SearchRow, WHERE_NAME, WHERE_OCR, WHERE_TEXT
 from test_ocrqueue import ScriptedOcr, words
 
 
@@ -808,3 +809,69 @@ def test_a_file_kept_in_several_places_is_shown_once_with_its_places_and_every_c
     assert bench.find("needle").count("letter.txt") == 2 and bench.app.filters().every_copy is True
     bench.app.clear_filters()
     assert bench.app.every_copy.get() is False and bench.find("needle").count("letter.txt") == 1
+
+
+def test_by_meaning_is_a_where_choice_that_searches_the_sketches_and_says_how_far_they_reach(bench, monkeypatch):
+    np = pytest.importorskip("numpy")
+    from dugup.service import LocalService
+    from dugup.shapes import WHERE_MEANING
+    (bench.docs / "shifts.txt").write_text("nurses on night shifts report fatigue", encoding="utf-8")
+    (bench.docs / "garden.txt").write_text("tomatoes grow best with sun", encoding="utf-8")
+    (bench.docs / "later.txt").write_text("not sketched yet", encoding="utf-8")
+    bench.ready()
+    store = bench.app.service.store
+
+    def sketch(text):
+        v = np.zeros(768, dtype=np.float32)
+        for word in text.lower().split():
+            v[zlib.crc32(word.encode()) % 768] += 1.0
+        return v / np.linalg.norm(v)
+
+    from dugup import sketches
+    for name in ("shifts.txt", "garden.txt"):
+        record = store.get_file(str(bench.docs / name))
+        pieces = store.text_of(record.row_id)
+        vectors = np.stack([sketch(t) for _, _, t in pieces])
+        data, scales = sketches.quantize(vectors)
+        store.save_sketches(record.row_id, "larger:768", 768, [(seg, scales[i], data[i * 768:(i + 1) * 768], sketches.fingerprint_of(vectors[i]))
+                                                              for i, (seg, _, _) in enumerate(pieces)])
+    monkeypatch.setattr(LocalService, "sketch_question", lambda self, question: sketch(question))
+    bench.app.where.set("By meaning")
+    assert bench.app.filters().where == WHERE_MEANING
+    names = bench.find("fatigue and night shifts")
+    assert names[0] == "shifts.txt" and len(names) == 2
+    message = bench.app.message.get()
+    assert "closest in meaning to: fatigue and night shifts" in message and "(sketches of meaning cover 2 of " in message
+    bench.app.tree.selection_set("0")
+    bench.app.show_selected()
+    assert "nurses on night shifts report fatigue" in bench.text(bench.app.hits)
+    monkeypatch.setattr(LocalService, "sketch_question", lambda self, question: Failure(FailureReason.NOT_INSTALLED, "the larger model is not fetched yet"))
+    bench.find("tomatoes")
+    assert "could not be done: the larger model is not fetched yet" in bench.app.message.get()
+    bench.app.clear_filters()
+    assert bench.app.where.get() == "Anywhere" and bench.find("tomatoes") == ["garden.txt"]
+
+
+def test_an_update_goes_on_to_sketches_of_meaning_as_one_run_when_that_can_be_done_here(bench, monkeypatch):
+    from dugup.indexer import Progress
+    from dugup.meaning import FillReport
+    from dugup.service import LocalService
+    (bench.docs / "a.txt").write_text("some words", encoding="utf-8")
+    calls = []
+
+    def run_meaning(self, stop=None, progress=None, budget_seconds=None, gpu=None):
+        calls.append(gpu)
+        if progress is not None:
+            progress(Progress("sketch", "", 1, 1, elapsed=0.5, current=str(bench.docs / "a.txt")))
+        return FillReport(model="larger:768", files=1, pieces=1, done=1, could=1, device="processor", seconds=0.5)
+
+    monkeypatch.setattr(LocalService, "run_meaning", run_meaning)
+    bench.ready()
+    assert calls == [], "no model here: the step is left out, without a word"
+    monkeypatch.setattr(LocalService, "meaning_ready", lambda self: True)
+    (bench.docs / "b.txt").write_text("more words", encoding="utf-8")
+    bench.app.start("index")
+    bench.finish_run()
+    assert calls == [None] and "Then sketches of meaning were made:" in bench.text(bench.app.status) \
+        and "Sketched 1 file(s), 1 piece(s) of text on the processor" in bench.text(bench.app.status)
+    assert "Finished in" in bench.app.progress_text.get()

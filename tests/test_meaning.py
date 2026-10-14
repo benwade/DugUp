@@ -1,6 +1,7 @@
-"""Searching by meaning, measured: the sketches, the worker's answer, and the measurement with a stand-in model."""
+"""Searching by meaning: the sketches, the worker's answer, the fill of the index, and the measurement, with a stand-in model."""
 
 import io
+import zlib
 
 import pytest
 
@@ -23,7 +24,10 @@ def test_the_pins_are_whole_and_the_sizes_say_what_they_are():
     for choice, items in BY_CHOICE.items():
         assert len(items) == 2 and all(len(i.sha256) == 64 and i.size > 0 and i.url.startswith("https://") for i in items)
         assert embedding.SHAPES[choice].dims in (384, 768)
-    assert embedding.SIZES["full"] == 768 and embedding.SIZES["compact"] < embedding.SIZES["balanced"] < embedding.SIZES["full"]
+    assert embedding.SIZES["full"] == 768 and 96 <= embedding.SIZES["compact"] < embedding.SIZES["full"]
+    assert meaning.dims_for("larger", "compact") == 256 and meaning.dims_for("larger", "full") == 768
+    assert meaning.dims_for("small", "compact") == 384, "the small model cannot be cut short"
+    assert meaning.model_name("larger", 768) == "larger:768"
 
 
 class StandInSandbox:
@@ -45,7 +49,7 @@ class StandInSandbox:
         out = np.zeros((len(payload["texts"]), keep), dtype=np.float32)
         for row, text in enumerate(payload["texts"]):
             for word in text.lower().split():
-                out[row, hash(word) % keep] += 1.0
+                out[row, zlib.crc32(word.encode()) % keep] += 1.0
         out /= np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-9)
         packed, rows, d = embedding.pack(out)
         return {"vectors": packed, "rows": rows, "dims": d, "device": "graphics card (stand-in)" if payload["gpu"] else "processor"}
@@ -136,3 +140,186 @@ def test_the_command_prints_the_report(tmp_path, monkeypatch):
     assert code == 0, text
     assert "Sample: 1 piece(s); the whole index holds 1." in text and "pieces/s" in text and "768 numbers" in text
     assert '"budget"  with larger, 768 numbers' in text and "a.txt" in text and "(keeps" in text
+
+
+def filled_store(store, modified=None):
+    texts = [("burnout.txt", "nurses on night shifts report burnout and fatigue"),
+             ("budget.txt", "the quarterly budget memo for the department"),
+             ("garden.txt", "tomatoes grow best with sun and water"),
+             ("names only.txt", None)]
+    for i, (name, text) in enumerate(texts):
+        state = FileState.DONE if text else FileState.SKIPPED
+        row = store.upsert_file(FileRecord(f"/r/{name}", 10, float(modified[i] if modified else i), state=state))
+        if text:
+            store.replace_segments(row, [SegmentIn(1, 0, SegmentKind.TEXT, text), SegmentIn(2, 0, SegmentKind.TEXT, text + " again")])
+    return store
+
+
+def test_the_fill_sketches_the_most_recently_changed_first_passes_over_folders_that_do_not_ask_and_can_be_stopped(tmp_path):
+    import threading
+    store = filled_store(SqliteStore(tmp_path / "index.sqlite"))
+    runner = meaning._Runner(StandInSandbox(), tmp_path, "larger", False)
+    told = []
+    report = meaning.fill(store, runner, "larger", 256, wanted=lambda p: "budget" not in p, progress=told.append)
+    assert (report.model, report.files, report.pieces, report.left_alone, report.done, report.could) == ("larger:256", 2, 4, 1, 2, 3)
+    assert report.device == "processor" and report.failure is None and not report.stopped
+    assert [p.current for p in told if p.current] == ["/r/garden.txt", "/r/burnout.txt"], "most recently changed first; budget passed over"
+    assert told[-1].phase == "sketch" and (told[-1].done, told[-1].total) == (2, 3)
+    ids, prints = store.fingerprints("larger:256")
+    assert prints.shape == (4, 96) and all(v[1] == 256 for v in store.sketches_of(list(ids)).values())
+    # the folder now asks: the next run takes only what is left
+    again = meaning.fill(store, runner, "larger", 256)
+    assert (again.files, again.left_alone, again.done) == (1, 0, 3) and meaning.fill(store, runner, "larger", 256).files == 0
+    # another size is another model: everything wants a sketch again, and a stop after the first file keeps that one
+    stop = threading.Event()
+
+    class StopAfterOne(StandInSandbox):
+        def run(self, job, payload, limits, stop=None):
+            answer = super().run(job, payload, limits, stop)
+            if payload["texts"] != ["ready"]:       # the warm-up does not count
+                stop.set()
+            return answer
+
+    halted = meaning.fill(store, meaning._Runner(StopAfterOne(), tmp_path, "larger", False), "larger", 768, stop=stop)
+    assert halted.stopped and halted.files == 1 and store.sketch_counts("larger:768") == (1, 3)
+    assert store.sketch_counts("larger:256") == (2, 3), "the file now sketched at full size no longer counts for compact"
+    clock = [0.0]
+
+    def timer():
+        clock[0] += 10.0
+        return clock[0]
+
+    out_of_time = meaning.fill(store, meaning._Runner(StandInSandbox(), tmp_path, "larger", False), "larger", 768,
+                               budget_seconds=5.0, timer=timer)
+    assert out_of_time.out_of_time and out_of_time.files == 0
+
+    class Broken(StandInSandbox):
+        def run(self, job, payload, limits, stop=None):
+            return Failure(FailureReason.CRASHED, "the worker died")
+
+    failed = meaning.fill(store, meaning._Runner(Broken(), tmp_path, "larger", False), "larger", 768)
+    assert failed.failure is not None and failed.failure.reason is FailureReason.CRASHED and failed.files == 0
+
+
+def test_the_fill_command_and_status_and_the_index_run_goes_on_to_sketch(tmp_path, monkeypatch):
+    from dugup import cli
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    data = tmp_path / "data"
+    data.mkdir()
+    with LocalService(DataLayout(data).ensure()) as svc:
+        filled_store(svc.store)
+        folder = data / "models" / "meaning"
+        folder.mkdir(parents=True)
+        for items in BY_CHOICE.values():
+            for item in items:
+                (folder / item.name).write_bytes(b"stand-in")
+    monkeypatch.setattr("dugup.sandbox.SubprocessSandbox", StandInSandbox)
+    monkeypatch.setattr(LocalService, "meaning_ready", lambda self: True)      # the runtime need not be installed here
+    out = io.StringIO()
+    assert cli.main(["meaning", "status", "--data-dir", str(data)], stdout=out) == 0
+    assert "Sketches of meaning: 0 of 3 file(s) with text (0%), with larger:768." in out.getvalue()
+    out = io.StringIO()
+    code = cli.main(["meaning", "fill", "--no-gpu", "--data-dir", str(data)], stdout=out)
+    text = out.getvalue()
+    assert code == 0, text
+    assert "Sketching the meaning of 3 file(s) with the larger model (larger:768)." in text
+    assert "Sketched 3 file(s), 6 piece(s) of text on the processor" in text and "Now 3 of 3 file(s) with text have sketches (100%)." in text
+    out = io.StringIO()
+    assert cli.main(["meaning", "status", "--data-dir", str(data)], stdout=out) == 0 and "3 of 3" in out.getvalue()
+    # a settings change makes everything want a new sketch, and `dugup index` goes on to it by itself
+    out = io.StringIO()
+    assert cli.main(["config", "set", "meaning_size", "compact", "--data-dir", str(data)], stdout=out) == 0, out.getvalue()
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "note.txt").write_text("a note about the garden", encoding="utf-8")
+    assert cli.main(["roots", "add", str(root), "--data-dir", str(data)], stdout=io.StringIO()) == 0
+    out = io.StringIO()
+    code = cli.main(["index", "--no-ocr", "--data-dir", str(data)], stdout=out)
+    text = out.getvalue()
+    assert "Now sketching the meaning of 4 file(s)" in text and "Now 4 of 4 file(s) with text have sketches" in text, text
+    out = io.StringIO()
+    cli.main(["index", "--no-ocr", "--data-dir", str(data)], stdout=out)
+    assert "Now sketching" not in out.getvalue(), "nothing waits: the step is left out"
+    out = io.StringIO()
+    assert cli.main(["config", "set", "meaning_after_index", "false", "--data-dir", str(data)], stdout=out) == 0, out.getvalue()
+    assert cli.main(["config", "set", "meaning_size", "full", "--data-dir", str(data)], stdout=out) == 0
+    out = io.StringIO()
+    cli.main(["index", "--no-ocr", "--data-dir", str(data)], stdout=out)
+    assert "Now sketching" not in out.getvalue(), "the setting leaves the step out"
+
+
+def test_an_index_run_does_not_fetch_the_model_by_itself(tmp_path):
+    from dugup import cli
+    data = tmp_path / "data"
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "note.txt").write_text("a note", encoding="utf-8")
+    assert cli.main(["roots", "add", str(root), "--data-dir", str(data)], stdout=io.StringIO()) == 0
+    out = io.StringIO()
+    assert cli.main(["index", "--no-ocr", "--data-dir", str(data)], stdout=out) == 0
+    text = out.getvalue()
+    assert "Sketches of meaning were not made:" in text and ("not fetched yet" in text or "not installed" in text), text
+
+
+def test_searching_by_meaning_goes_through_the_same_search_and_the_command_says_how_far_the_sketches_reach(tmp_path, monkeypatch):
+    from dugup import cli
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.shapes import SearchFilters, WHERE_MEANING
+    data = tmp_path / "data"
+    data.mkdir()
+    with LocalService(DataLayout(data).ensure()) as svc:
+        filled_store(svc.store)
+        row = svc.store.upsert_file(FileRecord("/r/late.txt", 10, 99.0, state=FileState.DONE))
+        svc.store.replace_segments(row, [SegmentIn(0, 1, SegmentKind.TEXT, "unsketched so far")])
+        folder = data / "models" / "meaning"
+        folder.mkdir(parents=True)
+        for item in BY_CHOICE["larger"]:
+            (folder / item.name).write_bytes(b"stand-in")
+    monkeypatch.setattr("dugup.sandbox.SubprocessSandbox", StandInSandbox)
+    monkeypatch.setattr(LocalService, "meaning_ready", lambda self: True)
+    with LocalService(DataLayout(data).ensure()) as svc:
+        # nothing sketched yet: an honest empty page, not a failure
+        page = svc.search("night shifts", filters=SearchFilters(where=WHERE_MEANING))
+        assert page.total == 0 and page.rows == []
+        report = svc.run_meaning(budget_seconds=None, gpu=False)
+        assert report.files == 4 and svc.meaning_coverage() == (4, 4)
+        page = svc.search("fatigue on night shifts", filters=SearchFilters(where=WHERE_MEANING))
+        assert page.rows[0].path == "/r/burnout.txt" and page.rows[0].rank > page.rows[-1].rank
+        assert svc.get_evidence(page.rows[0].evidence[0], 80).text.startswith("nurses on night shifts")
+        asker = svc._asker
+        assert svc.search("tomatoes", filters=SearchFilters(where=WHERE_MEANING)).rows[0].path == "/r/garden.txt"
+        assert svc._asker is asker, "the worker that sketches questions is kept between searches"
+        # a word search is untouched
+        assert svc.search("tomatoes").rows[0].path == "/r/garden.txt"
+    out = io.StringIO()
+    code = cli.main(["search", "--meaning", "nurses and burnout", "--limit", "2", "--data-dir", str(data)], stdout=out)
+    text = out.getvalue()
+    assert code == 0, text
+    assert "closest in meaning to: nurses and burnout" in text and "burnout.txt  (" in text, text
+    assert "p.1: nurses on night shifts report burnout" in text, "the passage from its start, nothing marked"
+    assert "More: add --offset 2" in text and "Sketches of meaning cover" not in text, "everything is sketched: no coverage line"
+    with LocalService(DataLayout(data).ensure()) as svc:
+        row = svc.store.upsert_file(FileRecord("/r/newer.txt", 10, 100.0, state=FileState.DONE))
+        svc.store.replace_segments(row, [SegmentIn(0, 1, SegmentKind.TEXT, "newer still")])
+    out = io.StringIO()
+    cli.main(["search", "--meaning", "nurses", "--data-dir", str(data)], stdout=out)
+    assert "(Sketches of meaning cover 4 of 5 file(s) with text so far; `dugup meaning fill` continues.)" in out.getvalue()
+
+
+def test_searching_by_meaning_without_the_runtime_or_the_model_says_what_is_missing(tmp_path):
+    from dugup import cli
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.shapes import SearchFilters, WHERE_MEANING
+    data = tmp_path / "data"
+    data.mkdir()
+    with LocalService(DataLayout(data).ensure()) as svc:
+        filled_store(svc.store)
+        page = svc.search("anything", filters=SearchFilters(where=WHERE_MEANING))
+        assert isinstance(page, Failure) and page.reason is FailureReason.NOT_INSTALLED
+        assert "not fetched yet" in page.detail or "not installed" in page.detail
+    out = io.StringIO()
+    assert cli.main(["search", "--meaning", "anything", "--data-dir", str(data)], stdout=out) == 1
+    assert "Could not do that" in out.getvalue()
