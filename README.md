@@ -230,6 +230,11 @@ default; `meaning_model = "small"` chooses the 90 MB one, about seven times fast
   ("I", "the", or whatever your own files say on every page: `meaning_word_everywhere`, 0.3 of the passages)
   is not looked for at all, so a plain question is not held to its filler. The command says which words
   were set aside.
+- **In the window.** The model that reads your question is loaded in the background as the window opens,
+  so the first search by meaning does not wait for it (`meaning_warm_up`: `auto` does this only when the
+  index holds sketches; `yes` always; `never` keeps the 600 MB of memory for a wait on first use instead). A
+  search pressed before it is done shows a small wait window with a Stop; the model goes on loading either
+  way. The question is sketched off the window's own thread, so the window never freezes for it.
 - **How it finds them.** Two stages: the first 96 numbers of every sketch are scanned at once (a few tens of
   milliseconds for a quarter of a million passages) to pick the 800 likeliest files, a few passages each,
   and those are scored by their full sketches. A file with many pages near the question takes a few
