@@ -367,8 +367,15 @@ class Store(Protocol):
     def closeness_of_files(self, question, model: str, file_ids: Sequence[int]) -> Mapping[int, Tuple[float, int]]:
         """file id -> (closeness of its closest piece to the question, that segment id); files with no sketch left out."""
 
+    def word_shares(self, words: Sequence[str]) -> Mapping[str, float]:
+        """word -> share of the index's pieces that contain it (0 to 1), as the index counts (stemmed, folded)."""
+
+    def telling_words(self, query: str, everywhere: float = 0.3) -> Sequence[str]:
+        """The question's phrases, and its words found in fewer than `everywhere` of the pieces."""
+
     def search_both(self, query: str, question, model: str, limit: int = 100, offset: int = 0,
-                    filters: Optional[SearchFilters] = None, word_weight: float = 0.5, word_pool: int = 2000) -> SearchPage:
+                    filters: Optional[SearchFilters] = None, word_weight: float = 0.5, word_pool: int = 2000,
+                    everywhere: float = 0.3) -> SearchPage:
         """Words and meaning together: closeness plus `word_weight` times the file's share of the best word
         score; one row per file, closest first; word evidence first, then the closest passage by meaning."""
 

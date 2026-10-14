@@ -1000,6 +1000,13 @@ def cmd_search(args, env, out, environ) -> int:
         if isinstance(page, Failure):
             return _fail(page, out)
         print_results(page, query, service, max(0, args.context), out, by_meaning=args.meaning or args.both, both=args.both)
+        if args.both:
+            from .store import parse_query
+            telling = list(service.store.telling_words(query, service.settings.meaning_word_everywhere))
+            aside = [t for t in parse_query(query) if t not in telling]
+            if aside:
+                safe_write("(Words found nearly everywhere in the index were not looked for: " + ", ".join(aside)
+                           + (". Looked for: " + ", ".join(telling) if telling else ". The meaning alone was used") + ".)", out)
         if args.meaning or args.both:
             done, could = service.meaning_coverage()
             if could > done:

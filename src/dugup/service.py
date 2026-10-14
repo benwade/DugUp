@@ -178,7 +178,8 @@ class LocalService:
                     return question
                 if filters.where == WHERE_BOTH:
                     page = self.store.search_both(query, question, self.meaning_model(), limit, offset, filters,
-                                                  self.settings.meaning_word_weight, self.settings.meaning_word_pool)
+                                                  self.settings.meaning_word_weight, self.settings.meaning_word_pool,
+                                                  self.settings.meaning_word_everywhere)
                 else:
                     page = self.store.search_meaning(question, self.meaning_model(), limit, offset, filters)
             else:

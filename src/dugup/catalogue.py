@@ -177,6 +177,12 @@ def _entries() -> Tuple[Entry, ...]:
         E("meaning_word_pool", "meaning", "Words and meaning: how many word matches",
           "How many of the best word matches are brought into a \"Words and meaning\" search.",
           low=1, high=100000, unit="files"),
+        E("meaning_word_everywhere", "meaning", "Words and meaning: words found everywhere",
+          "A word of the question that at least this share of the index's passages contain is not looked for "
+          "(\"a\", \"the\", \"I\", and whatever your own files say on nearly every page). 0 looks for every word.",
+          why="A plain question has filler words in it. Requiring them would let a file miss its bonus for want "
+              "of the letter \"I\"; counting them would reward nothing in particular.",
+          low=0.0, high=1.0),
         E("meaning_after_index", "meaning", "Sketch as part of updating",
           "Updating the index goes on to sketch what is new, after reading pictures.",
           why="One button does it all. Turn it off to sketch at a time of your choosing with `dugup meaning fill`.",

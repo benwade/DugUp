@@ -181,7 +181,7 @@ def test_words_and_meaning_together_let_a_name_count_without_drowning_the_sense(
         sketched(store, named, np.stack([near(0.6), near(0.1)]))
         sketched(store, wordy, np.stack([near(0.0)]))
         page = store.search_both("ezdrive", question, "larger:768", word_weight=0.5)
-        order = [r.path for r in page.rows]
+        order = [r.path for r in page.rows]      # a small index: no word is set aside
         assert page.total == 4 and order[0] in ("/r/named.txt",), order
         assert set(order[:2]) == {"/r/named.txt", "/r/sense.txt"}, "the named file and the close one lead; the word-only files follow"
         assert order[-1] == "/r/plain.txt", "no sketch and one mention: last, but there"
@@ -199,3 +199,33 @@ def test_words_and_meaning_together_let_a_name_count_without_drowning_the_sense(
         only = store.search_both("ezdrive", question, "larger:768", filters=SearchFilters(where=WHERE_BOTH, modified_after=25.0))
         assert {r.path for r in only.rows} == {"/r/wordy.txt", "/r/plain.txt"}
         assert [r.path for r in store.search_both("nothingness", question, "larger:768").rows][0] == "/r/sense.txt"
+
+
+def test_words_found_everywhere_are_not_looked_for_and_any_telling_word_earns_a_bonus(tmp_path):
+    from dugup.store import EVERYWHERE_MIN_PIECES
+    with SqliteStore(tmp_path / "index.sqlite") as store:
+        # a small index sets no word aside
+        row = store.upsert_file(FileRecord("/r/one.txt", 5, 1.0, state=FileState.DONE))
+        store.replace_segments(row, [SegmentIn(0, 1, SegmentKind.TEXT, "I paid the fee online")])
+        assert store.telling_words("I paid online") == ["I", "paid", "online"]
+        # a big one: "I" and "the" are in nearly every piece, "receipt" in a few; stems count as one word
+        for n in range(EVERYWHERE_MIN_PIECES):
+            r = store.upsert_file(FileRecord(f"/r/f{n}.txt", 5, 2.0, state=FileState.DONE))
+            store.replace_segments(r, [SegmentIn(0, 1, SegmentKind.TEXT, "I wrote the note" + (" receipt paid" if n % 20 == 0 else ""))])
+        shares = store.word_shares(["I", "the", "receipt", "receipts", "nowhere", "a phrase"])
+        assert shares["I"] > 0.9 and shares["the"] > 0.9 and 0.03 < shares["receipt"] < 0.1 and shares["nowhere"] == 0.0
+        assert shares["receipts"] == shares["receipt"], "receipts, receipt: one stem"
+        assert shares["a phrase"] == 0.0
+        assert store.telling_words('I paid the "exact phrase" online for a receipt') == ["paid", "exact phrase", "online", "for", "a", "receipt"]
+        assert store.telling_words("I wrote the note") == [] and store.telling_words("I wrote the note", everywhere=0) == ["I", "wrote", "the", "note"]
+        # any of the telling words earns the bonus: a file with "receipt" but not "online" is found by the words
+        v = unit(1, 768, 3)
+        for path in ("/r/f0.txt", "/r/f20.txt"):
+            sketched(store, store.get_file(path).row_id, v)
+        page = store.search_both("I paid online for a receipt", v[0], "larger:768")
+        assert page.rows[0].matches >= 1 and page.rows[0].path in ("/r/f0.txt", "/r/f20.txt")
+        hit = {f"/r/f{n}.txt" for n in range(0, 200, 20)} | {"/r/one.txt"}       # "receipt paid", or "paid ... online"
+        assert all((r.matches > 0) == (r.path in hit) for r in page.rows)
+        # a question of nothing but everyday words is meaning alone
+        alone = store.search_both("I wrote the note", v[0], "larger:768")
+        assert alone.total == 2 and all(r.matches == 0 for r in alone.rows)

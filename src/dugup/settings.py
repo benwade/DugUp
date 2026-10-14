@@ -107,6 +107,7 @@ class Settings:
     meaning_after_index: bool = True       # updating the index goes on to sketch what is new, after OCR
     meaning_word_weight: float = 0.5       # "Words and meaning": the most a word match may add to a file's closeness (the best word match adds this much)
     meaning_word_pool: int = 2000          # "Words and meaning": how many of the best word matches are combined with the meaning
+    meaning_word_everywhere: float = 0.3   # "Words and meaning": a word in at least this share of the index's pieces is not looked for (0: look for every word)
     # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
     book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
     book_folder_level: str = "names"       # what a folder with such a name starts at; "" makes no guess about books
@@ -186,6 +187,8 @@ def validate(s: Settings) -> List[str]:
         problems.append("meaning_word_weight must not be negative")
     if s.meaning_word_pool < 1:
         problems.append("meaning_word_pool must be at least 1")
+    if not 0 <= s.meaning_word_everywhere <= 1:
+        problems.append("meaning_word_everywhere must be between 0 and 1")
     if s.ocr_fast_readers < 0 or s.ocr_reader_threads < 1 or s.ocr_reader_memory_mb < 0:
         problems.append("ocr_fast_readers and ocr_reader_memory_mb must not be negative, and ocr_reader_threads must be at least 1")
     if s.missing_retention_days < 0:

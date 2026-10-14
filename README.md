@@ -221,7 +221,11 @@ default; `meaning_model = "small"` chooses the 90 MB one, about seven times fast
   word match adds `meaning_word_weight` (0.5 by default), weaker ones less in proportion, so a name in the
   question lifts its file without letting a word match outrank a strong meaning on its own. A file found by
   only one side still appears, scored by that side. The weight is yours to set: 0 is meaning alone, above 1
-  and the words rule; `meaning_word_pool` says how many word matches are brought in.
+  and the words rule; `meaning_word_pool` says how many word matches are brought in. The word side looks
+  for any of the question's telling words, not all of them, and a word the index holds nearly everywhere
+  ("I", "the", or whatever your own files say on every page: `meaning_word_everywhere`, 0.3 of the passages)
+  is not looked for at all, so a plain question is not held to its filler. The command says which words
+  were set aside.
 - **How it finds them.** Two stages: the first 96 numbers of every sketch are scanned at once (a few tens of
   milliseconds for a quarter of a million passages) to pick the 800 likeliest files, a few passages each,
   and those are scored by their full sketches. A file with many pages near the question takes a few

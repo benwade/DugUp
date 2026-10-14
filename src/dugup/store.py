@@ -26,6 +26,7 @@ from .shapes import (WHERE_ANYWHERE, WHERE_BOTH, WHERE_MEANING, WHERE_NAME, WHER
 __all__ = ["SqliteStore", "StoreError", "StoreVersionError", "SearchPage", "SearchRow", "SORT_COLUMNS",
            "MIGRATIONS", "TOKENIZER", "build_match", "encode_path", "decode_path", "fts5_available"]
 
+EVERYWHERE_MIN_PIECES = 200   # below this many pieces, no word of a question is set aside as found everywhere
 TOKENIZER = "porter unicode61 remove_diacritics 2 categories 'L* N* Co M*'"
 # For choosing which of several copies to show: a path that says backup, and how deep a path lies.
 _BACKUP_SQL = "(f.path LIKE '%backup%' OR f.path LIKE '%- copy%' OR f.path LIKE '%copy of %' OR f.path LIKE '%(copy)%')"
@@ -1236,6 +1237,31 @@ class SqliteStore:
                 row.also_at = tuple(others.get(row.file_id, ()))
         return SearchPage(rows, len(ordered), offset, limit)
 
+    def word_shares(self, words: Sequence[str]) -> Dict[str, float]:
+        """For each word, the share of the index's pieces of text (names aside) that contain it, 0 to 1, as
+        the index itself counts them (stemmed and folded, so "paid" and "pay" are one word). A phrase, or a
+        word the index has never seen, is 0."""
+        found: Dict[str, float] = {}
+        pieces = self.conn.execute("SELECT COUNT(*) FROM segments WHERE kind != 'name'").fetchone()[0]
+        if not pieces:
+            return {w: 0.0 for w in words}
+        self.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.stems USING fts5(w, tokenize=\"" + TOKENIZER + "\")")
+        self.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.stems_vocab USING fts5vocab('temp', 'stems', 'row')")
+        self.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.fts_vocab USING fts5vocab('main', 'fts', 'col')")
+        for word in words:
+            if " " in word.strip() or not word.strip():
+                found[word] = 0.0
+                continue
+            self.conn.execute("DELETE FROM temp.stems")
+            self.conn.execute("INSERT INTO temp.stems(w) VALUES (?)", (word,))
+            stems = [r[0] for r in self.conn.execute("SELECT term FROM temp.stems_vocab")]
+            if len(stems) != 1:            # the tokenizer made no word of it, or several: not one word
+                found[word] = 0.0
+                continue
+            row = self.conn.execute("SELECT doc FROM temp.fts_vocab WHERE term=? AND col='body'", (stems[0],)).fetchone()
+            found[word] = min(1.0, (row[0] if row else 0) / pieces)
+        return found
+
     def closeness_of_files(self, question, model: str, file_ids: Sequence[int]) -> Dict[int, Tuple[float, int]]:
         """For each of these files, how close its closest piece is to the question: file id -> (closeness,
         segment id). A file with no sketch by this model is left out."""
@@ -1260,17 +1286,35 @@ class SqliteStore:
                     found[r[1]] = (float(score), r[0])
         return found
 
+    def telling_words(self, query: str, everywhere: float = 0.3) -> List[str]:
+        """The terms of a question that are worth looking for: phrases typed in quotes always, and words that
+        fewer than `everywhere` of the index's pieces contain. "I", "a" and "the" go; so does any word the
+        index holds nearly everywhere. 0 or less keeps every word."""
+        terms = parse_query(query)
+        if everywhere <= 0 or self.conn.execute("SELECT COUNT(*) FROM segments WHERE kind != 'name'").fetchone()[0] < EVERYWHERE_MIN_PIECES:
+            return terms          # a small index has no "everywhere" worth the name: every word counts
+        shares = self.word_shares([t for t in terms if " " not in t])
+        return [t for t in terms if " " in t or shares.get(t, 0.0) < everywhere]
+
     def search_both(self, query: str, question, model: str, limit: int = 100, offset: int = 0,
-                    filters: Optional[SearchFilters] = None, word_weight: float = 0.5, word_pool: int = 2000) -> SearchPage:
-        """The words and the meaning together. The best `word_pool` word matches (anywhere) and the likeliest
-        files by meaning are put on one footing: each file's closeness in meaning (0 to 1; its own sketches
-        are scored even when the meaning stage did not pick it) plus `word_weight` times its share of the
-        best word score (the best word match counts 1, a file with no word match 0). One row per file,
-        closest first; `rank` is that sum; the word evidence first, then the closest passage by meaning."""
+                    filters: Optional[SearchFilters] = None, word_weight: float = 0.5, word_pool: int = 2000,
+                    everywhere: float = 0.3) -> SearchPage:
+        """The words and the meaning together. The question's telling words (telling_words: not the ones
+        found nearly everywhere) are looked for, any of them, and the best `word_pool` such files and the
+        likeliest files by meaning are put on one footing: each file's closeness in meaning (0 to 1; its own
+        sketches are scored even when the meaning stage did not pick it) plus `word_weight` times its share
+        of the best word score (the best word match counts 1, a file with no word match 0). One row per
+        file, closest first; `rank` is that sum; the word evidence first, then the closest passage by meaning.
+        A question with no telling words is meaning alone."""
         if limit < 0 or offset < 0:
             raise ValueError("limit and offset must not be negative")
         word_filters = replace(filters, where=WHERE_ANYWHERE) if filters is not None else None
-        words = self.search_words(query, max(1, word_pool), 0, "rank", False, word_filters)
+        telling = self.telling_words(query, everywhere)
+        if telling:
+            words = self.search_words(" ".join(_quoted(t) if " " in t else t for t in telling), max(1, word_pool), 0,
+                                      "rank", False, word_filters, match=" OR ".join(_quoted(t) for t in telling))
+        else:
+            words = SearchPage([], 0, 0, 0)
         by_meaning = self.search_meaning(question, model, sketches_module().CANDIDATES, 0, filters)
         meaning_rows = {r.file_id: r for r in by_meaning.rows}
         word_rows = {r.file_id: r for r in words.rows}
@@ -1367,11 +1411,13 @@ class SqliteStore:
         return match, seg, seg_args, "".join(f" AND {c}" for c in clauses), args, terms
 
     def search_words(self, query: str, limit: int = 100, offset: int = 0,
-                     sort="rank", descending: bool = False, filters: Optional[SearchFilters] = None) -> SearchPage:
+                     sort="rank", descending: bool = False, filters: Optional[SearchFilters] = None,
+                     match: Optional[str] = None) -> SearchPage:
+        """`match`: an FTS5 match to use instead of the one built from `query` (search_both's any-of-these)."""
         keys = sort_keys(sort, descending, SORT_COLUMNS)
         if limit < 0 or offset < 0:
             raise ValueError("limit and offset must not be negative")
-        match = build_match(query)
+        match = match if match is not None else build_match(query)
         if match is None:
             return SearchPage([], 0, offset, limit)
         match, seg_clause, seg_args, file_clause, file_args, terms = self._narrow(match, filters, query)

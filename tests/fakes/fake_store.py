@@ -287,11 +287,37 @@ class FakeStore:
                     found[file_id] = (score, seg)
         return found
 
-    def search_both(self, query, question, model, limit=100, offset=0, filters=None, word_weight=0.5, word_pool=2000):
+    def word_shares(self, words):
+        from dugup.store import parse_query
+        pieces = sum(1 for v in self.segments.values() for seg in v if seg.kind is not SegmentKind.NAME)
+        found = {}
+        for w in words:
+            if " " in w.strip() or not pieces:
+                found[w] = 0.0
+                continue
+            folded = w.casefold()
+            holding = sum(1 for segs in self.segments.values() for seg in segs
+                          if seg.kind is not SegmentKind.NAME and folded in seg.text.casefold().split())
+            found[w] = holding / pieces
+        return found
+
+    def telling_words(self, query, everywhere=0.3):
+        from dugup.store import parse_query
+        from dugup.store import EVERYWHERE_MIN_PIECES
+        terms = parse_query(query)
+        if everywhere <= 0 or sum(1 for v in self.segments.values() for seg in v if seg.kind is not SegmentKind.NAME) < EVERYWHERE_MIN_PIECES:
+            return terms
+        shares = self.word_shares([t for t in terms if " " not in t])
+        return [t for t in terms if " " in t or shares.get(t, 0.0) < everywhere]
+
+    def search_both(self, query, question, model, limit=100, offset=0, filters=None, word_weight=0.5, word_pool=2000,
+                    everywhere=0.3):
         from dataclasses import replace as _replace
         from dugup.shapes import WHERE_ANYWHERE
-        words = self.search_words(query, max(1, word_pool), 0, "rank", False,
-                                  _replace(filters, where=WHERE_ANYWHERE) if filters is not None else None)
+        telling = self.telling_words(query, everywhere)
+        words = self.search_words(" ".join(telling), max(1, word_pool), 0, "rank", False,
+                                  _replace(filters, where=WHERE_ANYWHERE) if filters is not None else None) if telling \
+            else SearchPage([], 0, 0, 0)
         meaning = self.search_meaning(question, model, 800, 0, filters)
         word_rows = {r.file_id: r for r in words.rows}
         meaning_rows = {r.file_id: r for r in meaning.rows}
