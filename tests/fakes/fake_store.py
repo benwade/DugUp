@@ -254,7 +254,7 @@ class FakeStore:
             else np.zeros((0, FINGERPRINT), dtype=np.int8)
         return ids, files, matrix
 
-    def search_meaning(self, question, model, limit=100, offset=0, filters=None, candidates=None):
+    def search_meaning(self, question, model, limit=100, offset=0, filters=None, candidates=None, sort="rank", descending=False):
         import numpy as np
         from dugup.sketches import closeness, dequantize
         sk = self._sk()
@@ -311,7 +311,7 @@ class FakeStore:
         return [t for t in terms if " " in t or shares.get(t, 0.0) < everywhere]
 
     def search_both(self, query, question, model, limit=100, offset=0, filters=None, word_weight=0.5, word_pool=2000,
-                    everywhere=0.3):
+                    everywhere=0.3, sort="rank", descending=False):
         from dataclasses import replace as _replace
         from dugup.shapes import WHERE_ANYWHERE
         telling = self.telling_words(query, everywhere)

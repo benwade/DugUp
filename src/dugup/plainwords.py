@@ -183,6 +183,18 @@ def read(text: str, folders: Sequence[str] = (), today: Optional[datetime.date] 
         notes.append("the dates are in the wrong order, so they were left out")
         after = before = ""
 
+    # an order: "most recent", "newest", "latest", "oldest", "biggest" are not words to look for
+    sort = ""
+    if s.take(r"(?:the\s+)?(?:most\s+recent(?:ly)?(?:\s+(?:changed|modified|edited|saved|updated))?|newest|latest|"
+              r"(?:most\s+)?recent(?:ly)?(?:\s+(?:changed|modified|edited|saved|updated))?)(?:\s+(?:version|copy|one|ones))?"):
+        sort = "newest"
+    elif s.take(r"(?:the\s+)?(?:oldest|earliest|first)(?:\s+(?:version|copy|one|ones))?"):
+        sort = "oldest"
+    elif s.take(r"(?:the\s+)?(?:biggest|largest)(?:\s+(?:version|copy|one|ones|files?))?") and not (smallest or largest):
+        sort = "largest"
+    elif s.take(r"(?:the\s+)?(?:smallest|tiniest)(?:\s+(?:version|copy|one|ones|files?))?") and not (smallest or largest):
+        sort = "smallest"
+
     # kinds of file
     kinds: List[str] = []
     for kind, pattern in KIND_WORDS:
@@ -217,7 +229,7 @@ def read(text: str, folders: Sequence[str] = (), today: Optional[datetime.date] 
             words.append(bare)
     if not words:
         notes.append("no words to look for were found in the sentence")
-    return Understood(" ".join(words), folder, where, tuple(kinds), after, before, smallest, largest, exact, tuple(notes))
+    return Understood(" ".join(words), folder, where, tuple(kinds), after, before, smallest, largest, exact, tuple(notes), sort)
 
 
 class RuleReader:

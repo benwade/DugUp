@@ -249,3 +249,28 @@ def test_a_filtered_meaning_search_scans_only_the_files_inside_the_filter(tmp_pa
         page = store.search_meaning(question, "larger:768", filters=SearchFilters(folder="/in"), candidates=10)
         assert [r.path for r in page.rows] == ["/in/only.txt"] and page.total == 1, "the filter narrows the scan, not just the answer"
         assert store.search_meaning(question, "larger:768", filters=SearchFilters(folder="/nowhere"), candidates=10).total == 0
+
+
+def test_a_meaning_search_can_be_ordered_like_a_word_search_the_score_still_choosing_what_is_found(tmp_path):
+    with SqliteStore(tmp_path / "index.sqlite") as store:
+        question = unit(1, 768, 31)[0]
+        far = unit(1, 768, 32)[0]
+        rows = {}
+        for name, when, w in (("a.txt", 30.0, 0.6), ("b.txt", 10.0, 0.9), ("c.txt", 20.0, 0.3)):
+            r = store.upsert_file(FileRecord(f"/r/{name}", len(name), when, state=FileState.DONE))
+            store.replace_segments(r, [SegmentIn(0, 1, SegmentKind.TEXT, name)])
+            v = w * question + (1 - w) * far
+            sketched(store, r, (v / np.linalg.norm(v))[None, :])
+            rows[name] = r
+        best = [r.name for r in store.search_meaning(question, "larger:768").rows]
+        assert best == ["b.txt", "a.txt", "c.txt"]
+        newest = [r.name for r in store.search_meaning(question, "larger:768", sort="modified", descending=True).rows]
+        assert newest == ["a.txt", "c.txt", "b.txt"]
+        by_name = [r.name for r in store.search_meaning(question, "larger:768", sort=[("name", False)]).rows]
+        assert by_name == ["a.txt", "b.txt", "c.txt"]
+        page = store.search_meaning(question, "larger:768", sort="modified", descending=True, limit=1, offset=1)
+        assert [r.name for r in page.rows] == ["c.txt"] and page.total == 3
+        both = [r.name for r in store.search_both("nothing", question, "larger:768", sort="modified", descending=False).rows]
+        assert both == ["b.txt", "c.txt", "a.txt"]
+        with pytest.raises(ValueError):
+            store.search_meaning(question, "larger:768", sort="colour")

@@ -96,9 +96,12 @@ class Understood:
     largest: str = ""
     exact: bool = False
     notes: Tuple[str, ...] = ()
+    sort: str = ""                     # "newest", "oldest", "largest", "smallest", or "" for best match first
 
     def describe(self) -> str:
         parts = [f"words: {self.words}" if self.words else "no words"]
+        if self.sort:
+            parts.append(f"{self.sort} first")
         if self.kinds:
             parts.append("types: " + ", ".join(self.kinds))
         if self.where != WHERE_ANYWHERE:

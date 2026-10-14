@@ -458,7 +458,18 @@ class App:
         self.clear_filters()
         self.words.set(answer.words)
         self.folder.set(answer.folder or ALL_FOLDERS)
-        self.where.set(next((label for label, value in WHERE_LABELS if value == answer.where), WHERE_LABELS[0][0]))
+        where = answer.where
+        if where == WHERE_ANYWHERE and self.meaning_in_use():
+            where = WHERE_BOTH          # a sentence is what "Words and meaning" is for, once there are sketches
+        self.where.set(next((label for label, value in WHERE_LABELS if value == where), WHERE_LABELS[0][0]))
+        self.order.reset()
+        if answer.sort:
+            key, down = {"newest": ("modified", True), "oldest": ("modified", False),
+                         "largest": ("size", True), "smallest": ("size", False)}[answer.sort]
+            self.order.keys = [(key, down)]
+        self.order_text.set(self.order.describe())
+        for column, title, _ in COLUMNS:
+            self.tree.heading(column, text=title + self.order.mark(column))
         for value, variable in self.kinds.items():
             variable.set(not answer.kinds or value in answer.kinds)    # type: ignore[attr-defined]
         self.after_day.set(answer.after)
@@ -469,6 +480,13 @@ class App:
         doubts = f" Not used: {'; '.join(answer.notes)}." if answer.notes else ""
         self.say(f"Filled in: {answer.describe()}.{doubts} Check the form, then press Enter to search.")
         self.words_entry.focus_set()
+
+    def meaning_in_use(self) -> bool:
+        """Whether the index holds sketches of meaning, so a search by meaning has something to find."""
+        try:
+            return self.service.meaning_coverage()[0] > 0
+        except Exception:
+            return False
 
     def warm_up_meaning(self) -> None:
         """Load the model that reads questions in the background (setting meaning_warm_up), so that the first

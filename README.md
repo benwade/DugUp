@@ -75,7 +75,9 @@ The window's "In plain words" box turns a sentence into the search form. Type "P
 last month over 1 MB" and it fills in the words, the type, the dates and the size for you to check; nothing
 is searched until you press Enter. It understands kinds of file, sizes, times (yesterday, last week, in
 March, since 2026-01-15, in 2024), "in the file name", "on a sign" or "in a picture", "the exact word",
-quoted phrases, and the names of your indexed folders. English only.
+quoted phrases, the names of your indexed folders, and an order ("the most recent", "newest", "oldest",
+"biggest" become the sort, not words to look for). Once the index holds sketches of meaning, the sentence
+goes to "Words and meaning" rather than a plain word search, since a sentence is what that is for. English only.
 
 This is done by rules built into the program: nothing to install, and the same answer every time.
 

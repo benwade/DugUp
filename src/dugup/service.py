@@ -183,9 +183,10 @@ class LocalService:
                 if filters.where == WHERE_BOTH:
                     page = self.store.search_both(query, question, self.meaning_model(), limit, offset, filters,
                                                   self.settings.meaning_word_weight, self.settings.meaning_word_pool,
-                                                  self.settings.meaning_word_everywhere)
+                                                  self.settings.meaning_word_everywhere, sort, descending)
                 else:
-                    page = self.store.search_meaning(question, self.meaning_model(), limit, offset, filters)
+                    page = self.store.search_meaning(question, self.meaning_model(), limit, offset, filters,
+                                                     sort=sort, descending=descending)
             else:
                 page = self.store.search_words(query, limit, offset, sort, descending, filters)
         except ValueError as exc:

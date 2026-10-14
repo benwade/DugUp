@@ -78,6 +78,16 @@ def U(words="", **more):
     ("receipts in the claude folder", U("receipts", folder="D:\\Claude")),
     (f"recipes in {helpers.CAFE} notes", U("recipes", folder=f"/home/me/{helpers.CAFE} notes")),
     ("receipts in Elsewhere", U("receipts Elsewhere")),                                    # not an indexed folder: a word
+    # an order is not a word to look for
+    ("Ben's most recent nursing license", U("Ben's nursing license", sort="newest")),
+    ("the newest version of the budget", U("budget", sort="newest")),
+    ("latest pdf about rent", U("rent", kinds=("pdf",), sort="newest")),
+    ("the oldest photo of the house", U("house", kinds=("image",), sort="oldest")),
+    ("the biggest files in Documents", U("", folder="/home/me/Documents", sort="largest",
+                                         notes=("no words to look for were found in the sentence",))),
+    ("the smallest one about pay", U("pay", sort="smallest")),
+    ("recently changed files about pay", U("pay", sort="newest")),
+    ("big files about pay", U("pay", notes=('"big" is not a size; say one, such as "over 10 MB"',))),   # "big" is still a wish, not an order
     # plain words stay plain words
     ("education policy", U("education policy")),
     ("where is my resume", U("resume")),

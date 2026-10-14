@@ -915,3 +915,27 @@ def test_an_update_goes_on_to_sketches_of_meaning_as_one_run_when_that_can_be_do
     assert calls == [None] and "Then sketches of meaning were made:" in bench.text(bench.app.status) \
         and "Sketched 1 file(s), 1 piece(s) of text on the processor" in bench.text(bench.app.status)
     assert "Finished in" in bench.app.progress_text.get()
+
+
+def test_a_sentence_goes_to_words_and_meaning_once_there_are_sketches_and_an_order_word_sorts(bench, monkeypatch):
+    from dugup.service import LocalService
+    from dugup.shapes import WHERE_ANYWHERE, WHERE_BOTH
+    (bench.docs / "old.txt").write_text("needle in an old note", encoding="utf-8")
+    bench.ready()
+    app = bench.app
+    app.sentence.set("the most recent note about needle")
+    app.ask_in_plain_words()
+    finish_asking(bench)
+    assert app.filters().where == WHERE_ANYWHERE, "no sketches yet: a word search"
+    assert app.order.keys == [("modified", True)] and "newest first" in app.message.get()
+    assert app.words.get() == "note needle"
+    monkeypatch.setattr(LocalService, "meaning_coverage", lambda self: (5, 5))
+    app.sentence.set("the oldest note about needle")
+    app.ask_in_plain_words()
+    finish_asking(bench)
+    assert app.filters().where == WHERE_BOTH and app.order.keys == [("modified", False)]
+    assert app.tree.heading("modified")["text"].endswith(chr(0x2191))
+    app.sentence.set("notes about needle")
+    app.ask_in_plain_words()
+    finish_asking(bench)
+    assert app.order.keys == [] and app.order_text.get() == "best match first", "no order word: the order is reset"

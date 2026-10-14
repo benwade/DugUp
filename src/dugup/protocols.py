@@ -360,7 +360,8 @@ class Store(Protocol):
         Filtering and sorting happen before the page is cut, so the total and the order are honest."""
 
     def search_meaning(self, question, model: str, limit: int = 100, offset: int = 0,
-                       filters: Optional[SearchFilters] = None, candidates: Optional[int] = None) -> SearchPage:
+                       filters: Optional[SearchFilters] = None, candidates: Optional[int] = None,
+                       sort="rank", descending: bool = False) -> SearchPage:
         """Files closest in meaning to a sketch of a question (float32 numbers from `model`), one row per
         file (per content unless filters.every_copy) with its closest passage as Evidence; rank is closeness."""
 
@@ -375,7 +376,7 @@ class Store(Protocol):
 
     def search_both(self, query: str, question, model: str, limit: int = 100, offset: int = 0,
                     filters: Optional[SearchFilters] = None, word_weight: float = 0.5, word_pool: int = 2000,
-                    everywhere: float = 0.3) -> SearchPage:
+                    everywhere: float = 0.3, sort="rank", descending: bool = False) -> SearchPage:
         """Words and meaning together: closeness plus `word_weight` times the file's share of the best word
         score; one row per file, closest first; word evidence first, then the closest passage by meaning."""
 

@@ -485,6 +485,15 @@ def closeness_matches(query: str, near_words: int) -> Optional[Tuple[str, str]]:
 
 # ---- the store -------------------------------------------------------------
 
+def _order_in_python(items, value_of, keys):
+    """Sort (score, ..., file id) items by (key, descending) pairs as a word search would be sorted, with the
+    file id as the last tie-break. `value_of(item, key)` gives the key's value for an item."""
+    out = sorted(items, key=lambda it: it[-1])
+    for key, down in reversed(list(keys)):
+        out.sort(key=lambda it: value_of(it, key), reverse=down)
+    return out
+
+
 def sketches_module():
     from . import sketches
     return sketches
@@ -1170,7 +1179,8 @@ class SqliteStore:
         return self._prints[3], self._prints[4], self._prints[5]
 
     def search_meaning(self, question, model: str, limit: int = 100, offset: int = 0,
-                       filters: Optional[SearchFilters] = None, candidates: Optional[int] = None) -> SearchPage:
+                       filters: Optional[SearchFilters] = None, candidates: Optional[int] = None,
+                       sort="rank", descending: bool = False) -> SearchPage:
         """Files whose text is closest in meaning to `question` (a sketch of it, as float32 numbers, from the
         same model). Two stages: the fingerprints of every piece are scanned for the `candidates` likeliest
         FILES (sketches.CANDIDATES; a few pieces each), then those are scored by their full sketches. One row per file (one per
@@ -1179,6 +1189,7 @@ class SqliteStore:
         and they narrow the scan itself, before the candidates are chosen."""
         import numpy as np
         from . import sketches
+        keys = sort_keys(sort, descending, SORT_COLUMNS)
         if limit < 0 or offset < 0:
             raise ValueError("limit and offset must not be negative")
         ids, files, prints = self._fingerprints_cached(model)
@@ -1233,6 +1244,16 @@ class SqliteStore:
             shown = min(files, key=lambda i: rows_by_id[i]["place"])
             groups.append((max(best[i][0] for i in files), best[shown][1], shown))
         ordered = sorted(groups, key=lambda g: (-g[0], g[2]))
+        if keys != [("rank", False)]:
+            def value(item, key):
+                r = rows_by_id[item[2]]
+                if key == "rank":
+                    return -item[0]          # a word search's rank is "smaller is better"; so is this when sorted by it
+                if key == "matches":
+                    return 1
+                v = r[key]
+                return v.casefold() if isinstance(v, str) else v
+            ordered = _order_in_python(ordered, value, keys)
         page = ordered[offset:offset + limit]
         rows: List[SearchRow] = []
         for score, seg, file_id in page:
@@ -1309,14 +1330,16 @@ class SqliteStore:
 
     def search_both(self, query: str, question, model: str, limit: int = 100, offset: int = 0,
                     filters: Optional[SearchFilters] = None, word_weight: float = 0.5, word_pool: int = 2000,
-                    everywhere: float = 0.3) -> SearchPage:
+                    everywhere: float = 0.3, sort="rank", descending: bool = False) -> SearchPage:
         """The words and the meaning together. The question's telling words (telling_words: not the ones
         found nearly everywhere) are looked for, any of them, and the best `word_pool` such files and the
         likeliest files by meaning are put on one footing: each file's closeness in meaning (0 to 1; its own
         sketches are scored even when the meaning stage did not pick it) plus `word_weight` times its share
         of the best word score (the best word match counts 1, a file with no word match 0). One row per
         file, closest first; `rank` is that sum; the word evidence first, then the closest passage by meaning.
-        A question with no telling words is meaning alone."""
+        A question with no telling words is meaning alone. `sort` other than rank orders the files found as
+        a word search would (newest first, say), the score still deciding which are found."""
+        keys = sort_keys(sort, descending, SORT_COLUMNS)
         if limit < 0 or offset < 0:
             raise ValueError("limit and offset must not be negative")
         word_filters = replace(filters, where=WHERE_ANYWHERE) if filters is not None else None
@@ -1340,6 +1363,16 @@ class SqliteStore:
             share = (word_rows[file_id].rank / best_word) if file_id in word_rows and best_word < 0 else 0.0
             scored.append((near + word_weight * max(0.0, min(1.0, share)), file_id))
         scored.sort(key=lambda t: (-t[0], t[1]))
+        if keys != [("rank", False)]:
+            def value(item, key):
+                base = word_rows.get(item[1]) or meaning_rows[item[1]]
+                if key == "rank":
+                    return -item[0]
+                if key == "matches":
+                    return base.matches if item[1] in word_rows else 0
+                v = getattr(base, key)
+                return v.casefold() if isinstance(v, str) else v
+            scored = _order_in_python(scored, value, keys)
         rows: List[SearchRow] = []
         for score, file_id in scored[offset:offset + limit]:
             base = word_rows.get(file_id) or meaning_rows[file_id]
