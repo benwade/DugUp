@@ -254,8 +254,8 @@ def test_same_bytes_reads_afresh_and_the_fallback_folder_keeps_every_version(tmp
     assert not cleanup.same_bytes(str(a), str(b))
     assert not cleanup.same_bytes(str(a), str(tmp_path / "nowhere.bin"))
     # the fallback folder: a run's own folder, and the same path twice in a run keeps both
-    monkeypatch.setattr(trash, "FALLBACK_FOLDER", str(tmp_path / "removed"))
-    monkeypatch.setattr(os.path, "splitdrive", lambda p: ("", p))
+    monkeypatch.setattr(trash, "FALLBACK_FOLDER", "removed")
+    monkeypatch.setattr(trash, "_top_of", lambda p: (str(tmp_path), os.path.relpath(p, tmp_path)))   # "the drive" is the temp folder
     victim = tmp_path / "v" / "f.txt"
     victim.parent.mkdir()
     victim.write_text("one", encoding="utf-8")

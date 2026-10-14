@@ -1518,6 +1518,12 @@ def print_looks_measurement(found, out: TextIO) -> None:
         failed = f"   {t.failed} could not be read" if t.failed else ""
         safe_write(f"  {t.device:<24} {t.per_second:8,.1f} pictures/s   load {t.load_seconds:5.1f} s   "
                    f"all the pictures: about {format_seconds(whole)}{failed}", out)
+    if found.unread:
+        safe_write("Could not be read:", out)
+        for why, paths in sorted(found.unread.items(), key=lambda kv: -len(kv[1])):
+            safe_write(f"  {len(paths):,}: {why}", out)
+            for path in paths[:3]:
+                safe_write(f"       {path}", out)
     safe_write(f"Disk for sketches of every picture: {format_bytes(found.disk_for(1))} as bytes "
                f"({format_bytes(found.disk_for(4))} as full numbers).", out)
     if found.answers:

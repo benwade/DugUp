@@ -7,6 +7,8 @@ so they cannot drift apart.
 
 from __future__ import annotations
 
+import os
+
 from typing import Any, Dict, Mapping, Optional
 
 from .protocols import Extraction, PageInfo, PageVerdict
@@ -148,6 +150,22 @@ def look(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 prepared.append(embedding.Looker.prepare(picture))
         except FileNotFoundError:
             failed[row] = "the file was not there"
+            prepared.append(None)
+        except PermissionError:
+            failed[row] = "the file could not be opened (no permission, or held by another program)"
+            prepared.append(None)
+        except OSError as exc:
+            text = str(exc).lower()
+            if "truncated" in text or "broken data" in text:
+                failed[row] = "the picture is cut short or damaged"
+            elif "cannot identify" in text:
+                ending = path.rsplit(".", 1)[-1].lower() if "." in os.path.basename(path) else ""
+                if ending in ("jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp"):
+                    failed[row] = f"damaged, or not really a .{ending}"
+                else:
+                    failed[row] = f"a picture format this program cannot open (.{ending})" if ending else "a picture format this program cannot open"
+            else:
+                failed[row] = f"the file could not be read ({type(exc).__name__})"
             prepared.append(None)
         except Exception as exc:
             failed[row] = f"could not be read as a picture ({type(exc).__name__})"

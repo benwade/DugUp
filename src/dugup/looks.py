@@ -58,6 +58,8 @@ class Measurement:
     answers: List[Answer] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
 
+    unread: Dict[str, List[str]] = field(default_factory=dict)   # why pictures could not be read -> a few of their paths
+
     def disk_for(self, bytes_each: int = 1) -> int:
         return self.in_index * embedding.LOOKS_DIMS * bytes_each
 
@@ -149,6 +151,9 @@ def measure(store, sandbox_factory, folder: Path, pictures: int = 300, gpu: Opti
             vectors, failed = made
             seconds = timer() - started
             found.timings.append(Timing(runner.device, len(paths) - len(failed), seconds, load_seconds, len(failed)))
+            if not found.unread:
+                for row, why in sorted(failed.items()):
+                    found.unread.setdefault(why, []).append(paths[row])
             if progress is not None:
                 progress(Progress("look", "pictures", len(paths), len(paths), elapsed=seconds, current=runner.device))
             if not found.answers:

@@ -84,6 +84,8 @@ def pictures(tmp_path):
         Image.new("RGB", (40, 30), colour).save(folder / name)
         store.upsert_file(FileRecord(str(folder / name), 100, 1.0, kind=FileKind.IMAGE, state=FileState.DONE))
     (folder / "broken.jpg").write_bytes(b"no")
+    (folder / "odd.xyz").write_bytes(b"no")
+    store.upsert_file(FileRecord(str(folder / "odd.xyz"), 2, 1.0, kind=FileKind.IMAGE, state=FileState.DONE))
     store.upsert_file(FileRecord(str(folder / "broken.jpg"), 2, 1.0, kind=FileKind.IMAGE, state=FileState.DONE))
     store.upsert_file(FileRecord(str(folder / "note.txt"), 5, 1.0, state=FileState.DONE))
     return store, folder
@@ -100,15 +102,16 @@ def test_the_measurement_times_each_device_answers_sentences_and_finds_likes(tmp
     found = looks.measure(store, StandInSandbox, models, pictures=10, questions=["red"], like=[str(folder / "red1.png")],
                           progress=told.append)
     assert not isinstance(found, Failure), found
-    assert found.pictures == 5 and found.in_index == 5, "pictures only; the note is not among them"
+    assert found.pictures == 6 and found.in_index == 6, "pictures only; the note is not among them"
     assert [t.device for t in found.timings] == ["processor", "graphics card (stand-in)"]
-    assert all(t.pictures == 4 and t.failed == 1 and t.load_seconds >= 0 for t in found.timings)
-    assert found.disk_for(1) == 5 * embedding.LOOKS_DIMS
+    assert all(t.pictures == 4 and t.failed == 2 and t.load_seconds >= 0 for t in found.timings)
+    assert found.disk_for(1) == 6 * embedding.LOOKS_DIMS
     by = {a.asked: a for a in found.answers}
     assert {os.path.basename(h.path) for h in by["red"].hits[:2]} == {"red1.png", "red2.png"}
     like = by[f"like {folder / 'red1.png'}"]
     assert os.path.basename(like.hits[0].path) == "red2.png" and all("red1" not in h.path for h in like.hits), "its likes, not itself"
     assert all("broken" not in h.path for a in found.answers for h in a.hits)
+    assert sorted(p for ps in found.unread.values() for p in ps) == sorted([str(folder / "broken.jpg"), str(folder / "odd.xyz")])
     assert any(p.phase == "look" for p in told)
     # a card that cannot be used is a note; no pictures is a failure; an example that cannot be read is a note
     noted = looks.measure(store, lambda: StandInSandbox(fail_gpu=True), models, pictures=10, like=[str(folder / "broken.jpg")])
@@ -141,6 +144,7 @@ def test_the_command_prints_the_report(tmp_path, monkeypatch):
     text = out.getvalue()
     assert code == 0, text
     assert "Sample: 1 picture(s); the index lists 1." in text and "pictures/s" in text and '"red"' in text and "red.png" in text
+    assert "Could not be read" not in text
 
 
 @pytest.mark.skipif(not os.environ.get("DUGUP_LOOKS_MODELS"), reason="set DUGUP_LOOKS_MODELS to a folder holding the picture model to run this")
@@ -156,3 +160,16 @@ def test_the_real_model_tells_a_red_circle_from_a_blue_square():
     scores = v @ q.T
     assert scores[0, 0] > scores[0, 1] and scores[1, 1] > scores[1, 0]
     assert abs(float(np.linalg.norm(v[0])) - 1.0) < 1e-4
+
+
+def test_the_look_job_says_why_a_picture_could_not_be_read(tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
+    from dugup import jobs
+    (tmp_path / "broken.jpg").write_bytes(b"no")
+    (tmp_path / "odd.heic").write_bytes(b"no")
+    monkeypatch.setattr("dugup.embedding.Looker.__init__", lambda self, folder, gpu=False, threads=0: setattr(self, "device", "processor"))
+    monkeypatch.setattr("dugup.embedding.Looker.look", lambda self, pictures, batch=16: np.zeros((len(pictures), 512), dtype=np.float32))
+    answer = jobs.look({"folder": str(tmp_path), "paths": [jobs.path_to_data(str(tmp_path / n)) for n in ("broken.jpg", "odd.heic", "gone.png")]})
+    assert answer["rows"] == 3 and answer["failed"] == {"0": "damaged, or not really a .jpg",
+                                                         "1": "a picture format this program cannot open (.heic)",
+                                                         "2": "the file was not there"}

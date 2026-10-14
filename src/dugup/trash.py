@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 FALLBACK_FOLDER = "DugUp removed"
 
@@ -59,11 +59,16 @@ def _send2trash(path: str) -> str:
 _run_started = time.strftime("%Y-%m-%d %H-%M-%S")     # this program's run: its own folder, so runs never overwrite each other
 
 
-def _fallback_move(path: str) -> str:
+def _top_of(path: str) -> Tuple[str, str]:
+    """(the top of the drive the path is on, the rest of the path below it)."""
     drive, rest = os.path.splitdrive(os.path.abspath(path))
-    top = (drive + os.sep) if drive else os.sep
+    return ((drive + os.sep) if drive else os.sep), rest.lstrip("/\\")
+
+
+def _fallback_move(path: str) -> str:
+    top, rest = _top_of(path)
     folder = os.path.join(top, FALLBACK_FOLDER, _run_started)
-    target = os.path.join(folder, rest.lstrip("/\\"))
+    target = os.path.join(folder, rest)
     try:
         os.makedirs(os.path.dirname(target), exist_ok=True)
         if os.path.lexists(target):            # the same path twice in one run: keep both
