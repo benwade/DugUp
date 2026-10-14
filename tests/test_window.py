@@ -191,8 +191,17 @@ class Bench:
     def find(self, text="needle"):
         self.app.words.set(text)
         self.app.search()
-        self.root.update()
+        self.settle()
         return self.names()
+
+    def settle(self):
+        """Let a search by meaning finish: its sketching runs on a thread and answers through the events."""
+        for _ in range(200):
+            if self.app.searcher is None or not self.app.searcher.is_alive():
+                break
+            self.app.searcher.join(0.05)
+        self.app.drain()
+        self.root.update()
 
     def text(self, widget):
         return widget.get("1.0", "end").rstrip("\n")
@@ -850,8 +859,37 @@ def test_by_meaning_is_a_where_choice_that_searches_the_sketches_and_says_how_fa
     monkeypatch.setattr(LocalService, "sketch_question", lambda self, question: Failure(FailureReason.NOT_INSTALLED, "the larger model is not fetched yet"))
     bench.find("tomatoes")
     assert "could not be done: the larger model is not fetched yet" in bench.app.message.get()
+    assert str(bench.app.search_button["state"]) == "normal", "the button comes back after a failure too"
     bench.app.clear_filters()
     assert bench.app.where.get() == "Anywhere" and bench.find("tomatoes") == ["garden.txt"]
+    # the question is sketched off the drawing thread: a search pressed while the model is still loading shows
+    # a wait window, Stop drops that search and the model goes on loading, and the newest search wins
+    import threading
+    gate = threading.Event()
+    monkeypatch.setattr(LocalService, "warm_meaning", lambda self: gate.wait(5) or True)
+    monkeypatch.setattr(LocalService, "wants_warm_meaning", lambda self: True)
+    bench.app.warm_up_meaning()
+    assert bench.app.warmer.is_alive() and bench.app.waiting is None, "nothing is shown while it loads unasked"
+    slow = threading.Event()
+    monkeypatch.setattr(LocalService, "sketch_question", lambda self, question: slow.wait(5) and sketch(question))
+    bench.app.where.set("By meaning")
+    bench.app.words.set("tomatoes")
+    bench.app.search()
+    bench.root.update()
+    assert bench.app.waiting is not None and "still being loaded" in bench.app.waiting.text.get() \
+        and str(bench.app.search_button["state"]) == "disabled"
+    bench.app.stop_search()
+    assert bench.app.waiting is None and "dropped" in bench.app.message.get() and str(bench.app.search_button["state"]) == "normal"
+    first = bench.app.search_number
+    bench.app.words.set("fatigue")
+    bench.app.search()                     # a newer search while the dropped one is still sketching
+    gate.set()
+    slow.set()
+    bench.settle()
+    assert bench.app.search_number == first + 1 and bench.names()[0] == "shifts.txt", "the newest search's answer, not the dropped one's"
+    bench.app.warmer.join(2)
+    bench.app.drain()
+    assert bench.app.warm is True
 
 
 def test_an_update_goes_on_to_sketches_of_meaning_as_one_run_when_that_can_be_done_here(bench, monkeypatch):

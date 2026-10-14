@@ -183,6 +183,12 @@ def _entries() -> Tuple[Entry, ...]:
           why="A plain question has filler words in it. Requiring them would let a file miss its bonus for want "
               "of the letter \"I\"; counting them would reward nothing in particular.",
           low=0.0, high=1.0),
+        E("meaning_warm_up", "meaning", "Load the model when the window opens",
+          "The model that reads your question is loaded in the background as the window opens, so the first search "
+          "by meaning does not wait for it. It takes about 600 MB of memory while the window is open.",
+          why="Loading takes a few seconds on a fast computer and longer on a slow disk; a search pressed before "
+              "it is done shows a wait window. \"auto\" loads it only when the index holds sketches of meaning.",
+          everyday=False, choices=(("auto", "when the index has sketches"), ("yes", "always"), ("never", "never"))),
         E("meaning_after_index", "meaning", "Sketch as part of updating",
           "Updating the index goes on to sketch what is new, after reading pictures.",
           why="One button does it all. Turn it off to sketch at a time of your choosing with `dugup meaning fill`.",

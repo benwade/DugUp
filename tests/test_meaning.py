@@ -365,3 +365,35 @@ def test_words_and_meaning_through_the_service_the_command_and_the_settings(tmp_
     assert code == 0 and "closest in words and meaning to: budget" in text and "budget.txt" in text, text
     out = io.StringIO()
     assert cli.main(["config", "set", "meaning_word_weight", "-1", "--data-dir", str(data)], stdout=out) != 0
+
+
+def test_the_warm_up_is_decided_by_the_setting_and_the_sketches_and_a_sketch_made_elsewhere_is_taken(tmp_path, monkeypatch):
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.settings import Settings
+    from dugup.shapes import SearchFilters, WHERE_MEANING
+    data = tmp_path / "data"
+    data.mkdir()
+    layout = DataLayout(data).ensure()
+    with LocalService(layout) as svc:
+        filled_store(svc.store)
+        folder = data / "models" / "meaning"
+        folder.mkdir(parents=True)
+        for item in BY_CHOICE["larger"]:
+            (folder / item.name).write_bytes(b"stand-in")
+        assert svc.wants_warm_meaning() is False, "auto, and no sketches yet"
+    monkeypatch.setattr("dugup.sandbox.SubprocessSandbox", StandInSandbox)
+    monkeypatch.setattr(LocalService, "meaning_ready", lambda self: True)
+    with LocalService(layout) as svc:
+        svc.run_meaning(gpu=False)
+        assert svc.wants_warm_meaning() is True, "auto, and sketches are there"
+        assert svc.warm_meaning() is True and svc._asker is not None
+        question = svc.sketch_question("tomatoes")
+        page = svc.search("tomatoes", filters=SearchFilters(where=WHERE_MEANING), question=question)
+        assert page.rows[0].path == "/r/garden.txt"
+    assert LocalService(layout, Settings(meaning_warm_up="never")).wants_warm_meaning() is False
+    assert LocalService(layout, Settings(meaning_warm_up="yes")).wants_warm_meaning() is True
+    with LocalService(layout) as svc:
+        monkeypatch.setattr(LocalService, "meaning_ready", lambda self: "the larger model is not fetched yet")
+        warm = svc.warm_meaning()
+        assert isinstance(warm, Failure) and "not fetched" in warm.detail

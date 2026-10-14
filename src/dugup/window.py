@@ -188,16 +188,22 @@ class App:
         self.order = SortOrder()
         self.rows: List[SearchRow] = []
         self.total = 0
-        self.last: Optional[Tuple[str, SearchFilters]] = None    # the search the rows belong to
+        self.last: Optional[Tuple[str, SearchFilters, object]] = None    # the search the rows belong to (words, filters, the question's sketch or None)
         self.events: "queue.Queue[object]" = queue.Queue()
         self.stop = threading.Event()
         self.worker: Optional[threading.Thread] = None
         self.closed = False
+        self.warmer: Optional[threading.Thread] = None    # loads the model that reads questions, as the window opens
+        self.warm: "bool | Failure | None" = None          # what the warm-up found; None while it has not finished
+        self.searcher: Optional[threading.Thread] = None  # sketches a question for a search by meaning
+        self.search_number = 0                            # the newest search wins; older answers are dropped
+        self.search_started = 0.0
         self._build()
         self.refresh_folders()
         self.refresh_status()
         root.protocol("WM_DELETE_WINDOW", self.close)
         self._poll_id = root.after(POLL_MS, self._poll)
+        self.warm_up_meaning()
         if self.setup_on_first_start and not self.service.list_roots():
             self.open_setup(first_run=True)
 
@@ -464,6 +470,28 @@ class App:
         self.say(f"Filled in: {answer.describe()}.{doubts} Check the form, then press Enter to search.")
         self.words_entry.focus_set()
 
+    def warm_up_meaning(self) -> None:
+        """Load the model that reads questions in the background (setting meaning_warm_up), so that the first
+        search by meaning finds it ready. Nothing is shown unless a search is pressed before it is done."""
+        try:
+            wanted = self.service.wants_warm_meaning()
+        except Exception:
+            wanted = False
+        if not wanted or (self.warmer is not None and self.warmer.is_alive()):
+            return
+        events, service = self.events, self.service
+
+        def work() -> None:
+            try:
+                answer = service.warm_meaning()
+            except Exception as exc:
+                answer = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
+            events.put(("warm", answer))
+
+        self.warm = None
+        self.warmer = threading.Thread(target=work, name="dugup-window-warm", daemon=True)
+        self.warmer.start()
+
     def search(self) -> None:
         words = self.words.get().strip()
         if not words:
@@ -474,16 +502,70 @@ class App:
         except ValueError as exc:
             self.say(str(exc))
             return
-        self.last = (words, filters)
+        self.last = (words, filters, None)
+        if filters.where in (WHERE_MEANING, WHERE_BOTH):
+            self._sketch_then_fetch(words, filters)
+        else:
+            self._fetch(0)
+
+    def _sketch_then_fetch(self, words: str, filters: SearchFilters) -> None:
+        """A search by meaning: the question is sketched on a background thread (the model may still be
+        loading, or not fetched); the index is searched here once the sketch arrives (_sketched)."""
+        self.search_number += 1
+        number, events, service = self.search_number, self.events, self.service
+        self.search_started = time.monotonic()
+        self.search_button.configure(state="disabled")
+        self.say("Searching by meaning ...")
+
+        def work() -> None:
+            try:
+                answer = service.sketch_question(words)
+            except Exception as exc:
+                answer = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
+            events.put(("sketched", (number, words, filters, answer)))
+
+        self.searcher = threading.Thread(target=work, name="dugup-window-search", daemon=True)
+        self.searcher.start()
+        if self.warmer is not None and self.warmer.is_alive() and self.waiting is None:
+            from .waitwindow import WaitWindow
+            self.waiting = WaitWindow(self.root, "Getting ready - please wait", self.warming_text(), self.stop_search)
+
+    def warming_text(self) -> str:
+        took = format_seconds(max(0.0, time.monotonic() - self.search_started))
+        return ("The model that reads your question is still being loaded. It is loaded once, when the window opens, "
+                "and this search was pressed before it was done.\n\nPlease wait if you can: a few seconds on a fast "
+                "computer, longer from a slow disk. If you cannot wait, press Stop: nothing is lost, and the model "
+                "goes on loading for next time.\n\n" + f"{took} so far.")
+
+    def stop_search(self) -> None:
+        """Drop the search that is waiting for the model; the model goes on loading."""
+        self.search_number += 1
+        self._close_waiting()
+        self.search_button.configure(state="normal")
+        self.say("The search was dropped. Search again when you are ready.")
+
+    def _sketched(self, result) -> None:
+        number, words, filters, answer = result
+        if number != self.search_number:
+            return                     # a newer search, or Stop, has overtaken this one
+        self._close_waiting()
+        self.search_button.configure(state="normal")
+        if isinstance(answer, Failure):
+            self.say(f"The search could not be done: {answer.detail}")
+            return
+        self.last = (words, filters, answer)
         self._fetch(0)
+
+    def _warmed(self, answer) -> None:
+        self.warm = answer            # a Failure says what is missing; the next search by meaning will say so too
 
     def more(self) -> None:
         if self.last is not None and len(self.rows) < self.total:
             self._fetch(len(self.rows))
 
     def _fetch(self, offset: int) -> None:
-        words, filters = self.last    # type: ignore[misc]
-        page = self.service.search(words, PAGE_ROWS, offset, self.order.as_request(), False, filters)
+        words, filters, question = self.last    # type: ignore[misc]
+        page = self.service.search(words, PAGE_ROWS, offset, self.order.as_request(), False, filters, question)
         if isinstance(page, Failure):
             self.say(f"The search could not be done: {page.detail}")
             return
@@ -931,6 +1013,8 @@ class App:
             self.progress_text.set(" ".join(text.split("\n")[-2:]))
             if self.waiting is not None:
                 self.waiting.say(text)
+        elif self.waiting is not None and self.searcher is not None and self.searcher.is_alive():
+            self.waiting.say(self.warming_text())
         self.drain()
         self._poll_id = self.root.after(POLL_MS, self._poll)
 
@@ -971,6 +1055,10 @@ class App:
         for what, report in finished:
             if what == "ask":
                 self._understood(report)
+            elif what == "sketched":
+                self._sketched(report)
+            elif what == "warm":
+                self._warmed(report)
             else:
                 self._finished(what, report)
 

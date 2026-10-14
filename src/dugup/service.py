@@ -76,6 +76,7 @@ class LocalService:
         self._ocr_backend = ocr_backend      # made on first use: most commands never read a picture
         self._intent = intent
         self._asker = None               # the worker that sketches questions for searching by meaning, kept once made
+        self._asker_lock = threading.Lock()   # one question at a time; any thread may ask
         self._intent_looked = intent is not None
         self.settings = settings or Settings()
         self.source = source or DirectoryScan()
@@ -168,12 +169,15 @@ class LocalService:
     # -- search
 
     def search(self, query: str, limit: int = 100, offset: int = 0, sort="rank",
-               descending: bool = False, filters: Optional[SearchFilters] = None) -> "SearchPage | Failure":
+               descending: bool = False, filters: Optional[SearchFilters] = None, question=None) -> "SearchPage | Failure":
+        """`question`: the sketch of `query` already made (sketch_question), for a search by meaning whose
+        sketching was done on another thread; None makes it here."""
         if filters is not None and filters.folder is not None and filters.case_insensitive is None:
             filters = replace(filters, case_insensitive=self.case_insensitive)
         try:
             if filters is not None and filters.where in (WHERE_MEANING, WHERE_BOTH):
-                question = self.sketch_question(query)
+                if question is None:
+                    question = self.sketch_question(query)
                 if isinstance(question, Failure):
                     return question
                 if filters.where == WHERE_BOTH:
@@ -457,18 +461,39 @@ class LocalService:
             return Failure(FailureReason.NOT_INSTALLED, ready)
         choice = self.settings.meaning_model
         dims = meaning.dims_for(choice, self.settings.meaning_size)
-        if self._asker is None or self._asker[1].choice != choice:
-            from .sandbox import SubprocessSandbox
-            if self._asker is not None:
+        with self._asker_lock:
+            if self._asker is None or self._asker[1].choice != choice:
+                from .sandbox import SubprocessSandbox
+                if self._asker is not None:
+                    self._asker[0].close()
+                sandbox = SubprocessSandbox()
+                self._asker = (sandbox, meaning._Runner(sandbox, self.layout.models / "meaning", choice, False))
+            vectors = self._asker[1].embed([question], "query", dims, None, meaning.LOAD_SECONDS)
+            if isinstance(vectors, Failure):
                 self._asker[0].close()
-            sandbox = SubprocessSandbox()
-            self._asker = (sandbox, meaning._Runner(sandbox, self.layout.models / "meaning", choice, False))
-        vectors = self._asker[1].embed([question], "query", dims, None, meaning.LOAD_SECONDS)
-        if isinstance(vectors, Failure):
-            self._asker[0].close()
-            self._asker = None
-            return vectors
+                self._asker = None
+                return vectors
         return vectors[0]
+
+    def warm_meaning(self) -> "bool | Failure":
+        """Load the model that sketches questions now, so the first search by meaning does not wait for it.
+        True when it is ready; a Failure saying what is missing (the runtime, the model) otherwise. Safe to
+        call from a background thread; the first search afterwards finds the worker warm."""
+        made = self.sketch_question("ready")
+        return made if isinstance(made, Failure) else True
+
+    def wants_warm_meaning(self) -> bool:
+        """Whether a window should warm the meaning model as it opens (setting meaning_warm_up: yes; never;
+        auto, which is yes when the index holds sketches, since someone who filled them means to use them)."""
+        choice = self.settings.meaning_warm_up
+        if choice == "never":
+            return False
+        if choice == "yes":
+            return True
+        try:
+            return self.meaning_coverage()[0] > 0
+        except Exception:
+            return False
 
     def meaning_ready(self) -> "bool | str":
         """True when sketches can be made now: the runtime is installed and the chosen model is fetched.
