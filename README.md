@@ -264,6 +264,10 @@ fetched on first use into the data folder. It needs `pip install dugup[meaning]`
   strong match to a sentence and 0.20 none; between pictures, 0.9 and up is the same scene and 0.97 and up is
   nearly the same file (a resized copy, say). Screenshots and scanned pages all look like "a page of text" to
   this model; OCR serves those. The file filters apply.
+- **In the window.** "By looks (pictures)" in the where-choice takes a sentence; "Pictures like this" beside
+  Open shows the likes of the selected picture. The Pictures tab shows the results that are pictures as a grid
+  of thumbnails with their scores, so likeness can be judged by eye; a click selects the picture in the list,
+  a double click opens it. Thumbnails are made in the background and kept for the session only.
 - **Measuring.** `dugup alike measure --ask "a sentence" --like PICTURE` tries the model on a sample of your
   own pictures and reports speed, disk and what is found, without storing anything.
 

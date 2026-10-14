@@ -939,3 +939,68 @@ def test_a_sentence_goes_to_words_and_meaning_once_there_are_sketches_and_an_ord
     app.ask_in_plain_words()
     finish_asking(bench)
     assert app.order.keys == [] and app.order_text.get() == "best match first", "no order word: the order is reset"
+
+
+def test_pictures_by_looks_fill_the_pictures_tab_and_like_this_shows_a_picture_s_likes(bench, monkeypatch):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    from PIL import Image
+    from dugup import looks, sketches
+    from dugup.service import LocalService
+    from dugup.shapes import FileKind, WHERE_LOOKS
+    for name, colour in (("red.png", (220, 20, 20)), ("red2.png", (200, 30, 30)), ("blue.png", (20, 20, 220))):
+        Image.new("RGB", (60, 40), colour).save(bench.docs / name)
+    (bench.docs / "note.txt").write_text("a red note", encoding="utf-8")
+    bench.ready()
+    store = bench.app.service.store
+    model = looks.model_name()
+
+    def sketch(words):
+        v = np.zeros(512, dtype=np.float32)
+        for w in words.split():
+            v[zlib.crc32(w.encode()) % 512] += 1.0
+        return v / np.linalg.norm(v)
+
+    rows = []
+    for name, words in (("red.png", "red picture"), ("red2.png", "red picture again"), ("blue.png", "blue picture")):
+        record = store.get_file(str(bench.docs / name))
+        v = sketch(words)
+        data, scales = sketches.quantize(v[None, :])
+        rows.append((record.row_id, scales[0], data, sketches.fingerprint_of(v), ""))
+    store.save_looks(model, rows)
+    monkeypatch.setattr(LocalService, "sketch_sentence", lambda self, sentence: sketch(sentence))
+    app = bench.app
+    assert str(app.like_button["state"]) == "disabled"
+    app.where.set("By looks (pictures)")
+    assert app.filters().where == WHERE_LOOKS
+    names = bench.find("red picture")
+    assert names[0] == "red.png" and len(names) == 3, "pictures only, closest first"
+    assert "that look most like: red picture" in app.message.get()
+    assert [r.name for r in app.grid.rows] == names and app.grid.scores, "the Pictures tab shows the same pictures with their scores"
+    assert app.tabs.index(app.tabs.select()) == app.tabs.index(app.grid), "and comes to the front"
+    # a thumbnail arrives through the events and the grid redraws without complaint
+    for _ in range(100):
+        app.drain()
+        if (bench.docs / "red.png").as_posix() in {k.replace("\\", "/") for k in app.thumbnails.made} or app.thumbnails.made:
+            break
+        app.thumbnails.thread.join(0.05) if app.thumbnails.thread else None
+    app.drain()
+    bench.root.update()
+    # clicking a tile selects the row; selecting a picture row enables "Pictures like this"
+    app._grid_selected(2)
+    bench.root.update()
+    assert app.selected().name == "blue.png" and app.grid.selected == 2 and str(app.like_button["state"]) == "normal"
+    app.tree.selection_set("0")
+    app.show_selected()
+    assert app.grid.selected == 0
+    app.like_selected()
+    bench.root.update()
+    assert [r.name for r in app.rows] == ["red2.png", "blue.png"], "its likes, closest first, itself left out"
+    assert "that look like: red.png" in app.message.get() and app.grid.heading == "Pictures that look like red.png"
+    # a plain word search: the grid shows the pictures among the results, without scores, and the tab stays put
+    app.clear_filters()
+    app.tabs.select(0)
+    names = bench.find("red")
+    assert "note.txt" in names and [r.name for r in app.grid.rows] == [n for n in names if n.endswith(".png")] and not app.grid.scores
+    assert app.tabs.index(app.tabs.select()) == 0
+    assert app.like_of is None

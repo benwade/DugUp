@@ -18,6 +18,7 @@ Text a person may want to copy (paths, notes, counts) is shown in read-only entr
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import io
 import os
@@ -32,7 +33,7 @@ from .cli import (format_bytes, format_date, format_seconds, megabytes, print_co
 from .desktop import Desktop
 from .waitwindow import bring_to_front
 from .indexer import KEEP, REFUSE, REREAD, Progress
-from .shapes import (MAX_SORT_KEYS, WHERE_ANYWHERE, WHERE_BOTH, WHERE_MEANING, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind,
+from .shapes import (MAX_SORT_KEYS, WHERE_ANYWHERE, WHERE_BOTH, WHERE_LOOKS, WHERE_MEANING, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind,
                      Root, SearchFilters, SearchRow)
 
 PAGE_ROWS = 200          # rows fetched at a time; "More" fetches the next lot
@@ -77,7 +78,8 @@ def parse_day(text: str, end_of_day: bool = False) -> Optional[float]:
 
 
 WHERE_LABELS = (("Anywhere", WHERE_ANYWHERE), ("In the text", WHERE_TEXT), ("In the file name", WHERE_NAME),
-                ("In text read by OCR", WHERE_OCR), ("By meaning", WHERE_MEANING), ("Words and meaning", WHERE_BOTH))
+                ("In text read by OCR", WHERE_OCR), ("By meaning", WHERE_MEANING), ("Words and meaning", WHERE_BOTH),
+                ("By looks (pictures)", WHERE_LOOKS))
 KIND_LABELS = (("PDF", FileKind.PDF.value), ("Office", FileKind.OFFICE.value), ("Text", FileKind.TEXT.value),
                ("Pictures", FileKind.IMAGE.value))
 ALL_FOLDERS = "All indexed folders"
@@ -198,6 +200,7 @@ class App:
         self.searcher: Optional[threading.Thread] = None  # sketches a question for a search by meaning
         self.search_number = 0                            # the newest search wins; older answers are dropped
         self.search_started = 0.0
+        self.like_of = None                               # the picture whose likes the results are, when they are
         self._build()
         self.refresh_folders()
         self.refresh_status()
@@ -310,6 +313,8 @@ class App:
         for text, command in (("Open", self.open_selected), ("Edit", self.edit_selected),
                               ("Show in folder", self.show_in_folder), ("Copy path", self.copy_path)):
             ttk.Button(actions, text=text, command=command).pack(side="left", padx=2)
+        self.like_button = ttk.Button(actions, text="Pictures like this", command=self.like_selected, state="disabled")
+        self.like_button.pack(side="left", padx=(10, 2))
         self.more_button = ttk.Button(actions, text="More results", command=self.more, state="disabled")
         self.more_button.pack(side="right", padx=2)
         self.menu = tk.Menu(root, tearoff=False)
@@ -339,6 +344,11 @@ class App:
         self.places: Optional[list] = None      # every place in the selected file, once asked for
         self.places_shown = 0
         right.add(found, text="Found in this file")
+
+        from .picturegrid import PictureGrid, Thumbnails
+        self.thumbnails = Thumbnails(self.events)
+        self.grid = PictureGrid(right, self.thumbnails, self._grid_selected, self._grid_opened)
+        right.add(self.grid, text="Pictures")
 
         index = ttk.Frame(right, padding=4)
         index.columnconfigure(0, weight=1)
@@ -521,10 +531,25 @@ class App:
             self.say(str(exc))
             return
         self.last = (words, filters, None)
-        if filters.where in (WHERE_MEANING, WHERE_BOTH):
+        self.like_of = None
+        if filters.where in (WHERE_MEANING, WHERE_BOTH, WHERE_LOOKS):
             self._sketch_then_fetch(words, filters)
         else:
             self._fetch(0)
+
+    def like_selected(self) -> None:
+        """Pictures that look like the selected one: the results become its likes, closest first."""
+        row = self.selected()
+        if row is None:
+            return
+        try:
+            filters = self.filters()
+        except ValueError as exc:
+            self.say(str(exc))
+            return
+        self.like_of = row
+        self.last = (row.name, dataclasses.replace(filters, where=WHERE_LOOKS), None)
+        self._fetch(0)
 
     def _sketch_then_fetch(self, words: str, filters: SearchFilters) -> None:
         """A search by meaning: the question is sketched on a background thread (the model may still be
@@ -533,11 +558,11 @@ class App:
         number, events, service = self.search_number, self.events, self.service
         self.search_started = time.monotonic()
         self.search_button.configure(state="disabled")
-        self.say("Searching by meaning ...")
+        self.say("Searching by looks ..." if filters.where == WHERE_LOOKS else "Searching by meaning ...")
 
         def work() -> None:
             try:
-                answer = service.sketch_question(words)
+                answer = service.sketch_sentence(words) if filters.where == WHERE_LOOKS else service.sketch_question(words)
             except Exception as exc:
                 answer = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
             events.put(("sketched", (number, words, filters, answer)))
@@ -574,6 +599,34 @@ class App:
         self.last = (words, filters, answer)
         self._fetch(0)
 
+    def _refresh_grid(self, fresh: bool, new_rows, by_looks: bool) -> None:
+        """The Pictures tab follows the results: every row that is a picture, with scores for a search by looks."""
+        pictures = [r for r in self.rows if r.kind == FileKind.IMAGE.value]
+        if fresh:
+            heading = ""
+            if self.like_of is not None:
+                heading = f"Pictures that look like {self.like_of.name}"
+            self.grid.show(pictures, by_looks, heading)
+            if by_looks and pictures:
+                self.tabs.select(self.grid)
+        else:
+            self.grid.add([r for r in new_rows if r.kind == FileKind.IMAGE.value])
+
+    def _grid_selected(self, index: int) -> None:
+        """A tile was clicked: select the same row in the list."""
+        path = self.grid.rows[index].path if index < len(self.grid.rows) else None
+        self.grid.selected = index
+        for at, row in enumerate(self.rows):
+            if row.path == path:
+                self.tree.selection_set(str(at))
+                self.tree.focus(str(at))
+                self.tree.see(str(at))
+                break
+
+    def _grid_opened(self, index: int) -> None:
+        self._grid_selected(index)
+        self.open_selected()
+
     def _warmed(self, answer) -> None:
         self.warm = answer            # a Failure says what is missing; the next search by meaning will say so too
 
@@ -583,7 +636,11 @@ class App:
 
     def _fetch(self, offset: int) -> None:
         words, filters, question = self.last    # type: ignore[misc]
-        page = self.service.search(words, PAGE_ROWS, offset, self.order.as_request(), False, filters, question)
+        if self.like_of is not None:
+            page = self.service.search_like(self.like_of.file_id, PAGE_ROWS, offset, filters,
+                                            self.order.as_request(), False)
+        else:
+            page = self.service.search(words, PAGE_ROWS, offset, self.order.as_request(), False, filters, question)
         if isinstance(page, Failure):
             self.say(f"The search could not be done: {page.detail}")
             return
@@ -596,18 +653,25 @@ class App:
             self.rows.append(row)
         self.total = page.total
         self.more_button.configure(state="normal" if len(self.rows) < self.total else "disabled")
+        by_looks = filters is not None and filters.where == WHERE_LOOKS
         by_meaning = filters is not None and filters.where in (WHERE_MEANING, WHERE_BOTH)
         coverage = ""
         if by_meaning:
             done, could = self.service.meaning_coverage()
             if could > done:
                 coverage = f"  (sketches of meaning cover {done:,} of {could:,} file(s) with text so far)"
+        elif by_looks:
+            done, could, _ = self.service.looks_coverage()
+            if could > done:
+                coverage = f"  (sketches cover {done:,} of {could:,} picture(s) so far)"
         if self.total == 0:
             self.say(f"No files found for: {words}{coverage}")
         else:
-            way = ("closest in words and meaning to" if filters is not None and filters.where == WHERE_BOTH
+            way = ("that look like" if self.like_of is not None else "that look most like" if by_looks
+                   else "closest in words and meaning to" if filters is not None and filters.where == WHERE_BOTH
                    else "closest in meaning to" if by_meaning else "for")
             self.say(f"Showing {len(self.rows):,} of {self.total:,} file(s) {way}: {words}{coverage}")
+        self._refresh_grid(offset == 0, page.rows, by_looks)
         if offset == 0 and self.rows:
             self.tree.selection_set("0")
             self.tree.focus("0")
@@ -640,7 +704,14 @@ class App:
         row = self.selected()
         if row is None:
             self._show_nothing()
+            self.like_button.configure(state="disabled")
             return
+        self.like_button.configure(state="normal" if row.kind == FileKind.IMAGE.value else "disabled")
+        for at, tile in enumerate(self.grid.rows):
+            if tile.path == row.path:
+                if self.grid.selected != at:
+                    self.grid.select(at)
+                break
         self.path_text.set(row.path)
         self.facts_text.set(f"{row.kind}, {format_bytes(row.size)}, modified {format_date(row.modified)}")
         record = self.service.store.get_file(row.path)
@@ -1062,6 +1133,8 @@ class App:
                 break
             if isinstance(item, Progress):
                 latest = item
+            elif isinstance(item, tuple) and item and item[0] == "thumb":
+                finished.append(("thumb", item[1]))
             else:
                 finished.append(item)    # type: ignore[arg-type]
         if latest is not None and not finished:
@@ -1075,6 +1148,8 @@ class App:
                 self._understood(report)
             elif what == "sketched":
                 self._sketched(report)
+            elif what == "thumb":
+                self.grid.thumb_arrived(report)
             elif what == "warm":
                 self._warmed(report)
             else:
