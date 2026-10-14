@@ -152,8 +152,9 @@ Pair = Tuple[int, int]
 WHERE_ANYWHERE, WHERE_TEXT, WHERE_NAME, WHERE_OCR = "anywhere", "text", "name", "ocr"
 WHERE_MEANING = "meaning"      # not the words but what the passage is about (sketches of meaning)
 WHERE_BOTH = "both"            # the words and the meaning together: a name in the question counts, and so does the sense
+WHERE_LOOKS = "looks"          # pictures that look like what the sentence says (sketches of pictures)
 WHERE_WORD_CHOICES = (WHERE_ANYWHERE, WHERE_TEXT, WHERE_NAME, WHERE_OCR)
-WHERE_CHOICES = WHERE_WORD_CHOICES + (WHERE_MEANING, WHERE_BOTH)
+WHERE_CHOICES = WHERE_WORD_CHOICES + (WHERE_MEANING, WHERE_BOTH, WHERE_LOOKS)
 MAX_SORT_KEYS = 3
 
 

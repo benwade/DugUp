@@ -252,9 +252,25 @@ def _migration_9(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE files ADD COLUMN sketched TEXT NOT NULL DEFAULT ''")
 
 
+def _migration_10(conn: sqlite3.Connection) -> None:
+    """Pictures by likeness: one row a picture, for one model (looks.py): the sketch as signed bytes with its
+    scale and its fingerprint, as for text; or `note` saying why the picture could not be read, so it is not
+    tried again every run. `files.looked` names the model, as `sketched` does for text; a file that changes
+    size or time wants a new look."""
+    conn.execute("""CREATE TABLE looks (
+                        file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+                        model TEXT NOT NULL,
+                        scale REAL NOT NULL DEFAULT 0,
+                        sketch BLOB,
+                        fingerprint BLOB,
+                        note TEXT NOT NULL DEFAULT ''
+                    )""")
+    conn.execute("ALTER TABLE files ADD COLUMN looked TEXT NOT NULL DEFAULT ''")
+
+
 MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3, _migration_4,
                                                           _migration_5, _migration_6, _migration_7, _migration_8,
-                                                          _migration_9]
+                                                          _migration_9, _migration_10]
 OCR_ORDER = 1_000_000   # the order number of a page's OCR text, after anything a text layer gave
 SCHEMA_VERSION = len(MIGRATIONS)  # informational; the live value is len(MIGRATIONS)
 
@@ -513,6 +529,8 @@ class SqliteStore:
         self._conn: Optional[sqlite3.Connection] = None
         self._prints: Optional[Tuple[str, int, int, object, object, object]] = None   # (model, data version, own writes, ids, files, matrix)
         self._sketch_writes = 0
+        self._look_prints: Optional[Tuple[str, int, int, object, object]] = None
+        self._looks_writes = 0
         conn = sqlite3.connect(str(self.path), isolation_level=None)
         conn.row_factory = sqlite3.Row
         try:
@@ -645,8 +663,8 @@ class SqliteStore:
                 row_id = int(existing[0])
                 self.conn.execute(
                     "UPDATE files SET path_raw=?, name=?, folder=?, size=?, modified=?, kind=?, file_id=?, "
-                    "state=?, error=?, policy=? WHERE id=?",
-                    values + (row_id,),
+                    "state=?, error=?, policy=?, looked=CASE WHEN size=? AND modified=? THEN looked ELSE '' END WHERE id=?",
+                    values + (record.size, record.modified, row_id),
                 )
             self.conn.execute("UPDATE files SET missing_since=? WHERE id=?", (record.missing_since, row_id))
             self._refresh_name_segment(row_id, name)
@@ -1394,6 +1412,139 @@ class SqliteStore:
             "SELECT s.id, f.path, f.path_raw, s.page, s.text, s.z FROM segments s JOIN files f ON f.id = s.file_id "
             "WHERE s.kind != 'name' AND f.missing_since IS NULL ORDER BY random() LIMIT ?", (max(0, count),))
         return [(r["id"], decode_path(r["path"], r["path_raw"]), r["page"], unpack_text(r["text"], r["z"])) for r in rows]
+
+    # -- pictures by likeness (looks.py): one sketch a picture; the store compares nothing itself
+
+    def unlooked(self, model: str, limit: int = 200, after: Optional[Tuple[float, int]] = None) -> List[FileRecord]:
+        """Picture files with no look by this model yet, the most recently changed first; `after` (modified,
+        id) continues past the last one seen."""
+        clauses, args = ["f.looked <> ?", "f.missing_since IS NULL", "f.kind = ?"], [model, FileKind.IMAGE.value]
+        if after is not None:
+            clauses.append("(f.modified < ? OR (f.modified = ? AND f.id > ?))")
+            args.extend([after[0], after[0], after[1]])
+        sql = f"SELECT f.* FROM files f WHERE {' AND '.join(clauses)} ORDER BY f.modified DESC, f.id LIMIT ?"
+        return [self._record(r) for r in self.conn.execute(sql, args + [max(0, limit)])]
+
+    def save_looks(self, model: str, rows: Sequence[Tuple[int, float, Optional[bytes], Optional[bytes], str]]) -> None:
+        """Keep (file id, scale, sketch bytes, fingerprint bytes, note) for pictures; a note with no sketch
+        says why the picture could not be read. The files are marked as looked at by this model."""
+        self._looks_writes += 1
+        with self.transaction():
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO looks(file_id, model, scale, sketch, fingerprint, note) VALUES (?,?,?,?,?,?)",
+                [(int(f), model, float(scale), sketch, fingerprint, note or "") for f, scale, sketch, fingerprint, note in rows])
+            self.conn.executemany("UPDATE files SET looked=? WHERE id=?", [(model, int(f)) for f, *_ in rows])
+
+    def look_counts(self, model: str) -> Tuple[int, int, int]:
+        """(pictures looked at by this model, pictures there could be, of the looked-at ones those that could
+        not be read), among files there at the last scan."""
+        done = self.conn.execute("SELECT COUNT(*) FROM files WHERE looked=? AND missing_since IS NULL", (model,)).fetchone()[0]
+        could = self.picture_count()
+        unread = self.conn.execute("SELECT COUNT(*) FROM looks k JOIN files f ON f.id = k.file_id "
+                                   "WHERE k.model=? AND k.sketch IS NULL AND f.missing_since IS NULL", (model,)).fetchone()[0]
+        return int(done), int(could), int(unread)
+
+    def unread_pictures(self, model: str, limit: int = 1000) -> List[Tuple[str, str]]:
+        """(path, why) for pictures this model could not read."""
+        rows = self.conn.execute("SELECT f.path, f.path_raw, k.note FROM looks k JOIN files f ON f.id = k.file_id "
+                                 "WHERE k.model=? AND k.sketch IS NULL AND f.missing_since IS NULL ORDER BY f.path LIMIT ?",
+                                 (model, max(0, limit)))
+        return [(decode_path(r["path"], r["path_raw"]), r["note"]) for r in rows]
+
+    def look_fingerprints(self, model: str):
+        """Every picture fingerprint by this model, for files there at the last scan: (file ids, int8 matrix)."""
+        import numpy as np
+        from .sketches import FINGERPRINT
+        rows = self.conn.execute(
+            "SELECT k.file_id, k.fingerprint FROM looks k JOIN files f ON f.id = k.file_id "
+            "WHERE k.model=? AND k.fingerprint IS NOT NULL AND f.missing_since IS NULL ORDER BY k.file_id", (model,)).fetchall()
+        ids = np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows))
+        matrix = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
+            else np.zeros((0, FINGERPRINT), dtype=np.int8)
+        return ids, matrix
+
+    def looks_of(self, file_ids: Sequence[int]) -> Dict[int, Tuple[float, bytes]]:
+        """file id -> (scale, sketch bytes) for these pictures (those that have a sketch)."""
+        found: Dict[int, Tuple[float, bytes]] = {}
+        ids = [int(i) for i in file_ids]
+        for at in range(0, len(ids), 400):
+            chunk = ids[at:at + 400]
+            marks = ",".join("?" * len(chunk))
+            for r in self.conn.execute(f"SELECT file_id, scale, sketch FROM looks WHERE sketch IS NOT NULL AND file_id IN ({marks})", chunk):
+                found[r[0]] = (r[1], r[2])
+        return found
+
+    def _look_fingerprints_cached(self, model: str):
+        version = int(self.conn.execute("PRAGMA data_version").fetchone()[0])
+        if self._look_prints is None or self._look_prints[:3] != (model, version, self._looks_writes):
+            ids, matrix = self.look_fingerprints(model)
+            self._look_prints = (model, version, self._looks_writes, ids, matrix)
+        return self._look_prints[3], self._look_prints[4]
+
+    def search_looks(self, question, model: str, limit: int = 100, offset: int = 0,
+                     filters: Optional[SearchFilters] = None, candidates: Optional[int] = None,
+                     sort="rank", descending: bool = False, not_file: Optional[int] = None) -> SearchPage:
+        """Pictures closest to `question` (a sketch from the picture model: of a sentence, or of a picture),
+        closest first, one row a picture, `rank` the closeness. Two stages as for text. Only the file
+        filters apply, and they narrow the scan. `not_file` leaves one picture out (the example itself)."""
+        import numpy as np
+        from . import sketches
+        keys = sort_keys(sort, descending, SORT_COLUMNS)
+        if limit < 0 or offset < 0:
+            raise ValueError("limit and offset must not be negative")
+        ids, prints = self._look_fingerprints_cached(model)
+        if len(ids) == 0:
+            return SearchPage([], 0, offset, limit)
+        _, _, _, file_clause, file_args, _ = self._narrow("", filters)
+        keep = candidates if candidates is not None else sketches.CANDIDATES
+        asked = np.asarray(question, dtype=np.float32)
+        inside = np.arange(len(ids))
+        if file_clause:
+            allowed = np.fromiter((r[0] for r in self.conn.execute(f"SELECT f.id FROM files f WHERE 1=1{file_clause}", file_args)),
+                                  dtype=np.int64)
+            inside = np.flatnonzero(np.isin(ids, allowed))
+        if not_file is not None:
+            inside = inside[ids[inside] != not_file]
+        if len(inside) == 0:
+            return SearchPage([], 0, offset, limit)
+        picked = sketches.scan(prints[inside], asked, keep)
+        chosen = [int(i) for i in ids[inside[picked]]]
+        full = self.looks_of(chosen)
+        order = [i for i in chosen if i in full]
+        if not order:
+            return SearchPage([], 0, offset, limit)
+        vectors = sketches.dequantize(b"".join(full[i][1] for i in order), len(asked), [full[i][0] for i in order])
+        scores = sketches.closeness(vectors, asked)
+        scored = sorted(zip((float(x) for x in scores), order), key=lambda t: (-t[0], t[1]))
+        rows_by_id: Dict[int, sqlite3.Row] = {}
+        for at in range(0, len(order), 400):
+            chunk = order[at:at + 400]
+            marks = ",".join("?" * len(chunk))
+            for r in self.conn.execute(f"SELECT f.* FROM files f WHERE f.id IN ({marks})", chunk):
+                rows_by_id[r["id"]] = r
+        if keys != [("rank", False)]:
+            def value(item, key):
+                r = rows_by_id[item[1]]
+                if key == "rank":
+                    return -item[0]
+                if key == "matches":
+                    return 1
+                v = r[key]
+                return v.casefold() if isinstance(v, str) else v
+            scored = _order_in_python(scored, value, keys)
+        rows = [SearchRow(r["id"], decode_path(r["path"], r["path_raw"]), r["name"], r["folder"], r["size"], r["modified"],
+                          r["kind"], r["state"], 1, score, (), missing_since=r["missing_since"])
+                for score, file_id in scored[offset:offset + limit] for r in [rows_by_id[file_id]]]
+        return SearchPage(rows, len(scored), offset, limit)
+
+    def look_of(self, file_id: int):
+        """The sketch of one picture as float32 numbers, or None when it has none."""
+        from . import sketches
+        found = self.looks_of([file_id])
+        if file_id not in found:
+            return None
+        from .embedding import LOOKS_DIMS
+        return sketches.dequantize(found[file_id][1], LOOKS_DIMS, [found[file_id][0]])[0]
 
     def sample_pictures(self, count: int) -> List[Tuple[int, str]]:
         """`count` picture files drawn at random, there at the last scan: (file id, path). For measuring."""

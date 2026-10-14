@@ -123,6 +123,9 @@ class FakeStore:
             self.segments[row_id] = []
             self.segment_ids[row_id] = []
             self.pages[row_id] = []
+        old = self.files.get(row_id)
+        if old is not None and (old.size, old.modified) != (record.size, record.modified) and hasattr(self, "looked"):
+            self.looked.pop(row_id, None)          # a changed picture wants a new look
         self.files[row_id] = FileRecord(record.path, record.size, record.modified, record.kind, record.file_id,
                                         record.state, record.error, record.policy, row_id, record.missing_since)
         record.row_id = row_id
@@ -337,6 +340,83 @@ class FakeStore:
             if file_id in meaning_rows:
                 evidence.extend(e for e in meaning_rows[file_id].evidence if e.segment_id not in {w.segment_id for w in evidence})
             rows.append(_replace(base, rank=score, evidence=tuple(evidence)))
+        return SearchPage(rows, len(scored), offset, limit)
+
+    # -- pictures by likeness
+    def _lk(self):
+        if not hasattr(self, "looks"):
+            self.looks, self.looked = {}, {}          # file -> (model, scale, sketch, fp, note); file -> model
+        return self.looks
+
+    def unlooked(self, model, limit=200, after=None):
+        self._lk()
+        found = [r for i, r in self.files.items() if r.missing_since is None and r.kind is FileKind.IMAGE
+                 and self.looked.get(i, "") != model and (after is None or (r.modified, -i) < (after[0], -after[1]))]
+        found.sort(key=lambda r: (-r.modified, r.row_id))
+        return [copy.copy(r) for r in found[:max(0, limit)]]
+
+    def save_looks(self, model, rows):
+        lk = self._lk()
+        for f, scale, sketch, fp, note in rows:
+            lk[f] = (model, scale, sketch, fp, note or "")
+            self.looked[f] = model
+
+    def look_counts(self, model):
+        self._lk()
+        done = sum(1 for i, m in self.looked.items() if m == model and i in self.files and self.files[i].missing_since is None)
+        could = sum(1 for r in self.files.values() if r.missing_since is None and r.kind is FileKind.IMAGE)
+        unread = sum(1 for i, v in self.looks.items() if v[0] == model and v[2] is None and i in self.files and self.files[i].missing_since is None)
+        return done, could, unread
+
+    def unread_pictures(self, model, limit=1000):
+        self._lk()
+        return sorted((self.files[i].path, v[4]) for i, v in self.looks.items() if v[0] == model and v[2] is None and i in self.files)[:limit]
+
+    def look_fingerprints(self, model):
+        import numpy as np
+        from dugup.sketches import FINGERPRINT
+        lk = self._lk()
+        rows = sorted((i, v[3]) for i, v in lk.items() if v[0] == model and v[3] is not None and i in self.files and self.files[i].missing_since is None)
+        ids = np.array([i for i, _ in rows], dtype=np.int64)
+        matrix = np.frombuffer(b"".join(fp for _, fp in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
+            else np.zeros((0, FINGERPRINT), dtype=np.int8)
+        return ids, matrix
+
+    def looks_of(self, file_ids):
+        lk = self._lk()
+        return {i: (lk[i][1], lk[i][2]) for i in file_ids if i in lk and lk[i][2] is not None}
+
+    def look_of(self, file_id):
+        from dugup.embedding import LOOKS_DIMS
+        from dugup.sketches import dequantize
+        found = self.looks_of([file_id])
+        return None if file_id not in found else dequantize(found[file_id][1], LOOKS_DIMS, [found[file_id][0]])[0]
+
+    def search_looks(self, question, model, limit=100, offset=0, filters=None, candidates=None, sort="rank", descending=False, not_file=None):
+        import numpy as np
+        from dugup.embedding import LOOKS_DIMS
+        from dugup.sketches import closeness, dequantize
+        lk = self._lk()
+        scored = []
+        for i, (m, scale, sketch, fp, note) in lk.items():
+            if m != model or sketch is None or i not in self.files or i == not_file or self.files[i].missing_since is not None:
+                continue
+            if not self._file_passes(self.files[i], filters):
+                continue
+            scored.append((float(closeness(dequantize(sketch, LOOKS_DIMS, [scale]), np.asarray(question, dtype=np.float32))[0]), i))
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        keys = sort_keys(sort, descending, SORT_COLUMNS)
+        if keys != [("rank", False)]:
+            for key, down in reversed(keys):
+                scored.sort(key=lambda t: (-t[0] if key == "rank" else 1 if key == "matches" else
+                                            (lambda v: v.casefold() if isinstance(v, str) else v)(getattr(self.files[t[1]], key if key != "name" else "path"))),
+                            reverse=down)
+        rows = []
+        for score, i in scored[offset:offset + limit]:
+            r = self.files[i]
+            rows.append(SearchRow(i, r.path, os.path.basename(r.path), os.path.dirname(r.path), r.size, r.modified,
+                                  r.kind.value if hasattr(r.kind, "value") else str(r.kind), r.state.value, 1, score, (),
+                                  missing_since=r.missing_since))
         return SearchPage(rows, len(scored), offset, limit)
 
     def sketches_of(self, segment_ids):

@@ -365,6 +365,31 @@ class Store(Protocol):
         """Files closest in meaning to a sketch of a question (float32 numbers from `model`), one row per
         file (per content unless filters.every_copy) with its closest passage as Evidence; rank is closeness."""
 
+    # pictures by likeness (looks.py): one sketch a picture
+    def unlooked(self, model: str, limit: int = 200, after: Optional[Tuple[float, int]] = None) -> Sequence[FileRecord]:
+        """Pictures with no look by this model yet, the most recently changed first; `after` continues past one."""
+
+    def save_looks(self, model: str, rows: Sequence[Tuple[int, float, Optional[bytes], Optional[bytes], str]]) -> None:
+        """(file id, scale, sketch bytes or None, fingerprint or None, a note saying why it could not be read)."""
+
+    def look_counts(self, model: str) -> Tuple[int, int, int]:
+        """(pictures looked at, pictures there are, of those looked at the ones that could not be read)."""
+
+    def unread_pictures(self, model: str, limit: int = 1000) -> Sequence[Tuple[str, str]]: ...
+
+    def look_fingerprints(self, model: str):
+        """(file ids, int8 matrix) of every picture fingerprint by this model."""
+
+    def looks_of(self, file_ids: Sequence[int]) -> Mapping[int, Tuple[float, bytes]]: ...
+
+    def look_of(self, file_id: int):
+        """One picture's sketch as float32 numbers, or None."""
+
+    def search_looks(self, question, model: str, limit: int = 100, offset: int = 0,
+                     filters: Optional[SearchFilters] = None, candidates: Optional[int] = None,
+                     sort="rank", descending: bool = False, not_file: Optional[int] = None) -> SearchPage:
+        """Pictures closest to a sketch (of a sentence or of a picture), closest first; rank is the closeness."""
+
     def closeness_of_files(self, question, model: str, file_ids: Sequence[int]) -> Mapping[int, Tuple[float, int]]:
         """file id -> (closeness of its closest piece to the question, that segment id); files with no sketch left out."""
 

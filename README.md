@@ -244,16 +244,28 @@ default; `meaning_model = "small"` chooses the 90 MB one, about seven times fast
 - **Measuring.** `dugup meaning measure --ask "a sentence"` tries both models on a sample of your own index
   and reports speed, disk and what the questions find, without storing anything.
 
-## Pictures by likeness (being measured)
+## Pictures by likeness
 
-`dugup alike measure --ask "a dog on a beach" --like C:\path\to\a\photo.jpg` makes sketches of a sample of the
-index's pictures with a pinned picture model (the picture half of CLIP, 352 MB, and its sentence half, 254 MB,
-fetched on first use into the data folder) on the processor and, where the runtime can, the graphics card, and
-reports speed, the disk every picture's sketch would take, and what the sentences and the example picture find
-in the sample. Nothing is stored in the index yet; the numbers decide how it is built. Expect scores of about
-0.30 for a close match to a sentence and 0.20 for none (that is how this kind of model is), and above 0.9
-for pictures that are nearly the same. Screenshots and scanned pages all look like "a page of text" to it;
-OCR serves those.
+DugUp can keep a sketch of what each picture looks like, so you can find pictures like another one, or
+pictures of something you name. It is the same machinery as searching by meaning, with a picture model in
+place of the text one: the picture half of CLIP (352 MB) and its sentence half (254 MB), pinned by hash and
+fetched on first use into the data folder. It needs `pip install dugup[meaning]` and `pillow`.
+
+- **Filling.** `dugup alike fill` sketches every picture that has none yet, the most recently changed first,
+  several readers side by side (`looks_readers`, 0 works it out from the cores), on the card when the runtime
+  can (`looks_gpu`). Opening and scaling the pictures is the slow part, not the model, which is why the readers
+  matter more than the card. A picture that cannot be read is noted with the reason and not tried again unless
+  it changes; `dugup alike status` lists them. Ctrl+C stops; the next run continues. Folders whose level leaves
+  out "Pictures alike" are passed over. By default an index update goes on to new pictures after the sketches
+  of meaning, once the model is there (`looks_after_index`, `--no-looks`). About 512 bytes a picture.
+- **Searching.** `dugup search --looks "a dog on a beach"`, or "By looks" in the window: pictures that look
+  like what the sentence says, closest first. `dugup alike like PICTURE`: pictures in the index that look like
+  one (in the index or not; a picture outside it is read and sketched on the spot). Scores: about 0.30 is a
+  strong match to a sentence and 0.20 none; between pictures, 0.9 and up is the same scene and 0.97 and up is
+  nearly the same file (a resized copy, say). Screenshots and scanned pages all look like "a page of text" to
+  this model; OCR serves those. The file filters apply.
+- **Measuring.** `dugup alike measure --ask "a sentence" --like PICTURE` tries the model on a sample of your
+  own pictures and reports speed, disk and what is found, without storing anything.
 
 ## Clearing out copies
 

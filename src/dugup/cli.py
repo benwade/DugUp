@@ -29,7 +29,7 @@ from .filesource import SUGGESTED_EXCLUDES
 from .indexer import KEEP, REFUSE, REREAD, IndexReport, Progress
 from .protocols import WARN_MASS_LOSS, WARN_ROOT_EMPTY
 from .service import LocalService
-from .shapes import LEVEL_WORDS, LEVELS, OPTION_OCR, POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow, WHERE_BOTH, WHERE_MEANING
+from .shapes import LEVEL_WORDS, LEVELS, OPTION_OCR, POLICIES, POLICY_OPEN, Failure, FailureReason, Root, SearchFilters, SearchPage, SearchRow, WHERE_BOTH, WHERE_LOOKS, WHERE_MEANING
 from .store import SORT_COLUMNS, StoreError
 from .suggest import SAFE, Suggestion
 
@@ -112,8 +112,12 @@ def progress_text(p: Progress) -> str:
                 f"{p.rate:.1f} files/s  {left_text}")
         return line + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else "")
     if p.phase == "look":
-        if p.current:
+        if p.root:
             return f"[alike] {p.root} on the {p.current}: {p.done:,} of {p.total:,}"
+        left = p.remaining_seconds
+        left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
+        line = f"[alike] looking at pictures: {p.done:,} of {p.total:,} ({p.percent:.1f}%)  {p.rate:.1f} pictures/s  {left_text}  unread {p.failed:,}"
+        return line + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else "")
     if p.phase == "sketch":
         left = p.remaining_seconds
         left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
@@ -236,6 +240,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="stop after the index is up to date; do not go on to read pictures and scans (dugup ocr does that later)")
     index.add_argument("--no-meaning", action="store_true",
                        help="do not go on to sketch meaning after reading (dugup meaning fill does that later)")
+    index.add_argument("--no-looks", action="store_true",
+                       help="do not go on to look at new pictures after reading (dugup alike fill does that later)")
     choice = index.add_mutually_exclusive_group()
     choice.add_argument("--reread", action="store_true", help="after a settings change: read every file again")
     choice.add_argument("--keep", action="store_true", help="after a settings change: keep what is stored as it is")
@@ -312,6 +318,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "(needs sketches: dugup meaning fill)")
     search.add_argument("--both", action="store_true",
                         help="the words and the meaning together: a name in the question counts, and so does the sense")
+    search.add_argument("--looks", action="store_true",
+                        help="pictures that look like what the sentence says (needs sketches of pictures: dugup alike fill)")
     search.add_argument("--context", type=int, default=60, help="characters shown on each side of a match")
 
     dup = sub.add_parser("duplicates", parents=[common],
@@ -361,6 +369,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="a sentence to look for in the sample, such as \"a dog on a beach\"; may be repeated")
     gauge2.add_argument("--like", action="append", default=[], metavar="PICTURE",
                         help="a picture whose likes to find in the sample; may be repeated")
+    filling2 = alike_sub.add_parser("fill", parents=[common],
+                                    help="make sketches of the pictures that have none yet, the most recently changed first, "
+                                         "several readers side by side (Ctrl+C stops; run again to continue)")
+    filling2.add_argument("--budget", type=float, default=None, metavar="SECONDS", help="stop after this long; run again to continue")
+    filling2.add_argument("--readers", type=int, default=None, help="readers side by side (default: the setting looks_readers)")
+    filling2.add_argument("--gpu", dest="gpu", action="store_true", default=None, help="on the graphics card")
+    filling2.add_argument("--no-gpu", dest="gpu", action="store_false", help="on the processor (default: as the setting looks_gpu says)")
+    alike_sub.add_parser("status", parents=[common], help="how many pictures have sketches, and which could not be read")
+    liking = alike_sub.add_parser("like", parents=[common], help="pictures in the index that look like a picture")
+    liking.add_argument("picture", help="a picture file, in the index or not")
+    liking.add_argument("--limit", type=int, default=20)
+    liking.add_argument("--offset", type=int, default=0)
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")
@@ -776,11 +796,11 @@ def cmd_index(args, env, out, environ, stop: Optional[threading.Event] = None, i
                 if code == 130:
                     return code
             if args.no_meaning or not service.settings.meaning_after_index or not service.meaning_waiting():
-                return code
+                return _index_then_looks(service, args, stop, printer, out) or code
             ready = service.meaning_ready()
             if ready is not True:
                 safe_write(f"Sketches of meaning were not made: {ready}.", out)
-                return code
+                return _index_then_looks(service, args, stop, printer, out) or code
             safe_write(f"Now sketching the meaning of {service.meaning_waiting():,} file(s), the most recently changed "
                        "first. Ctrl+C stops; what is done is kept and `dugup meaning fill` continues later. "
                        "(`dugup index --no-meaning` leaves this step out.)", out)
@@ -788,13 +808,34 @@ def cmd_index(args, env, out, environ, stop: Optional[threading.Event] = None, i
             printer.finish()
             if isinstance(report, Failure):
                 return _fail(report, out)
-            return print_meaning_report(report, out) or code
+            code = print_meaning_report(report, out) or code
+            if code == 130:
+                return code
+            return _index_then_looks(service, args, stop, printer, out) or code
     finally:
         if previous is not None:
             signal.signal(signal.SIGINT, previous)
         if handler is not None:
             logging.getLogger("dugup").removeHandler(handler)
             handler.close()
+
+
+def _index_then_looks(service, args, stop, printer, out) -> int:
+    """After an update: look at new pictures, when the setting asks and the model is already there."""
+    if getattr(args, "no_looks", False) or not service.settings.looks_after_index or not service.looks_waiting():
+        return 0
+    ready = service.looks_ready()
+    if ready is not True:
+        safe_write(f"Pictures were not sketched: {ready}.", out)
+        return 0
+    safe_write(f"Now looking at {service.looks_waiting():,} picture(s), the most recently changed first, "
+               f"{service.looks_readers()} reader(s) side by side. Ctrl+C stops; what is done is kept and `dugup alike fill` "
+               "continues later. (`dugup index --no-looks` leaves this step out.)", out)
+    report = service.run_looks(stop, printer)
+    printer.finish()
+    if isinstance(report, Failure):
+        return _fail(report, out)
+    return print_looks_report(report, out)
 
 
 def _index_then_ocr(service, args, roots, stop, printer, out) -> int:
@@ -949,17 +990,18 @@ ALSO_AT_SHOWN = 8
 
 
 def print_results(page: SearchPage, query: str, service: LocalService, context: int, out: TextIO,
-                  by_meaning: bool = False, both: bool = False) -> None:
+                  by_meaning: bool = False, both: bool = False, looks: bool = False) -> None:
     if page.total == 0:
         safe_write(f"No files found for: {query}", out)
         return
     first = page.offset + 1 if page.rows else 0
     last = page.offset + len(page.rows)
-    way = "closest in words and meaning to" if both else "closest in meaning to" if by_meaning else "for"
+    way = ("that look most like" if looks else "closest in words and meaning to" if both
+           else "closest in meaning to" if by_meaning else "for")
     safe_write(f"Showing {first:,} to {last:,} of {page.total:,} file(s) {way}: {query}", out)
     for number, row in enumerate(page.rows, first):
         state = "" if row.state == "done" else f"  [{row.state}]"
-        score = f"  ({row.rank:.2f})" if by_meaning else ""
+        score = f"  ({row.rank:.2f})" if by_meaning or looks else ""
         safe_write(f"{number:>3}. {row.name}{state}{score}", out)
         safe_write(f"     {row.folder}", out)
         for note in _flags(row, service.settings.missing_retention_days):
@@ -1009,12 +1051,17 @@ def cmd_search(args, env, out, environ) -> int:
     query = " ".join(args.words)
     with service:
         filters = SearchFilters(exact=args.exact, every_copy=args.every_copy) if (args.exact or args.every_copy) else None
-        if args.meaning or args.both:
-            filters = replace(filters or SearchFilters(), where=WHERE_BOTH if args.both else WHERE_MEANING)
+        if args.meaning or args.both or args.looks:
+            filters = replace(filters or SearchFilters(), where=WHERE_LOOKS if args.looks else WHERE_BOTH if args.both else WHERE_MEANING)
         page = service.search(query, max(0, args.limit), max(0, args.offset), args.sort, args.desc, filters)
         if isinstance(page, Failure):
             return _fail(page, out)
-        print_results(page, query, service, max(0, args.context), out, by_meaning=args.meaning or args.both, both=args.both)
+        print_results(page, query, service, max(0, args.context), out, by_meaning=args.meaning or args.both, both=args.both,
+                      looks=args.looks)
+        if args.looks:
+            done, could, _ = service.looks_coverage()
+            if could > done:
+                safe_write(f"(Sketches cover {done:,} of {could:,} picture(s) so far; `dugup alike fill` continues.)", out)
         if args.both:
             from .store import parse_query
             telling = list(service.store.telling_words(query, service.settings.meaning_word_everywhere))
@@ -1495,6 +1542,25 @@ def cmd_alike(args, env, out, environ, stop: Optional[threading.Event] = None, i
         previous = signal.signal(signal.SIGINT, on_interrupt)
     try:
         with service:
+            if args.alike_command == "status":
+                print_looks_status(service, out)
+                return 0
+            if args.alike_command == "like":
+                page = service.search_like_file(args.picture, max(0, args.limit), max(0, args.offset))
+                if isinstance(page, Failure):
+                    return _fail(page, out)
+                print_results(page, os.path.basename(args.picture), service, 0, out, looks=True)
+                return 0
+            if args.alike_command == "fill":
+                waiting = service.looks_waiting()
+                readers = max(1, args.readers or service.looks_readers())
+                safe_write(f"Looking at {waiting:,} picture(s) with {readers} reader(s) side by side. The picture model is "
+                           "fetched on first use (352 MB). Ctrl+C stops; what is done is kept and the next run continues.", out)
+                report = service.run_looks(stop, printer, args.budget, args.gpu, args.readers)
+                printer.finish()
+                if isinstance(report, Failure):
+                    return _fail(report, out)
+                return print_looks_report(report, out)
             safe_write(f"Measuring pictures by likeness on {args.pictures:,} of this index's pictures. The picture model is "
                        "fetched on first use (352 MB, and 254 MB more for sentences). Nothing is stored in the index. Ctrl+C stops.", out)
             found = service.measure_looks(args.pictures, args.gpu, args.ask, args.like, printer, stop)
@@ -1506,6 +1572,46 @@ def cmd_alike(args, env, out, environ, stop: Optional[threading.Event] = None, i
         if previous is not None:
             signal.signal(signal.SIGINT, previous)
     return 0
+
+
+def print_looks_status(service, out: TextIO) -> None:
+    done, could, unread = service.looks_coverage()
+    share = f" ({100.0 * done / could:.0f}%)" if could else ""
+    safe_write(f"Sketches of pictures: {done:,} of {could:,}{share}, with {service.looks_model()}.", out)
+    if unread:
+        safe_write(f"{unread:,} of those could not be read as pictures:", out)
+        for path, why in service.store.unread_pictures(service.looks_model(), 20):
+            safe_write(f"  {path}\n      {why}", out)
+        if unread > 20:
+            safe_write(f"  ... and {unread - 20:,} more", out)
+    if could > done:
+        safe_write(f"{could - done:,} picture(s) wait (those in folders without \"Pictures alike\" are passed over). "
+                   "`dugup alike fill` continues.", out)
+
+
+def print_looks_report(report, out: TextIO) -> int:
+    if report.failure is not None:
+        safe_write(f"Stopped early: {report.failure.detail}", out)
+    device = f" on the {report.device}" if report.device else ""
+    safe_write(f"Looked at {report.pictures + report.unread:,} picture(s){device}, {report.readers} reader(s) side by side, in "
+               f"{format_seconds(report.seconds)} ({report.per_second:,.1f} pictures/s; the model took {report.load_seconds:.1f} s to load).", out)
+    if report.unread:
+        safe_write(f"{report.unread:,} could not be read as pictures; `dugup alike status` lists them. They are not tried again "
+                   "unless they change.", out)
+    if report.left_alone:
+        safe_write(f"{report.left_alone:,} picture(s) were passed over: their folder leaves out \"Pictures alike\".", out)
+    share = f" ({100.0 * report.done / report.could:.0f}%)" if report.could else ""
+    safe_write(f"Now {report.done:,} of {report.could:,} picture(s) have sketches{share}.", out)
+    print_compacted(report.compacted, out)
+    if report.stopped:
+        safe_write("[Interrupted] Stopped cleanly. Run `dugup alike fill` again to continue.", out)
+        return 130
+    if report.out_of_time:
+        safe_write("Out of time for this run. Run `dugup alike fill` again to continue.", out)
+    if report.paused:
+        safe_write(f"It paused itself: {report.paused}. Make room (or raise the limit) and run `dugup alike fill` again.", out)
+        return 1
+    return 1 if report.failure is not None else 0
 
 
 def print_looks_measurement(found, out: TextIO) -> None:

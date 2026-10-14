@@ -70,6 +70,10 @@ GROUPS: Tuple[Group, ...] = (
           "Besides the words themselves, DugUp can keep a sketch of what each passage is about, so a question in "
           "your own words finds passages that say the same thing differently. The sketches are made in the "
           "background after indexing; searching by meaning works on what has been sketched so far."),
+    Group("looks", "Pictures by likeness",
+          "DugUp can keep a sketch of what each picture looks like, so you can find pictures like another one, "
+          "or pictures of something you name. The sketches are made in the background after indexing, in folders "
+          "whose level includes \"Pictures alike\"."),
     Group("speed", "How hard to work",
           "Building the index for the first time is heavy work, and that is temporary. Afterwards DugUp only "
           "reads what is new or changed. These settings say how much of the computer it may take while it works."),
@@ -189,6 +193,15 @@ def _entries() -> Tuple[Entry, ...]:
           why="Loading takes a few seconds on a fast computer and longer on a slow disk; a search pressed before "
               "it is done shows a wait window. \"auto\" loads it only when the index holds sketches of meaning.",
           everyday=False, choices=(("auto", "when the index has sketches"), ("yes", "always"), ("never", "never"))),
+        E("looks_gpu", "looks", "Look at pictures on the graphics card",
+          "Use the graphics card for the picture model when the runtime can use one.",
+          why="Opening and scaling the pictures costs more than the model, so the card helps less here than for text; "
+              "it does no harm.", choices=YES_NO),
+        E("looks_readers", "looks", "Readers side by side",
+          "How many pictures are opened and sketched at once. 0 works it out from the cores, at most 8.",
+          why="Opening and scaling pictures is the slow part, and several readers share it.", low=0, high=32, zero="work it out"),
+        E("looks_after_index", "looks", "Look at pictures as part of updating",
+          "Updating the index goes on to sketch new pictures, after the sketches of meaning.", choices=YES_NO),
         E("meaning_after_index", "meaning", "Sketch as part of updating",
           "Updating the index goes on to sketch what is new, after reading pictures.",
           why="One button does it all. Turn it off to sketch at a time of your choosing with `dugup meaning fill`.",

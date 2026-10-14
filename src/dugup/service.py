@@ -35,7 +35,7 @@ from .sandbox import SubprocessSandbox
 from .settings import Settings
 from dataclasses import replace
 
-from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, OPTION_MEANING, OPTION_WORDS, WHERE_BOTH, WHERE_MEANING, level_for, level_reaches, level_words, normalize_level, wants, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
+from .shapes import (LEVEL_NAMES, LEVEL_OCR, LEVELS, OPTION_ALIKE, OPTION_MEANING, OPTION_WORDS, WHERE_BOTH, WHERE_LOOKS, WHERE_MEANING, level_for, level_reaches, level_words, normalize_level, wants, SearchFilters, POLICIES, POLICY_NAMES_ONLY, Box, Evidence, Failure, FailureReason, FileRecord, FileState,
                      Passage, Root, SearchPage)
 from .store import SqliteStore
 from .suggest import Suggestion, suggest_excludes
@@ -77,6 +77,7 @@ class LocalService:
         self._intent = intent
         self._asker = None               # the worker that sketches questions for searching by meaning, kept once made
         self._asker_lock = threading.Lock()   # one question at a time; any thread may ask
+        self._looker = None              # the worker that reads sentences and example pictures for likeness, kept once made
         self._intent_looked = intent is not None
         self.settings = settings or Settings()
         self.source = source or DirectoryScan()
@@ -140,6 +141,9 @@ class LocalService:
         if self._asker is not None:
             self._asker[0].close()
             self._asker = None
+        if self._looker is not None:
+            self._looker[0].close()
+            self._looker = None
         close_ocr = getattr(self._ocr_backend, "close", None)
         if close_ocr is not None:
             close_ocr()
@@ -175,7 +179,13 @@ class LocalService:
         if filters is not None and filters.folder is not None and filters.case_insensitive is None:
             filters = replace(filters, case_insensitive=self.case_insensitive)
         try:
-            if filters is not None and filters.where in (WHERE_MEANING, WHERE_BOTH):
+            if filters is not None and filters.where == WHERE_LOOKS:
+                if question is None:
+                    question = self.sketch_sentence(query)
+                if isinstance(question, Failure):
+                    return question
+                page = self.store.search_looks(question, self.looks_model(), limit, offset, filters, sort=sort, descending=descending)
+            elif filters is not None and filters.where in (WHERE_MEANING, WHERE_BOTH):
                 if question is None:
                     question = self.sketch_question(query)
                 if isinstance(question, Failure):
@@ -442,6 +452,147 @@ class LocalService:
         from .sandbox import SubprocessSandbox
         return meaning.measure(self.store, SubprocessSandbox, self.layout.models / "meaning", choices, pieces, gpu,
                                questions, progress=progress, stop=stop)
+
+    # -- pictures by likeness
+
+    def looks_model(self) -> str:
+        from . import looks
+        return looks.model_name("base")
+
+    def looks_coverage(self) -> Tuple[int, int, int]:
+        """(pictures looked at, pictures there are, of those looked at the ones that could not be read)."""
+        return self.store.look_counts(self.looks_model())
+
+    def looks_waiting(self) -> int:
+        done, could, _ = self.looks_coverage()
+        return max(0, could - done)
+
+    def looks_ready(self) -> "bool | str":
+        """True when pictures can be looked at now; otherwise a sentence saying what is missing."""
+        from . import embedding_models
+        try:
+            import onnxruntime  # noqa: F401
+            import tokenizers  # noqa: F401
+            import PIL  # noqa: F401
+        except ImportError:
+            return "the runtime for pictures by likeness is not installed (pip install dugup[meaning] and pillow)"
+        if not embedding_models.looks_present(self.layout.models / "looks"):
+            size = sum(i.size for i in embedding_models.LOOKS_BY_CHOICE["base"]) / 1048576
+            return f"the picture model is not fetched yet ({size:,.0f} MB); `dugup alike fill` fetches it"
+        return True
+
+    def looks_readers(self) -> int:
+        import os as _os
+        return self.settings.looks_readers or max(1, min(8, (_os.cpu_count() or 2) // 2))
+
+    def run_looks(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
+                  budget_seconds: Optional[float] = None, gpu: Optional[bool] = None, readers: Optional[int] = None):
+        """Make sketches of the pictures that have none (looks.fill), several readers side by side, until done,
+        stopped or out of time. Fetches the picture model on first use. Takes the same lock as indexing.
+        Pictures in folders whose level leaves out "alike" are left alone. A looks.FillReport, or a Failure."""
+        from . import embedding_models, looks
+        from .sandbox import SubprocessSandbox
+        gpu = self.settings.looks_gpu if gpu is None else bool(gpu)
+        count = max(1, readers or self.looks_readers())
+        if not self._run_guard.acquire(blocking=False):
+            return Failure(FailureReason.BUSY, "indexing or OCR is already going on in this program")
+        try:
+            if not self._lock.acquire():
+                return Failure(FailureReason.BUSY, "another program is writing to this data folder right now")
+            try:
+                folder = self.layout.models / "looks"
+                if not embedding_models.looks_present(folder):
+                    fetched = looks.fetch_models(folder, "base", progress, stop)
+                    if isinstance(fetched, Failure):
+                        return fetched
+                store = self._open_store()
+                try:
+                    roots = list(store.list_roots())
+
+                    def asks_for_likeness(file_path: str) -> bool:
+                        owner = next((r for r in roots if _under(file_path, r.path, self._fold)), None)
+                        return owner is None or wants(level_for(owner, file_path, self.case_insensitive), OPTION_ALIKE)
+
+                    def tell(p: Progress) -> None:
+                        self._progress = p
+                        if progress is not None:
+                            progress(p)
+
+                    sandboxes = [SubprocessSandbox() for _ in range(count)]
+                    try:
+                        runners = [looks._Runner(box, folder, gpu, threads=2 if count > 1 else 0) for box in sandboxes]
+                        report = looks.fill(store, runners, asks_for_likeness, tell, stop, budget_seconds, room=self.room)
+                    finally:
+                        for box in sandboxes:
+                            box.close()
+                    if report.failure is None and not report.stopped and not report.out_of_time and not report.paused \
+                            and self._store_thread in (None, threading.get_ident()):
+                        report.compacted = self.compact_if_worthwhile()
+                    return report
+                finally:
+                    store.close()
+            finally:
+                self._lock.release()
+        finally:
+            self._run_guard.release()
+
+    def sketch_sentence(self, sentence: str):
+        """A sketch of a sentence in the pictures' space, from a kept worker on the processor; or a Failure."""
+        from . import looks
+        ready = self.looks_ready()
+        if ready is not True:
+            return Failure(FailureReason.NOT_INSTALLED, ready)
+        with self._asker_lock:
+            if self._looker is None:
+                from .sandbox import SubprocessSandbox
+                sandbox = SubprocessSandbox()
+                self._looker = (sandbox, looks._Runner(sandbox, self.layout.models / "looks", False))
+            vectors = self._looker[1].read([sentence], None, looks.LOAD_SECONDS)
+            if isinstance(vectors, Failure):
+                self._looker[0].close()
+                self._looker = None
+                return vectors
+        return vectors[0]
+
+    def search_like(self, file_id: int, limit: int = 100, offset: int = 0, filters: Optional[SearchFilters] = None,
+                    sort="rank", descending: bool = False) -> "SearchPage | Failure":
+        """Pictures that look like one in the index (by its row id), closest first, the picture itself left out."""
+        example = self.store.look_of(file_id)
+        if example is None:
+            return Failure(FailureReason.OTHER, "that picture has no sketch yet (dugup alike fill makes them)")
+        if filters is not None and filters.folder is not None and filters.case_insensitive is None:
+            filters = replace(filters, case_insensitive=self.case_insensitive)
+        try:
+            return self.store.search_looks(example, self.looks_model(), limit, offset, filters, sort=sort,
+                                           descending=descending, not_file=file_id)
+        except ValueError as exc:
+            return Failure(FailureReason.UNSUPPORTED, str(exc))
+
+    def search_like_file(self, path: str, limit: int = 100, offset: int = 0, filters: Optional[SearchFilters] = None):
+        """Pictures that look like a picture file, indexed or not: it is read and sketched now."""
+        from . import looks
+        path = os.path.abspath(os.path.expanduser(path))
+        record = self.store.get_file(path)
+        if record is not None and record.row_id is not None and self.store.look_of(record.row_id) is not None:
+            return self.search_like(record.row_id, limit, offset, filters)
+        ready = self.looks_ready()
+        if ready is not True:
+            return Failure(FailureReason.NOT_INSTALLED, ready)
+        with self._asker_lock:
+            if self._looker is None:
+                from .sandbox import SubprocessSandbox
+                sandbox = SubprocessSandbox()
+                self._looker = (sandbox, looks._Runner(sandbox, self.layout.models / "looks", False))
+            made = self._looker[1].look([path], None, looks.LOAD_SECONDS)
+        if isinstance(made, Failure):
+            return made
+        vectors, failed = made
+        if failed:
+            return Failure(FailureReason.OTHER, f"the example could not be read: {failed[0]}")
+        if filters is not None and filters.folder is not None and filters.case_insensitive is None:
+            filters = replace(filters, case_insensitive=self.case_insensitive)
+        return self.store.search_looks(vectors[0], self.looks_model(), limit, offset, filters,
+                                       not_file=record.row_id if record is not None else None)
 
     def measure_looks(self, pictures: int = 300, gpu: Optional[bool] = None, questions: Sequence[str] = (),
                       like: Sequence[str] = (), progress: Optional[Callable[[Progress], None]] = None,
