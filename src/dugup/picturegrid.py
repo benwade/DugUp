@@ -23,6 +23,29 @@ TILE_H = THUMB + 34 + GAP
 KEEP = 600             # thumbnails kept in memory for the session, at most
 
 
+def bind_wheel(area, canvas) -> None:
+    """Scroll `canvas` with the mouse wheel while the pointer is anywhere over `area`, children included
+    (tkinter delivers the wheel to the widget under the pointer, so the binding is made for the whole
+    application while the pointer is inside and taken off when it leaves). Windows and macOS send
+    <MouseWheel> with a delta; X11 sends Button-4 and Button-5."""
+    def on_wheel(event):
+        if event.delta:
+            canvas.yview_scroll(-int(event.delta / 120) if abs(event.delta) >= 120 else (-1 if event.delta > 0 else 1), "units")
+        return "break"
+
+    def enter(event):
+        area.bind_all("<MouseWheel>", on_wheel)
+        area.bind_all("<Button-4>", lambda e: (canvas.yview_scroll(-1, "units"), "break")[1])
+        area.bind_all("<Button-5>", lambda e: (canvas.yview_scroll(1, "units"), "break")[1])
+
+    def leave(event):
+        for name in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            area.unbind_all(name)
+
+    area.bind("<Enter>", enter)
+    area.bind("<Leave>", leave)
+
+
 class Thumbnails:
     """Makes thumbnails in the background. `ask(path)` queues one; the result arrives as ("thumb", path,
     image or None) on the queue given, and is kept so a second ask answers at once."""
@@ -91,7 +114,7 @@ class PictureGrid(ttk.Frame):
         self.canvas.bind("<Configure>", lambda event: self._reflow())
         self.canvas.bind("<Button-1>", self._click)
         self.canvas.bind("<Double-1>", self._double)
-        self.canvas.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-int(e.delta / 120) if e.delta else 0, "units"))
+        bind_wheel(self.canvas, self.canvas)
         self.rows: List[object] = []
         self.scores: bool = False
         self.photos: Dict[int, object] = {}          # tile index -> PhotoImage (kept, or tkinter drops it)

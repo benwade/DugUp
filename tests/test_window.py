@@ -1053,7 +1053,37 @@ def test_the_rename_tab_previews_lets_names_be_edited_or_kept_renames_with_a_rec
         tab.worker.join(0.05)
     app.drain()
     assert tab.plan is not None and len(tab.plan.to_rename) == 3, "the results' pictures, without choosing a folder"
+    assert [k.get() for k in tab.keep] == [True, False, False], "a search selects its first row: only that one starts ticked"
+    # with another row selected, only that one starts ticked; and the tab follows the selection by itself when it is open
+    app.tree.selection_set("1")
+    app.show_selected()
+    tab.preview()
+    for _ in range(200):
+        if not tab.busy():
+            break
+        tab.worker.join(0.05)
+    app.drain()
+    assert [k.get() for k in tab.keep] == [False, True, False], "only the selected picture starts ticked"
+    assert tab.rename_button["text"] == "Rename 1 as shown"
+    app.tabs.select(app.renamer)
+    app._tab_changed()
+    app.tree.selection_set("2")
+    app.show_selected()                 # the selection changed while the tab is open: the selected picture is previewed by itself
+    for _ in range(400):
+        if not tab.busy():
+            app.drain()
+            if not tab.busy() and tab.plan is not None and len(tab.plan.to_rename) == 1 and tab.plan.to_rename[0].old.endswith("IMG_9.jpg"):
+                break
+        else:
+            tab.worker.join(0.05)
+    assert len(tab.plan.to_rename) == 1 and tab.plan.to_rename[0].old.endswith("IMG_9.jpg") and tab.keep[0].get()
+    assert "The selected picture" in tab.status.get() and "Press Preview for every picture" in tab.status.get()
+    before = tab.plan
+    app.show_selected()
+    assert tab.plan is before and not tab.busy(), "the same selection again is not previewed again"
+    app.tabs.select(0)
     tab.plan = None
+    tab.shown_for = None
     tab.folder.set(str(trip))
     tab.source.set("folder")
     tab.pattern.set("{caption} {original}")

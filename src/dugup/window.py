@@ -353,6 +353,7 @@ class App:
         from .renametab import RenameTab
         self.renamer = RenameTab(right, self)
         right.add(self.renamer, text="Rename")
+        right.bind("<<NotebookTabChanged>>", lambda event: self._tab_changed())
 
         index = ttk.Frame(right, padding=4)
         index.columnconfigure(0, weight=1)
@@ -616,6 +617,19 @@ class App:
         else:
             self.grid.add([r for r in new_rows if r.kind == FileKind.IMAGE.value])
 
+    def selected_paths(self) -> List[str]:
+        """The paths of the rows selected in the list (one, or several with Ctrl or Shift)."""
+        found = []
+        for item in self.tree.selection():
+            index = int(item)
+            if 0 <= index < len(self.rows):
+                found.append(self.rows[index].path)
+        return found
+
+    def _tab_changed(self) -> None:
+        if self.tabs.select() == str(self.renamer):
+            self.renamer.follow_selection()
+
     def result_pictures(self) -> List[str]:
         """The paths of the pictures among the current results (what the Pictures tab shows)."""
         return [r.path for r in self.rows if r.kind == FileKind.IMAGE.value]
@@ -716,6 +730,8 @@ class App:
             self.like_button.configure(state="disabled")
             return
         self.like_button.configure(state="normal" if row.kind == FileKind.IMAGE.value else "disabled")
+        if self.tabs.select() == str(self.renamer):
+            self.renamer.follow_selection()
         for at, tile in enumerate(self.grid.rows):
             if tile.path == row.path:
                 if self.grid.selected != at:

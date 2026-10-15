@@ -292,8 +292,10 @@ and nothing is read again.
   model here (seconds a picture on a processor), which is why it runs on demand only, never in the
   background. `--longer` asks for a longer description; `--no-caption` uses the other fields alone.
   `caption_source = "server"` is the seam for a local model server of your own; it is not built yet.
-- **In the window**: the Rename tab. It starts from the pictures in the current results (a search by words,
-  by looks, or the likes of a picture), or from a folder you choose; press Preview, and each picture appears with its
+- **In the window**: the Rename tab. It follows the selection like the other tabs: open it, or change the
+  selection while it is open, and the selected picture is previewed by itself. Preview does every picture in
+  the current results (a search by words, by looks, or the likes of a picture), with only the selected ones
+  starting ticked, or a folder you choose; each picture appears with its
   thumbnail, the name it has, the name it would get in a box you can edit, the sentence the model wrote,
   and a tick to leave it alone. "Rename as shown" asks once, renames, and keeps the record under the data
   folder (`renames\`); "Undo last rename" puts the names back. The captions are written in the background

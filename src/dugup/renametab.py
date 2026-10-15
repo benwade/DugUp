@@ -18,7 +18,7 @@ from typing import Callable, List, Optional
 import tkinter as tk
 from tkinter import ttk
 
-from .picturegrid import GAP, THUMB
+from .picturegrid import GAP, THUMB, bind_wheel
 from .shapes import Failure, FailureReason
 
 ROW_H = THUMB + 62
@@ -43,6 +43,10 @@ class RenameTab(ttk.Frame):
         self.worker: Optional[threading.Thread] = None
         self.stop = threading.Event()
         self.last_record = ""
+        self.pending_follow = False
+        self.ticked_paths: Optional[set] = None          # the paths to start ticked (the selection); None: every one
+        self.auto_paths: Optional[list] = None            # what the preview in flight was asked for, when it was automatic
+        self.shown_for: Optional[tuple] = None            # the selection the automatic preview was made for
         self.columnconfigure(1, weight=1)
         self.rowconfigure(4, weight=1)
         ttk.Label(self, text="Pictures:").grid(row=0, column=0, sticky="w")
@@ -83,7 +87,7 @@ class RenameTab(ttk.Frame):
         self.canvas_window = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.canvas_window, width=e.width))
-        self.canvas.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-int(e.delta / 120) if e.delta else 0, "units"))
+        bind_wheel(self, self.canvas)
 
     # -- preview
 
@@ -107,6 +111,22 @@ class RenameTab(ttk.Frame):
     def busy(self) -> bool:
         return self.worker is not None and self.worker.is_alive()
 
+    def follow_selection(self) -> None:
+        """The tab is open and the selection changed (or the tab was just opened): preview the selected
+        picture(s) by themselves, so the tab shows the selected file the way the other tabs do. A preview
+        already in hand for the same selection is left as it is."""
+        if self.busy():
+            self.pending_follow = True          # looked at again when the preview in flight comes back
+            return
+        self.pending_follow = False
+        selected = [p for p in self.host.selected_paths() if p in set(self.host.result_pictures())]
+        key = tuple(selected)
+        if not selected or key == self.shown_for:
+            return
+        self.shown_for = key
+        self.ticked_paths = set(selected)
+        self._start(paths=selected, automatic=True)
+
     def preview(self) -> None:
         folder = self.folder.get().strip()
         paths = None
@@ -115,9 +135,17 @@ class RenameTab(ttk.Frame):
             if not paths:
                 self.status.set("There are no pictures in the results. Search first, or choose a folder.")
                 return
+            selected = set(self.host.selected_paths()) & set(paths)
+            self.ticked_paths = selected or None          # the selection starts ticked; with none, every one
         elif not folder:
             self.status.set("Choose a folder first.")
             return
+        else:
+            self.ticked_paths = None
+        self.shown_for = None
+        self._start(folder=folder, paths=paths)
+
+    def _start(self, folder: str = "", paths=None, automatic: bool = False) -> None:
         if self.busy():
             self.status.set("A preview is already being made.")
             return
@@ -141,6 +169,7 @@ class RenameTab(ttk.Frame):
         self.preview_button.configure(state="disabled")
         self.rename_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
+        self.auto_paths = list(paths) if automatic else None
         self.status.set(("The captioning model is fetched first, once (about 1.1 GB). " if fetching else "")
                         + ("Writing a sentence about each picture ..." if caption else "Working out the names ..."))
         self.worker = threading.Thread(target=work, name="dugup-window-rename", daemon=True)
@@ -150,6 +179,11 @@ class RenameTab(ttk.Frame):
         """The preview came back (from the window's event loop)."""
         self.preview_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
+        if self.pending_follow and self.auto_paths is not None:
+            self.pending_follow = False
+            self.shown_for = None
+            self.follow_selection()             # the selection moved on while this one was being made
+            return
         if isinstance(found, Failure):
             self.status.set(f"The preview could not be made: {found.detail}")
             return
@@ -160,8 +194,13 @@ class RenameTab(ttk.Frame):
         self._draw()
         n = len(found.to_rename)
         took = f" ({found.captioned:,} described on the {found.device})" if found.captioned else ""
-        self.status.set(f"{n:,} picture(s) would be renamed{took}; {len(found.left_alone):,} left alone. Edit any name, untick any "
-                        "you want to keep, then press Rename as shown." if n else "Nothing to rename here.")
+        if self.auto_paths is not None:
+            self.status.set(f"The selected picture{'s' if len(self.auto_paths) > 1 else ''}{took}. Press Preview for every picture in the results."
+                            if n else "The selected picture would be left alone (its name already says something, or it is protected). "
+                                      "Press Preview for every picture in the results.")
+        else:
+            self.status.set(f"{n:,} picture(s) would be renamed{took}; {len(found.left_alone):,} left alone. Edit any name, untick any "
+                            "you want to keep, then press Rename as shown." if n else "Nothing to rename here.")
         self.rename_button.configure(state="normal" if n else "disabled")
         for button in (self.tick_all_button, self.untick_all_button):
             button.configure(state="normal" if n else "disabled")
@@ -199,7 +238,7 @@ class RenameTab(ttk.Frame):
             row = ttk.Frame(self.inner, padding=(4, 4), style="Rename.TFrame")
             row.grid(row=index, column=0, sticky="ew", pady=1)
             row.columnconfigure(2, weight=1)
-            keep = tk.BooleanVar(value=True)
+            keep = tk.BooleanVar(value=self.ticked_paths is None or change.old in self.ticked_paths)
             self.keep.append(keep)
             tick = ttk.Checkbutton(row, variable=keep, command=self._count, text="Rename")
             tick.grid(row=0, column=0, rowspan=3, sticky="n", padx=(0, 4))
@@ -291,6 +330,7 @@ class RenameTab(ttk.Frame):
         self.status.set(text.split("\n")[0])
         self.host.tell("Renamed", text)
         self.plan = None
+        self.shown_for = None
         self._draw()
 
     def undo(self) -> None:
