@@ -148,6 +148,11 @@ def row_values(row: SearchRow) -> Tuple[str, ...]:
     return (row.name + flag, row.folder, row.kind, format_bytes(row.size), format_date(row.modified), f"{row.matches:,}")
 
 
+def _row_from_record(record, score: float) -> SearchRow:
+    return SearchRow(record.row_id or 0, record.path, os.path.basename(record.path), os.path.dirname(record.path), record.size,
+                     record.modified, record.kind.value, record.state.value, 1, score, (), missing_since=record.missing_since)
+
+
 def where_label(kind: str, page: int, file_kind: str) -> str:
     if kind == "name":
         return "In the file name"
@@ -349,8 +354,28 @@ class App:
 
         from .picturegrid import PictureGrid, Thumbnails
         self.thumbnails = Thumbnails(self.events)
-        self.grid = PictureGrid(right, self.thumbnails, self._grid_selected, self._grid_opened)
-        right.add(self.grid, text="Pictures")
+        pictures = ttk.Frame(right)
+        pictures.columnconfigure(0, weight=1)
+        pictures.rowconfigure(1, weight=1)
+        twins = ttk.Frame(pictures, padding=(4, 4))
+        twins.grid(row=0, column=0, sticky="ew")
+        self.alike_button = ttk.Button(twins, text="Find near-duplicates", command=self.find_alike)
+        self.alike_button.pack(side="left")
+        ttk.Label(twins, text="at").pack(side="left", padx=(8, 2))
+        self.alike_threshold = tk.StringVar(value="0.97")
+        ttk.Spinbox(twins, from_=0.80, to=1.00, increment=0.01, width=5, textvariable=self.alike_threshold).pack(side="left")
+        ttk.Label(twins, text="and above").pack(side="left", padx=(2, 8))
+        self.keep_instead_button = ttk.Button(twins, text="Keep this one instead", command=self.keep_instead, state="disabled")
+        self.keep_instead_button.pack(side="left", padx=2)
+        self.trash_extras_button = ttk.Button(twins, text="Trash the extras", command=self.trash_extras, state="disabled")
+        self.trash_extras_button.pack(side="left", padx=2)
+        self.alike_text = tk.StringVar()
+        ttk.Label(twins, textvariable=self.alike_text).pack(side="left", padx=8)
+        self.grid = PictureGrid(pictures, self.thumbnails, self._grid_selected, self._grid_opened)
+        self.grid.grid(row=1, column=0, sticky="nsew")
+        right.add(pictures, text="Pictures")
+        self.pictures_tab = pictures
+        self.alike_report = None
 
         from .renametab import RenameTab
         self.renamer = RenameTab(right, self)
@@ -615,7 +640,7 @@ class App:
                 heading = f"Pictures that look like {self.like_of.name}"
             self.grid.show(pictures, by_looks, heading)
             if by_looks and pictures:
-                self.tabs.select(self.grid)
+                self.tabs.select(self.pictures_tab)
         else:
             self.grid.add([r for r in new_rows if r.kind == FileKind.IMAGE.value])
 
@@ -631,6 +656,130 @@ class App:
     def _tab_changed(self) -> None:
         if self.tabs.select() == str(self.renamer):
             self.renamer.follow_selection()
+
+    # -- near-duplicate pictures
+
+    def find_alike(self) -> None:
+        """Sets of pictures that look nearly the same, in the background; the grid shows them with the keepers marked."""
+        if self.busy():
+            self.say("Something is already running. Stop it first, or wait.")
+            return
+        try:
+            threshold = float(self.alike_threshold.get())
+        except ValueError:
+            self.say("The threshold must be a number, such as 0.97.")
+            return
+        done, could, _ = self.service.looks_coverage()
+        if not done:
+            self.say("No pictures have sketches yet. Update the index (or run dugup alike fill) first.")
+            return
+        self.stop = threading.Event()
+        stop, events, service = self.stop, self.events, self.service
+
+        def work() -> None:
+            try:
+                found = service.alike_pictures(threshold, stop=stop,
+                                               progress=lambda d, t: events.put(Progress("compare", "", d, t)))
+            except Exception as exc:
+                found = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
+            events.put(("alike", found))
+
+        self.job = "alike"
+        self.worker = threading.Thread(target=work, name="dugup-window-alike", daemon=True)
+        for button in self.run_buttons:
+            button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
+        self.progress_text.set("Comparing the pictures ...")
+        self._bar_moving()
+        self.alike_text.set("Comparing ...")
+        self.worker.start()
+
+    def _alike_found(self, found) -> None:
+        if self.worker is not None:
+            self.worker.join()
+            self.worker = None
+        for button in self.run_buttons:
+            button.configure(state="normal")
+        self.stop_button.configure(state="disabled")
+        self._bar_at(0.0)
+        if isinstance(found, Failure):
+            self.alike_text.set("")
+            self.say(f"The pictures could not be compared: {found.detail}")
+            return
+        if found.stopped:
+            self.alike_text.set("Stopped.")
+            self.progress_text.set("Stopped.")
+            return
+        self.progress_text.set(f"Compared {found.pictures:,} picture(s) in {format_seconds(found.seconds)}.")
+        self.alike_report = found
+        self._show_alike()
+
+    def _show_alike(self) -> None:
+        found = self.alike_report
+        if found is None:
+            return
+        rows, badges = [], {}
+        for number, same in enumerate(found.sets, 1):
+            keep = _row_from_record(same.keep.record, 1.0)
+            rows.append(keep)
+            badges[keep.path] = (f"KEEP {number}", "#1b5e20")
+            for item in same.extra:
+                row = _row_from_record(item.record, item.closeness)
+                rows.append(row)
+                badges[row.path] = (f"extra {number}", "#b71c1c")
+            for item in same.aside:
+                row = _row_from_record(item.record, item.closeness)
+                rows.append(row)
+                badges[row.path] = (f"protected {number}", "#555555")
+        self.like_of = None
+        self.last = None
+        self.rows = []
+        self.tree.delete(*self.tree.get_children())
+        for row in rows:
+            self.tree.insert("", "end", iid=str(len(self.rows)), values=row_values(row))
+            self.rows.append(row)
+        self.total = len(rows)
+        self.more_button.configure(state="disabled")
+        self._show_nothing()
+        self.grid.show(rows, True, f"{len(found.sets):,} set(s) of pictures that look nearly the same at {found.threshold:.2f} and above: "
+                                   f"{found.extra_pictures:,} extra(s), about {format_bytes(found.bytes_extra)}", badges)
+        self.tabs.select(self.pictures_tab)
+        self.alike_text.set(f"{len(found.sets):,} set(s), {found.extra_pictures:,} extra(s)" if found.sets else "No near-duplicates found.")
+        self.keep_instead_button.configure(state="normal" if found.sets else "disabled")
+        self.trash_extras_button.configure(state="normal" if found.sets else "disabled")
+        self.say(f"{len(found.sets):,} set(s) of pictures that look nearly the same; the keeper of each is marked KEEP. "
+                 "Select a picture and press \"Keep this one instead\" to change a keeper; \"Trash the extras\" moves the rest.")
+
+    def keep_instead(self) -> None:
+        """The selected picture becomes its set's keeper; the old keeper becomes an extra."""
+        row = self.selected()
+        if row is None or self.alike_report is None:
+            return
+        for same in self.alike_report.sets:
+            for index, item in enumerate(same.extra):
+                if item.record.path == row.path:
+                    from .alikesets import Member
+                    old = same.keep
+                    same.keep = Member(item.record, 1.0, False, "chosen by hand")
+                    same.extra[index] = Member(old.record, item.closeness, False)
+                    same.extra.sort(key=lambda m: -m.closeness)
+                    self._show_alike()
+                    self.say(f"Keeping {row.name} instead.")
+                    return
+        self.say("Select an extra (red) picture to make it the keeper of its set.")
+
+    def trash_extras(self) -> None:
+        if self.alike_report is None or not self.alike_report.sets:
+            return
+        paths = [m.record.path for same in self.alike_report.sets for m in same.extra]
+        self.tree.selection_set(tuple(str(i) for i, r in enumerate(self.rows) if r.path in set(paths)))
+        self.trash_selected()
+        if self.alike_report is not None:
+            gone = {p for p in paths if not os.path.exists(p)}
+            for same in self.alike_report.sets:
+                same.extra = [m for m in same.extra if m.record.path not in gone]
+            self.alike_report.sets = [s for s in self.alike_report.sets if s.extra]
+            self._show_alike()
 
     def result_pictures(self) -> List[str]:
         """The paths of the pictures among the current results (what the Pictures tab shows)."""
@@ -1207,7 +1356,7 @@ class App:
                 finished.append(item)    # type: ignore[arg-type]
         if latest is not None and not finished:
             self.progress_text.set(progress_text(latest))
-            if latest.phase in ("read", "ocr", "download", "record", "mark", "sketch", "look", "caption") and latest.total > 0:
+            if latest.phase in ("read", "ocr", "download", "record", "mark", "sketch", "look", "caption", "compare") and latest.total > 0:
                 self._bar_at(latest.percent)
             elif latest.phase != "estimate":           # an estimate is a note on the side: the bar stays as it is
                 self._bar_moving()                     # no total yet (listing, unpacking, measuring): it moves
@@ -1221,6 +1370,8 @@ class App:
                 self.renamer.thumb_arrived(report)
             elif what == "rename-plan":
                 self.renamer.planned(report)
+            elif what == "alike":
+                self._alike_found(report)
             elif what == "warm":
                 self._warmed(report)
             else:

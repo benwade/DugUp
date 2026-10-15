@@ -121,9 +121,11 @@ class PictureGrid(ttk.Frame):
         self.selected: Optional[int] = None
         self.columns = 1
         self.heading = ""
+        self.badges: Dict[str, Tuple[str, str]] = {}      # path -> (text, colour) drawn over the tile's corner
 
-    def show(self, rows: Sequence[object], scores: bool, heading: str = "") -> None:
+    def show(self, rows: Sequence[object], scores: bool, heading: str = "", badges: Optional[Dict[str, Tuple[str, str]]] = None) -> None:
         self.rows, self.scores, self.heading = list(rows), scores, heading
+        self.badges = dict(badges or {})
         self.photos.clear()
         self.selected = None
         self._reflow()
@@ -184,6 +186,11 @@ class PictureGrid(ttk.Frame):
                 canvas.create_rectangle(x, y, x + THUMB, y + THUMB, fill="#e4e4e4", outline="#cccccc")
                 canvas.create_text(x + THUMB // 2, y + THUMB // 2, text="..." if path not in self.thumbnails.made else "no picture",
                                    fill="#888888")
+            badge = self.badges.get(path)
+            if badge is not None:
+                text, colour = badge
+                canvas.create_rectangle(x, y, x + 8 + 7 * len(text), y + 18, fill=colour, outline=colour)
+                canvas.create_text(x + 4, y + 9, anchor="w", text=text, fill="white", font=("TkDefaultFont", 8, "bold"))
             name = getattr(row, "name", os.path.basename(path))
             label = name if len(name) <= 22 else name[:19] + "..."
             score = f"  {getattr(row, 'rank', 0.0):.2f}" if self.scores else ""

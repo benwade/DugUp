@@ -344,3 +344,71 @@ def test_the_fill_and_like_commands_the_search_by_looks_and_the_index_run_going_
     out = io.StringIO()
     cli.main(["index", "--no-ocr", "--no-meaning", "--no-looks", "--data-dir", str(data)], stdout=out)
     assert "Now looking at" not in out.getvalue()
+
+
+def test_near_duplicate_sets_have_a_keeper_by_rule_leave_protected_pictures_aside_and_the_command_lists_and_removes(tmp_path, monkeypatch):
+    from dugup import alikesets, cli, sketches
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.settings import Settings
+    pytest.importorskip("PIL")
+    from PIL import Image
+    root = tmp_path / "root"
+    for sub in ("Album", "Laptop", "Downloads"):
+        (root / sub).mkdir(parents=True)
+    rng = np.random.default_rng(9)
+
+    def unit():
+        v = rng.standard_normal(embedding.LOOKS_DIMS).astype(np.float32)
+        return v / np.linalg.norm(v)
+
+    scene, other = unit(), unit()
+    shots = {
+        "Album/photo.jpg": (scene, (80, 60), 1.0),          # the original: the larger file
+        "Downloads/photo (1).jpg": (0.99 * scene + 0.02 * other, (40, 30), 2.0),
+        "Downloads/photo (2).jpg": (0.9 * scene + 0.2 * other, (40, 30), 3.0),
+        "Laptop/photo.jpg": (scene, (40, 30), 4.0),         # protected: shown aside, never an extra
+        "Album/elsewhere.jpg": (other, (40, 30), 5.0),
+    }
+    with LocalService(DataLayout(tmp_path / "data").ensure(), Settings(cleanup_protect=str(root / "Laptop"))) as svc:
+        store = svc.store
+        rows = []
+        for name, (v, size, when) in shots.items():
+            Image.new("RGB", size, (200, 10, 10)).save(root / name, quality=95)
+            record = FileRecord(str(root / name), os.path.getsize(root / name), when, kind=FileKind.IMAGE, state=FileState.DONE)
+            store.upsert_file(record)
+            v = v / np.linalg.norm(v)
+            data, scales = sketches.quantize(v[None, :])
+            rows.append((record.row_id, scales[0], data, sketches.fingerprint_of(v), ""))
+        store.save_looks(looks.model_name(), rows)
+        told = []
+        found = svc.alike_pictures(0.97, progress=lambda d, t: told.append((d, t)))
+        assert found.pictures == 5 and len(found.sets) == 1 and told[-1] == (5, 5)
+        same = found.sets[0]
+        assert same.keep.record.path == str(root / "Album" / "photo.jpg") and same.keep.why == "the larger file"
+        assert [os.path.basename(m.record.path) for m in same.extra] == ["photo (1).jpg", "photo (2).jpg"], "closest to the keeper first"
+        assert all(0.97 <= m.closeness <= 1.0 for m in same.extra)
+        assert [os.path.basename(m.record.path) for m in same.aside] == ["photo.jpg"] and same.aside[0].protected
+        assert found.extra_pictures == 2 and found.bytes_extra == sum(m.record.size for m in same.extra)
+        # a preferred folder wins over size; a stricter threshold loses the farther shot
+        liked = svc.alike_pictures(0.97, preferred=[str(root / "Downloads")])
+        assert liked.sets[0].keep.why == "in a preferred folder" and liked.sets[0].keep.record.path.startswith(str(root / "Downloads"))
+        assert [os.path.basename(m.record.path) for m in svc.alike_pictures(0.995).sets[0].extra] == ["photo (1).jpg"], "a stricter threshold loses the farther shot"
+        assert alikesets.choose_keeper([FileRecord("/a/x.jpg", 5, 2.0), FileRecord("/a/y.jpg", 5, 1.0)], (), lambda p: p)[1] == "the older one"
+        assert alikesets.choose_keeper([FileRecord("/a/x.jpg", 5, 1.0), FileRecord("/a/longer.jpg", 5, 1.0)], (), lambda p: p)[0].path == "/a/x.jpg"
+    out = io.StringIO()
+    data = tmp_path / "data"
+    assert cli.main(["alike", "duplicates", "--protect", str(root / "Laptop"), "--data-dir", str(data)], stdout=out) == 0
+    text = out.getvalue()
+    assert "1 set(s), 2 extra picture(s)" in text and "keep   " in text and "(the larger file)" in text and "kept aside (protected)" in text
+    assert "Nothing was moved" in text
+    out = io.StringIO()
+    assert cli.main(["alike", "duplicates", "--remove", "--data-dir", str(data)], stdout=out) == 1 and "needs --record" in out.getvalue()
+    moved = []
+    monkeypatch.setattr("dugup.trash.to_trash", lambda path, mover=None, _m=moved: (_m.append(path), os.remove(path), "")[2])
+    record = tmp_path / "moved.txt"
+    out = io.StringIO()
+    assert cli.main(["alike", "duplicates", "--protect", str(root / "Laptop"), "--remove", "--record", str(record), "--yes",
+                     "--data-dir", str(data)], stdout=out) == 0
+    assert sorted(os.path.basename(p) for p in moved) == ["photo (1).jpg", "photo (2).jpg"] and (root / "Laptop" / "photo.jpg").exists()
+    assert "Moved 2 picture(s) to the trash" in out.getvalue() and record.read_text(encoding="utf-8-sig").count("trashed\t") == 2

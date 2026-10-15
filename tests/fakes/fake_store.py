@@ -700,6 +700,9 @@ class FakeStore:
         row_id = self._find(path)
         return None if row_id is None else copy.copy(self.files[row_id])
 
+    def get_file_by_id(self, row_id):
+        return copy.copy(self.files[row_id]) if row_id in self.files else None
+
     def set_state(self, row_id: int, state, error: str = "") -> None:
         if not isinstance(state, FileState):
             raise ValueError("state must be a FileState")

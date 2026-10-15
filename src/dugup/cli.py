@@ -111,6 +111,8 @@ def progress_text(p: Progress) -> str:
         line = (f"[same files] marking what was read before: {p.done:,} of {p.total:,} ({p.percent:.1f}%)  "
                 f"{p.rate:.1f} files/s  {left_text}")
         return line + (f"  | {shorten(os.path.basename(p.current), 40)}" if p.current else "")
+    if p.phase == "compare":
+        return f"[alike] comparing: {p.done:,} of {p.total:,} pictures"
     if p.phase == "caption":
         left = p.remaining_seconds
         left_text = "time left unknown" if left is None else f"about {format_seconds(left)} left"
@@ -382,6 +384,15 @@ def build_parser() -> argparse.ArgumentParser:
     filling2.add_argument("--gpu", dest="gpu", action="store_true", default=None, help="on the graphics card")
     filling2.add_argument("--no-gpu", dest="gpu", action="store_false", help="on the processor (default: as the setting looks_gpu says)")
     alike_sub.add_parser("status", parents=[common], help="how many pictures have sketches, and which could not be read")
+    twins = alike_sub.add_parser("duplicates", parents=[common],
+                                 help="sets of pictures that look nearly the same, with the one to keep; --remove moves the rest to the trash")
+    twins.add_argument("--threshold", type=float, default=0.97, help="closeness at and above which pictures count as the same (default 0.97)")
+    twins.add_argument("--protect", action="append", default=[], metavar="FOLDER", help="never propose pictures below this folder")
+    twins.add_argument("--prefer", action="append", default=[], metavar="FOLDER", help="the copy below this folder is the one kept")
+    twins.add_argument("--rows", type=int, default=50, help="how many sets to show")
+    twins.add_argument("--remove", action="store_true", help="move the extras to the trash (asks first; needs --record)")
+    twins.add_argument("--record", metavar="FILE", help="with --remove: a file that lists what was moved")
+    twins.add_argument("--yes", action="store_true", help="with --remove: do not ask")
     liking = alike_sub.add_parser("like", parents=[common], help="pictures in the index that look like a picture")
     liking.add_argument("picture", help="a picture file, in the index or not")
     liking.add_argument("--limit", type=int, default=20)
@@ -1564,6 +1575,8 @@ def cmd_alike(args, env, out, environ, stop: Optional[threading.Event] = None, i
             if args.alike_command == "status":
                 print_looks_status(service, out)
                 return 0
+            if args.alike_command == "duplicates":
+                return cmd_alike_duplicates(args, service, out, environ, stop)
             if args.alike_command == "like":
                 page = service.search_like_file(args.picture, max(0, args.limit), max(0, args.offset))
                 if isinstance(page, Failure):
@@ -1693,6 +1706,66 @@ def print_name_plan(found, out: TextIO) -> None:
         if len(found.left_alone) > 20:
             safe_write(f"  ... and {len(found.left_alone) - 20:,} more", out)
     safe_write(f"{len(found.to_rename):,} picture(s) would be renamed.", out)
+
+
+def cmd_alike_duplicates(args, service, out, environ, stop, ask: Callable[[str], str] = input) -> int:
+    if args.remove and not args.record:
+        safe_write("--remove needs --record FILE: a file that will list what was moved and what was left alone, and why.", out)
+        return 1
+    if args.record:
+        problem = save_lines(args.record, [], args, environ)
+        if problem:
+            safe_write(problem, out)
+            return 1
+    width = [0]
+
+    def tell(done: int, total: int) -> None:
+        line = f"[alike] comparing: {done:,} of {total:,} pictures"
+        pad = " " * max(0, width[0] - len(line))
+        width[0] = len(line)
+        safe_write("\r" + line + pad, out, end="")
+
+    found = service.alike_pictures(args.threshold, args.protect, args.prefer, stop, tell)
+    safe_write("", out)
+    if found.stopped:
+        safe_write("Stopped.", out)
+        return 130
+    safe_write(f"Compared {found.pictures:,} picture(s) in {format_seconds(found.seconds)} at {found.threshold:.2f} and above: "
+               f"{len(found.sets):,} set(s), {found.extra_pictures:,} extra picture(s), about {format_bytes(found.bytes_extra)}.", out)
+    for number, same in enumerate(found.sets[:max(0, args.rows)], 1):
+        safe_write(f"{number:>4}. keep   {same.keep.record.path}   ({same.keep.why})", out)
+        for item in same.extra:
+            safe_write(f"      extra  {item.record.path}   ({item.closeness:.3f})", out)
+        for item in same.aside:
+            safe_write(f"      kept aside (protected)  {item.record.path}   ({item.closeness:.3f})", out)
+    if len(found.sets) > args.rows:
+        safe_write(f"... and {len(found.sets) - args.rows:,} more set(s) (--rows N shows more)", out)
+    if not args.remove or not found.sets:
+        if found.sets and not args.remove:
+            safe_write("Nothing was moved. Add --remove --record FILE to move the extras to the trash.", out)
+        return 0
+    if not args.yes:
+        try:
+            reply = ask(f"Move all {found.extra_pictures:,} extra picture(s) to the trash? Type yes to go on: ")
+        except (EOFError, KeyboardInterrupt):
+            reply = ""
+        if reply.strip().lower() != "yes":
+            safe_write("Nothing was moved.", out)
+            return 0
+    paths = [m.record.path for same in found.sets for m in same.extra]
+    try:
+        handle = open(args.record, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n")
+    except OSError as exc:
+        safe_write(f"The record could not be written ({type(exc).__name__}: {exc}); nothing was moved.", out)
+        return 1
+    try:
+        done = service.to_trash(paths, journal=lambda line: (handle.write(line + "\n"), handle.flush()))
+    finally:
+        handle.close()
+    safe_write(f"Moved {len(done.moved):,} picture(s) to the trash; left {len(done.skipped):,} alone. The record is in {args.record}.", out)
+    for path, why in done.skipped[:10]:
+        safe_write(f"  left: {path}: {why}", out)
+    return 0
 
 
 def print_looks_status(service, out: TextIO) -> None:

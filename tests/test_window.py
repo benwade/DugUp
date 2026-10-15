@@ -977,7 +977,7 @@ def test_pictures_by_looks_fill_the_pictures_tab_and_like_this_shows_a_picture_s
     assert names[0] == "red.png" and len(names) == 3, "pictures only, closest first"
     assert "that look most like: red picture" in app.message.get()
     assert [r.name for r in app.grid.rows] == names and app.grid.scores, "the Pictures tab shows the same pictures with their scores"
-    assert app.tabs.index(app.tabs.select()) == app.tabs.index(app.grid), "and comes to the front"
+    assert app.tabs.index(app.tabs.select()) == app.tabs.index(app.pictures_tab), "and comes to the front"
     # a thumbnail arrives through the events and the grid redraws without complaint
     for _ in range(100):
         app.drain()
@@ -1179,3 +1179,51 @@ def test_to_trash_moves_the_selected_files_after_a_question_keeps_a_record_and_t
     app.tell = lambda title, text: told.append(text)
     app.trash_selected()
     assert not moved and told and "it is not there now" in told[0]
+
+
+def test_near_duplicate_pictures_are_found_shown_with_keepers_and_the_extras_can_be_trashed(bench, monkeypatch):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    from PIL import Image
+    from dugup import looks, sketches
+    (bench.docs / "big.jpg").parent.mkdir(exist_ok=True)
+    Image.new("RGB", (80, 60), (200, 10, 10)).save(bench.docs / "big.jpg", quality=95)
+    Image.new("RGB", (40, 30), (200, 10, 10)).save(bench.docs / "small.jpg", quality=60)
+    Image.new("RGB", (40, 30), (10, 10, 200)).save(bench.docs / "other.jpg")
+    bench.ready()
+    app = bench.app
+    store = app.service.store
+    model = looks.model_name()
+    rng = np.random.default_rng(3)
+    base = rng.standard_normal(512).astype(np.float32)
+    base /= np.linalg.norm(base)
+    far = rng.standard_normal(512).astype(np.float32)
+    far /= np.linalg.norm(far)
+    rows = []
+    for name, v in (("big.jpg", base), ("small.jpg", 0.995 * base + 0.1 * far), ("other.jpg", far)):
+        v = v / np.linalg.norm(v)
+        data, scales = sketches.quantize(v[None, :])
+        rows.append((store.get_file(str(bench.docs / name)).row_id, scales[0], data, sketches.fingerprint_of(v), ""))
+    store.save_looks(model, rows)
+    app.find_alike()
+    bench.finish_run()
+    assert app.alike_report is not None and len(app.alike_report.sets) == 1
+    same = app.alike_report.sets[0]
+    assert same.keep.record.path.endswith("big.jpg") and same.keep.why == "the larger file" and [m.record.path for m in same.extra][0].endswith("small.jpg")
+    assert [r.name for r in app.rows] == ["big.jpg", "small.jpg"] and app.grid.badges[str(bench.docs / "big.jpg")][0] == "KEEP 1"
+    assert app.grid.badges[str(bench.docs / "small.jpg")][0] == "extra 1" and "1 set(s)" in app.alike_text.get()
+    # the keeper can be changed by hand
+    app.tree.selection_set("1")
+    app.keep_instead()
+    assert app.alike_report.sets[0].keep.record.path.endswith("small.jpg") and app.grid.badges[str(bench.docs / "small.jpg")][0] == "KEEP 1"
+    assert [r.name for r in app.rows] == ["small.jpg", "big.jpg"], "the keeper comes first in its set"
+    app.tree.selection_set("1")
+    app.keep_instead()
+    assert app.alike_report.sets[0].keep.record.path.endswith("big.jpg")
+    # trash the extras: asks, moves, and the set is gone
+    moved = []
+    monkeypatch.setattr("dugup.trash.to_trash", lambda path, mover=None, _m=moved: (_m.append(path), os.remove(path), "")[2])
+    app.ask = lambda title, text: True
+    app.trash_extras()
+    assert [os.path.basename(p) for p in moved] == ["small.jpg"] and not (bench.docs / "small.jpg").exists()
+    assert app.alike_report.sets == [] and "No near-duplicates" in app.alike_text.get()

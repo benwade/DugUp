@@ -537,6 +537,21 @@ class LocalService:
         finally:
             self._run_guard.release()
 
+    def alike_pictures(self, threshold: float = 0.97, protected: Sequence[str] = (), preferred: Sequence[str] = (),
+                       stop: Optional[StopSignal] = None, progress: Optional[Callable[[int, int], None]] = None):
+        """Sets of pictures that look nearly the same (alikesets.report), with a keeper each. Changes nothing.
+        `protected` and `preferred` come on top of cleanup_protect and cleanup_prefer."""
+        from . import alikesets
+        kept = [p.strip() for p in self.settings.cleanup_protect.split(";") if p.strip()] + [p for p in protected if p.strip()]
+        liked = [p.strip() for p in self.settings.cleanup_prefer.split(";") if p.strip()] + [p for p in preferred if p.strip()]
+        store = self._open_store() if threading.get_ident() != self._store_thread and self._store is not None else self.store
+        try:
+            return alikesets.report(store, self.looks_model(), threshold, [_place(p) for p in kept], [_place(p) for p in liked],
+                                    self._fold, stop, progress)
+        finally:
+            if store is not self._store:
+                store.close()
+
     def sketch_sentence(self, sentence: str):
         """A sketch of a sentence in the pictures' space, from a kept worker on the processor; or a Failure."""
         from . import looks

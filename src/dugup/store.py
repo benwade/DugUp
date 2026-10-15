@@ -704,6 +704,10 @@ class SqliteStore:
         row = self.conn.execute("SELECT * FROM files WHERE path=?", (text,)).fetchone()
         return None if row is None else self._record(row)
 
+    def get_file_by_id(self, row_id: int) -> Optional[FileRecord]:
+        row = self.conn.execute("SELECT * FROM files WHERE id=?", (int(row_id),)).fetchone()
+        return None if row is None else self._record(row)
+
     def list_files(self, prefix: Optional[str] = None, state: Optional[FileState] = None,
                    limit: Optional[int] = None, after_row: int = 0, missing: Optional[bool] = None,
                    case_insensitive: Optional[bool] = None) -> List[FileRecord]:

@@ -271,6 +271,24 @@ fetched on first use into the data folder. It needs `pip install dugup[meaning]`
 - **Measuring.** `dugup alike measure --ask "a sentence" --like PICTURE` tries the model on a sample of your
   own pictures and reports speed, disk and what is found, without storing anything.
 
+## Near-duplicate pictures
+
+Photos that are nearly the same but not byte for byte (a resized copy, a re-saved one, a second shot of the
+same scene) are found by their sketches: `dugup alike duplicates [--threshold 0.97] [--protect F] [--prefer F]`
+lists sets of pictures at that closeness and above with the one to keep in each, and `--remove --record FILE`
+moves the extras to the trash after asking. In the window, the Pictures tab has **Find near-duplicates** with
+the threshold beside it: the sets fill the grid with each keeper marked KEEP in green and the extras in red,
+"Keep this one instead" changes a keeper by hand, and "Trash the extras" moves the rest with the same question,
+record and protections as To trash.
+
+The keeper of a set: a picture in a preferred folder (`cleanup_prefer`, `--prefer`) first; else the larger
+file, which is usually the original rather than a resized or re-saved copy; else the older one; else the
+shorter path. The rule that chose it is shown. Pictures in protected folders are shown aside and never
+proposed, and a set needs two open copies to count. The threshold is a judgement, which is why the sets are
+shown before anything moves: 0.97 and above is a copy or a re-save; two shots a second apart can score that
+too, and whether they are duplicates is yours to say. Screenshots and scanned pages all look much alike to
+the picture model, so a folder of those may cluster; look before trashing.
+
 ## To trash, from the window
 
 Beside Open and Show in folder, **To trash** moves the selected file(s) (Ctrl-click or Shift-click for

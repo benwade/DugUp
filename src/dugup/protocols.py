@@ -366,6 +366,8 @@ class Store(Protocol):
         file (per content unless filters.every_copy) with its closest passage as Evidence; rank is closeness."""
 
     # pictures by likeness (looks.py): one sketch a picture
+    def get_file_by_id(self, row_id: int) -> Optional[FileRecord]: ...
+
     def unlooked(self, model: str, limit: int = 200, after: Optional[Tuple[float, int]] = None) -> Sequence[FileRecord]:
         """Pictures with no look by this model yet, the most recently changed first; `after` continues past one."""
 
