@@ -473,9 +473,11 @@ def test_a_chain_of_likeness_is_measured_against_the_keeper_and_removal_checks_t
         lines = []
         done = svc.trash_alike_extras([again], journal=lines.append, mover=mover)
         assert moved == [] and len(done.skipped) == 2 and all("keeper" in why and "changed" in why for _, why in done.skipped)
-        # an extra that changed is left; the other goes; the record says keeping / trashed / left
+        # an extra replaced by a different file of the same size (a later time) is left; the other goes
         os.utime(root / "b.jpg", (20.0, 20.0))
-        os.utime(root / "c.jpg", (77.0, 77.0))
+        other = root / "other.jpg"
+        other.write_bytes((root / "c.jpg").read_bytes())
+        os.replace(other, root / "c.jpg")
         lines.clear()
         done = svc.trash_alike_extras([again], journal=lines.append, mover=mover)
         assert [os.path.basename(p) for p in moved] == ["a.jpg"]

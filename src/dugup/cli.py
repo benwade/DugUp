@@ -1752,19 +1752,20 @@ def cmd_rename(args, env, out, environ, stop: Optional[threading.Event] = None, 
         except OSError as exc:
             safe_write(f"The record could not be written ({type(exc).__name__}: {exc}); nothing was renamed.", out)
             return 1
-        problems: list = []
+        journal = records.Journal(handle)
         try:
-            handle.write(f"pattern\t{found.pattern}\n")
-            done = service.apply_names(found, journal=records.journal_into(handle, problems), stop=stop)
+            journal.outcome(f"pattern\t{found.pattern}")
+            done = service.apply_names(found, journal=journal, stop=stop)
+        except records.RecordError as exc:
+            journal.close()
+            safe_write(f"The record could not be written ({exc}); nothing was renamed.", out)
+            return 1
         finally:
-            try:
-                handle.close()
-            except OSError:
-                pass
+            journal.close()
         safe_write(f"Renamed {len(done.renamed):,} picture(s); left {len(done.skipped):,} alone"
                    + (" (stopped)" if done.stopped else "") + f". The record is in {args.record}; `dugup rename --undo {args.record}` puts the names back.", out)
-        if problems:
-            safe_write(f"The record could not be kept up ({problems[0]}). What was renamed:", out)
+        if done.record_problem:
+            safe_write(f"Stopped: the record could not be written ({done.record_problem}). What was renamed:", out)
             for old_path, new_path in done.renamed:
                 safe_write(f"  {old_path} -> {new_path}", out)
         if done.index_problems:
@@ -1842,11 +1843,18 @@ def cmd_alike_duplicates(args, service, out, environ, stop, ask: Callable[[str],
     except OSError as exc:
         safe_write(f"The record could not be written ({type(exc).__name__}: {exc}); nothing was moved.", out)
         return 1
+    from .records import Journal
+    journal = Journal(handle)
     try:
-        done = service.trash_alike_extras(found.sets, journal=lambda line: (handle.write(line + "\n"), handle.flush()))
+        done = service.trash_alike_extras(found.sets, journal=journal)
     finally:
-        handle.close()
-    safe_write(f"Moved {len(done.moved):,} picture(s) to the trash; left {len(done.skipped):,} alone. The record is in {args.record}.", out)
+        journal.close()
+    safe_write(f"Moved {len(done.moved):,} picture(s) to the trash; left {len(done.skipped):,} alone"
+               + (" (stopped)" if done.stopped else "") + f". The record is in {args.record}.", out)
+    if done.record_problem:
+        safe_write(f"Stopped: the record could not be written ({done.record_problem}). What was moved:", out)
+        for path, _ in done.moved:
+            safe_write(f"  {path}", out)
     for path, why in done.skipped[:10]:
         safe_write(f"  left: {path}: {why}", out)
     return 0
@@ -2057,40 +2065,28 @@ def _remove_duplicates(found, service, args, out, environ, stop, install_signals
         width[0] = len(line)
         safe_write("\r" + line + pad, out, end="")
 
-    # the record is written as it goes, one line per file, flushed each time, so a run cut short has its record so far
-    record_problem = [""]
+    # the record is written as it goes: the intent on disk before each move, the outcome after; a record that
+    # cannot be written stops the run (records.Journal), so a file is never moved without one
+    from .records import Journal
     try:
-        handle = open(record_path, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n")
+        handle = open(record_path, "a", encoding="utf-8", newline="\r\n" if os.name == "nt" else "\n")
     except OSError as exc:
-        handle = None
-        record_problem[0] = f"{type(exc).__name__}: {exc}"
-
-    def journal(line: str) -> None:
-        if handle is None or record_problem[0]:
-            return
-        try:
-            handle.write(line + "\n")
-            handle.flush()
-        except OSError as exc:
-            record_problem[0] = f"{type(exc).__name__}: {exc}"
-
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
+        safe_write(f"The record could not be written ({type(exc).__name__}: {exc}); nothing was moved.", out)
+        return 1
+    journal = Journal(handle)
     try:
         done = service.remove_duplicates(found, stop, tell, journal=journal)
     finally:
         if previous is not None:
             signal.signal(signal.SIGINT, previous)
-        if handle is not None:
-            try:
-                handle.close()
-            except OSError as exc:
-                record_problem[0] = record_problem[0] or f"{type(exc).__name__}: {exc}"
+        journal.close()
     safe_write("", out)
-    lines = [f"moved\t{path}\tkept\t{kept}" for path, kept in done.moved] + \
-        [f"left\t{path}\t{why}" for path, why in done.skipped]
-    if record_problem[0]:
-        safe_write(f"The record could not be written ({record_problem[0]}); here it is:", out)
-        for line in lines:
-            safe_write("  " + line, out)
+    if done.record_problem:
+        safe_write(f"Stopped: the record could not be written ({done.record_problem}). What was moved before that:", out)
+        for path, kept in done.moved:
+            safe_write(f"  moved\t{path}\tkept\t{kept}", out)
     safe_write(f"Moved {len(done.moved):,} file(s) to the trash, about {format_bytes(done.bytes_freed)}; left {len(done.skipped):,} alone"
                + (" (stopped)" if done.stopped else "") + f". The record is in {record_path}.", out)
     for path, why in done.skipped[:10]:

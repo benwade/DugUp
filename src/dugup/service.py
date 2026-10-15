@@ -676,6 +676,7 @@ class LocalService:
         (cleanup_protect), never one that is not there. The index marks each one gone. Returns
         cleanup.Removal: moved (path, "") and skipped (path, why). `journal(line)` is told of each as it goes."""
         from . import cleanup, trash
+        from .records import RecordError
         protected = [p.strip() for p in self.settings.cleanup_protect.split(";") if p.strip()]
         done = cleanup.Removal()
         for path in paths:
@@ -685,20 +686,33 @@ class LocalService:
             elif not os.path.isfile(path):
                 why = "it is not there now"
             else:
-                if journal is not None:          # the intent first: a crash during the move still leaves a trace
-                    journal(cleanup.record_line("moving", path))
+                if journal is not None:          # the intent first, on disk, or the file is not touched
+                    try:
+                        journal(cleanup.record_line("moving", path))
+                    except RecordError as exc:
+                        done.skipped.append((path, f"the record could not be written ({exc}); nothing more was moved"))
+                        done.record_problem, done.stopped = str(exc), True
+                        return done
                 why = (mover or trash.to_trash)(path)
             if why:
                 done.skipped.append((path, why))
                 if journal is not None:
-                    journal(cleanup.record_line("left", path, why))
+                    try:
+                        journal(cleanup.record_line("left", path, why))
+                    except RecordError as exc:
+                        done.record_problem, done.stopped = str(exc), True
+                        return done
                 continue
             done.moved.append((path, ""))
             record = self.store.get_file(path)
             if record is not None and record.row_id is not None:
                 self.store.set_missing(record.row_id, time.time())
             if journal is not None:
-                journal(cleanup.record_line("trashed", path))
+                try:
+                    journal(cleanup.record_line("trashed", path))
+                except RecordError as exc:     # moved, and in `moved`; nothing more without a record
+                    done.record_problem, done.stopped = str(exc), True
+                    return done
         return done
 
     def rekeep_alike(self, same, keeper_row_id: int):
@@ -712,14 +726,16 @@ class LocalService:
         the file it was, and the protections as they stand now. A set whose keeper is gone or changed is left
         whole, with the reason; an extra that changed is left, with the reason. Returns cleanup.Removal."""
         from . import cleanup
+        from .naming import identity_of, same_moment
+        from .records import RecordError
         done = cleanup.Removal()
 
         def unchanged(record) -> str:
             try:
-                st = os.stat(record.path)
+                size, when_ns, _ = identity_of(record.path)
             except OSError:
                 return "it is not there now"
-            if st.st_size != record.size or abs(st.st_mtime - record.modified) > 1.0:
+            if size != record.size or not same_moment(when_ns, record.modified):
                 return "it changed since the preview (size or time)"
             return ""
 
@@ -744,10 +760,17 @@ class LocalService:
                 if journal is not None:
                     journal(cleanup.record_line("left", path, problem))
             if journal is not None and ready:
-                journal(cleanup.record_line("keeping", keeper.path))
+                try:
+                    journal(cleanup.record_line("keeping", keeper.path))
+                except RecordError as exc:
+                    done.record_problem, done.stopped = str(exc), True
+                    return done
             part = self.to_trash(ready, journal, mover)      # the protections as they stand now are checked here
             done.moved.extend(part.moved)
             done.skipped.extend(part.skipped)
+            if part.record_problem:
+                done.record_problem, done.stopped = part.record_problem, True
+                return done
         return done
 
     # -- naming pictures

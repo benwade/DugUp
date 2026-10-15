@@ -170,7 +170,10 @@ def test_extras_are_moved_only_after_the_keeper_is_checked_and_the_index_follows
         done = service.remove_duplicates(found, tell=lambda at, total, path: told.append((at, total)), mover=mover,
                                          journal=journal.append)
         assert len(done.moved) == 7 and not done.stopped and told[-1] == (9, 9)
-        assert len(journal) == 9 and sum(1 for l in journal if l.startswith("moved\t")) == 7, "each outcome journalled as it happened"
+        outcomes = [l for l in journal if not l.startswith("moving\t")]
+        assert len(outcomes) == 9 and sum(1 for l in outcomes if l.startswith("moved\t")) == 7, "each outcome journalled as it happened"
+        assert sum(1 for l in journal if l.startswith("moving\t")) == 7, "and an intent, naming the copy kept, before each move"
+        assert journal.index(next(l for l in journal if l.startswith("moving\t"))) < journal.index(next(l for l in journal if l.startswith("moved\t")))
         assert all(l.count("\n") == 0 and l.count("\t") in (2, 3) for l in journal)
         assert sorted(why for _, why in done.skipped) == ["it is not there now", "it no longer holds the same bytes as the copy to keep"]
         assert (drive / "Old" / "Docs" / "n1.txt").exists(), "a changed copy is left where it is"
@@ -229,7 +232,8 @@ def test_the_command_shows_asks_records_and_a_no_moves_nothing(tmp_path, monkeyp
     text = out.getvalue()
     assert code == 0 and "Moved 9 file(s) to the trash" in text and "left 0 alone" in text, text
     lines = record.read_text(encoding="utf-8-sig").splitlines()
-    assert len(lines) == 9 and all(line.startswith("moved\t") and "\tkept\t" in line for line in lines)
+    assert len(lines) == 18 and all(line.startswith(("moving\t", "moved\t")) and "\tkept\t" in line for line in lines)
+    assert lines[0].startswith("moving\t") and lines[1].startswith("moved\t"), "intent, then outcome, for each"
     assert len(moved) == 9 and all((drive / "Docs" / f"n{i}.txt").exists() for i in range(4))
 
 

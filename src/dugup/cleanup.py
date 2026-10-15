@@ -16,6 +16,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from .records import RecordError
 from .shapes import FileRecord
 
 
@@ -164,17 +165,32 @@ def remove_extras(found: Report, mover: Callable[[str], str], note_missing: Call
             elif not same_bytes(keeper, path):
                 why = "it no longer holds the same bytes as the copy to keep"
             else:
+                if journal is not None:      # the intent, naming the copy kept, on disk before the move
+                    try:
+                        journal(record_line("moving", path, "kept", keeper))
+                    except RecordError as exc:
+                        done.skipped.append((path, f"the record could not be written ({exc}); nothing more was moved"))
+                        done.record_problem, done.stopped = str(exc), True
+                        return done
                 why = mover(path)
             if why:
                 done.skipped.append((path, why))
                 if journal is not None:
-                    journal(record_line("left", path, why))
+                    try:
+                        journal(record_line("left", path, why))
+                    except RecordError as exc:
+                        done.record_problem, done.stopped = str(exc), True
+                        return done
                 continue
             done.moved.append((path, keeper))
-            if journal is not None:
-                journal(record_line("moved", path, "kept", keeper))
             done._bytes += extra.record.size
             note_missing(path)
+            if journal is not None:
+                try:
+                    journal(record_line("moved", path, "kept", keeper))
+                except RecordError as exc:     # moved, and in `moved`; nothing more without a record
+                    done.record_problem, done.stopped = str(exc), True
+                    return done
     return done
 
 

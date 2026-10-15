@@ -83,7 +83,7 @@ def test_apply_renames_what_is_unchanged_records_each_step_and_undo_puts_the_nam
         (folder / "Picture 3.jpg").write_bytes(b"taken")            # d's new name is now taken
         lines = []
         done = naming.apply(changes, store, journal=lines.append)
-        assert [os.path.basename(o) for o, _ in done.renamed] == ["a.jpg"]
+        assert [os.path.basename(o) for o, _ in done.renamed] == ["a.jpg"], done.skipped
         assert sorted(why for _, why in done.skipped) == ["a file with the new name is there now", "it changed since the preview", "it is not there now"]
         assert (folder / "Picture 0.jpg").exists() and not (folder / "a.jpg").exists()
         assert store.get_file(str(folder / "Picture 0.jpg")) is not None and store.get_file(str(folder / "a.jpg")) is None, "the index followed"
@@ -91,20 +91,29 @@ def test_apply_renames_what_is_unchanged_records_each_step_and_undo_puts_the_nam
         assert sum(1 for l in lines if l.startswith("left\t")) == 3
         pairs = naming.read_record("pattern\t{caption}\n" + "\n".join(lines))
         assert len(pairs) == 1 and pairs[0][:2] == (str(folder / "a.jpg"), str(folder / "Picture 0.jpg"))
-        assert pairs[0][2] == 1 and abs(pairs[0][3] - os.stat(folder / "Picture 0.jpg").st_mtime) < 2.0, "the file's identity is in the record"
-        # a file put in the renamed one's place is not the one that was renamed: undo leaves it alone
+        st = os.stat(folder / "Picture 0.jpg")
+        assert pairs[0][2:] == (1, st.st_mtime_ns, st.st_ino), "the file's identity (size, exact time, file id) is in the record"
+        # a file put in the renamed one's place is not the one that was renamed: undo leaves it alone, even
+        # when it has the same size and the same time (a different file id)
         kept = (folder / "Picture 0.jpg").read_bytes()
-        (folder / "Picture 0.jpg").write_bytes(b"something else entirely")
+        other = folder / "other.jpg"
+        other.write_bytes(b"y")
+        os.utime(other, ns=(st.st_mtime_ns, st.st_mtime_ns))
+        os.replace(other, folder / "Picture 0.jpg")
         assert "not the one that was renamed" in naming.undo(pairs, store).skipped[0][1]
+        assert (folder / "Picture 0.jpg").read_bytes() == b"y", "and the replacement was not moved anywhere"
+        # the original back in place (same bytes; a new file id, so the record's id is recorded afresh)
         (folder / "Picture 0.jpg").write_bytes(kept)
-        os.utime(folder / "Picture 0.jpg", (pairs[0][3], pairs[0][3]))
+        pairs = [(pairs[0][0], pairs[0][1], 1, None, None)]       # a record from before identities were kept
         back = naming.undo(pairs, store)
         assert back.renamed == [(str(folder / "Picture 0.jpg"), str(folder / "a.jpg"))] and (folder / "a.jpg").exists()
         assert store.get_file(str(folder / "a.jpg")) is not None
         assert naming.undo(pairs, store).skipped[0][1] == "it is not at its new name now"
         # an intent with no outcome (a crash between the lines) is still a pair: undo looks at the disk
-        crashed = naming.read_record("renaming\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1.0")
-        assert crashed == [("/p/x.jpg", "/p/Y.jpg", 5, 1.0)]
+        crashed = naming.read_record("renaming\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1000000000\t77")
+        assert crashed == [("/p/x.jpg", "/p/Y.jpg", 5, 1000000000, 77)]
+        assert naming.read_record("renamed\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1.5") == [("/p/x.jpg", "/p/Y.jpg", 5, 1500000000, None)], \
+            "an older record, with seconds, still reads"
         assert naming.read_record("renaming\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1.0\nleft\t/p/x.jpg\trefused") == []
         # the protections as they stand at apply time, whatever the preview assumed
         (folder / "e.jpg").write_bytes(b"x")

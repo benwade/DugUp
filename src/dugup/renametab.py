@@ -314,23 +314,25 @@ class RenameTab(ttk.Frame):
         except OSError as exc:
             self.status.set(f"The record could not be written ({type(exc).__name__}), so nothing was renamed.")
             return
-        problems: list = []
+        journal = records.Journal(handle)
         try:
-            handle.write(f"pattern\t{self.plan.pattern}\n")
+            journal.outcome(f"pattern\t{self.plan.pattern}")
             from .naming import Plan
-            done = self.host.service.apply_names(Plan(self.plan.pattern, chosen), journal=records.journal_into(handle, problems))
+            done = self.host.service.apply_names(Plan(self.plan.pattern, chosen), journal=journal)
+        except records.RecordError as exc:
+            journal.close()
+            self.status.set(f"The record could not be written ({exc}), so nothing was renamed.")
+            return
         finally:
-            try:
-                handle.close()
-            except OSError:
-                pass
+            journal.close()
         self.last_record = str(record)
         self.undo_button.configure(state="normal")
         self.rename_button.configure(state="disabled")
         text = f"Renamed {len(done.renamed):,} picture(s); left {len(done.skipped):,} alone. The record is in {record}."
-        if problems:
-            text = (f"Renamed {len(done.renamed):,} picture(s), but the record could not be kept up ({problems[0]}). "
-                    "What was renamed:\n\n" + "\n".join(f"{os.path.basename(o)} -> {os.path.basename(n)}" for o, n in done.renamed))
+        if done.record_problem:
+            text = (f"Renamed {len(done.renamed):,} picture(s) and then stopped: the record could not be written "
+                    f"({done.record_problem}). What was renamed:\n\n"
+                    + ("\n".join(f"{os.path.basename(o)} -> {os.path.basename(n)}" for o, n in done.renamed) or "(nothing)"))
         if done.index_problems:
             text += f"\n\n{len(done.index_problems)} renamed file(s) could not be updated in the index; the next index update sees the new names."
         if done.skipped:

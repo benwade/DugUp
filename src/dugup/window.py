@@ -862,14 +862,16 @@ class App:
                         "Before each set its keeper is checked to be there and unchanged, and each extra to be the "
                         "file it was; what fails that check is left alone and said so. Nothing is deleted outright."):
             return
+        from .records import Journal
         record, handle = self._record_file("removed", "trashed")
         if handle is None:
             self.say(f"The record could not be written ({record}), so nothing was moved.")
             return
+        journal = Journal(handle)
         try:
-            done = self.service.trash_alike_extras(found.sets, journal=lambda line: (handle.write(line + "\n"), handle.flush()))
+            done = self.service.trash_alike_extras(found.sets, journal=journal)
         finally:
-            handle.close()
+            journal.close()
         self._after_trash(done, record)
         gone = {p for p, _ in done.moved}
         for same in found.sets:
@@ -1107,9 +1109,9 @@ class App:
             self.renamer.results_changed(len(self.result_pictures()))
         text = f"Moved {len(done.moved):,} file(s) to the trash; left {len(done.skipped):,} alone. The record is in {record}."
         if getattr(done, "record_problem", ""):
-            text = (f"Moved {len(done.moved):,} file(s) to the trash, but the record could not be kept up "
-                    f"({done.record_problem}); what was moved is in the trash and listed here:\n\n"
-                    + "\n".join(p for p, _ in done.moved))
+            text = (f"Moved {len(done.moved):,} file(s) to the trash and then stopped: the record could not be written "
+                    f"({done.record_problem}). What was moved is in the trash and listed here:\n\n"
+                    + ("\n".join(p for p, _ in done.moved) or "(nothing)"))
         if done.skipped:
             text += "\n\n" + "\n".join(f"{os.path.basename(p)}: {why}" for p, why in done.skipped[:10])
         self.say(text.split("\n")[0])
@@ -1128,28 +1130,16 @@ class App:
                           "Nothing is deleted outright. Files in protected folders are left alone.")
         if not answer:
             return
+        from .records import Journal
         record, handle = self._record_file("removed", "trashed")
         if handle is None:
             self.say(f"The record could not be written ({record}), so nothing was moved.")
             return
-        problem = []
-
-        def journal(line: str) -> None:
-            try:
-                handle.write(line + "\n")
-                handle.flush()
-            except OSError as exc:          # the move has happened: the window must not say otherwise
-                problem.append(f"{type(exc).__name__}: {exc}")
-
+        journal = Journal(handle)
         try:
             done = self.service.to_trash(paths, journal=journal)
         finally:
-            try:
-                handle.close()
-            except OSError:
-                pass
-        if problem:
-            done.record_problem = problem[0]
+            journal.close()
         self._after_trash(done, record)
 
     def open_selected(self) -> None:
