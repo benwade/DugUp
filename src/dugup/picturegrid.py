@@ -21,6 +21,7 @@ LABEL_LINES = 2
 TILE_W = THUMB + GAP
 TILE_H = THUMB + 34 + GAP
 KEEP = 600             # thumbnails kept in memory for the session, at most
+GONE = "gone"          # in `made`: the file was not at its path when the thumbnail was tried
 
 
 def bind_wheel(area, canvas) -> None:
@@ -75,7 +76,7 @@ class Thumbnails:
         """Forget the ones that could not be made, so they are tried again: on a cloud drive a picture that
         was not fetched yet may well be there now."""
         with self.lock:
-            for path in [p for p, image in self.made.items() if image is None]:
+            for path in [p for p, image in self.made.items() if image is None or image is GONE]:
                 del self.made[path]
                 self.asked.discard(path)
 
@@ -106,8 +107,16 @@ class Thumbnails:
                 picture = ImageOps.exif_transpose(picture)
                 picture.thumbnail((THUMB, THUMB))
                 return picture.convert("RGB")
+        except FileNotFoundError:
+            return GONE
         except Exception:
             return None
+
+    def why_not(self, path: str) -> str:
+        """What a tile says instead of a thumbnail."""
+        if path not in self.made:
+            return "loading..."
+        return "not here now" if self.made[path] is GONE else "no picture"
 
 
 class PictureGrid(ttk.Frame):
@@ -254,6 +263,8 @@ class PictureGrid(ttk.Frame):
                 canvas.create_rectangle(x - 3, y - 3, x + THUMB + 3, y + THUMB + 30, outline="#2b6cb0", width=3)
             path = getattr(row, "path", "")
             image = self.thumbnails.ask(path)
+            if image is GONE:
+                image = None
             if image is not None:
                 photo = self.photos.get(index)
                 if photo is None:
@@ -268,8 +279,7 @@ class PictureGrid(ttk.Frame):
                     canvas.create_image(x + THUMB // 2, y + THUMB // 2, image=photo)
             else:
                 canvas.create_rectangle(x, y, x + THUMB, y + THUMB, fill="#e4e4e4", outline="#cccccc")
-                canvas.create_text(x + THUMB // 2, y + THUMB // 2, text="loading..." if path not in self.thumbnails.made else "no picture",
-                                   fill="#888888")
+                canvas.create_text(x + THUMB // 2, y + THUMB // 2, text=self.thumbnails.why_not(path), fill="#888888")
             badge = self.badges.get(path)
             if badge is not None:
                 text, colour = badge

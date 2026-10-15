@@ -264,7 +264,7 @@ class RenameTab(ttk.Frame):
 
     def _picture(self, label, path: str, index: int) -> None:
         image = self.host.thumbnails.ask(path)
-        if image is None:
+        if image is None or isinstance(image, str):     # "gone": the file was not there
             return
         try:
             from PIL import ImageTk
