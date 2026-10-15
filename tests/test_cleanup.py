@@ -111,12 +111,12 @@ def test_a_preferred_folder_wins_the_choice_and_a_protected_folder_with_nothing_
         store.set_content(store.upsert_file(FileRecord(path, 10, 1.0, state=FileState.DONE)), mark)
     for name in ("a.txt", "b.txt"):
         put(f"G:\\My Drive\\Desktop\\Alex's Classes\\{name}", name)
-        put(f"G:\\My Drive\\Rivera-ALEX\\School\\Alex's Classes\\{name}", name)
+        put(f"G:\\My Drive\\Home-ALEX\\School\\Alex's Classes\\{name}", name)
     plain = cleanup.report(store, "G:\\", case_insensitive=True)
     assert plain.sets[0].keep.record.path.startswith("G:\\My Drive\\Desktop"), "the same set size: higher up wins"
-    homed = cleanup.report(store, "G:\\", case_insensitive=True, preferred=["G:\\My Drive\\Rivera-ALEX"],
+    homed = cleanup.report(store, "G:\\", case_insensitive=True, preferred=["G:\\My Drive\\Home-ALEX"],
                            protected=["G:\\Other computers\\My Computer (4)"])
-    assert all(s.keep.record.path.startswith("G:\\My Drive\\Rivera-ALEX") for s in homed.sets), "the proper home wins"
+    assert all(s.keep.record.path.startswith("G:\\My Drive\\Home-ALEX") for s in homed.sets), "the proper home wins"
     assert homed.protected_empty == ("G:\\Other computers\\My Computer (4)",), "a protected folder that holds nothing is said"
     assert cleanup.report(store, "G:\\", case_insensitive=True, protected=["G:\\My Drive\\Desktop"]).protected_empty == ()
 

@@ -65,8 +65,11 @@ class Tray:
         root.withdraw()
         service.list_roots()      # the service's reading connection belongs to the thread that first uses it:
                                   # this one, before the background update (on its own thread) can claim it
+        kept = remember.read(self.layout.root).get("popup_size")
         self.popup = Popup(root, service, self.folder_first, self.desktop.open_file, self.open_window, self.say,
-                           present_only=lambda: bool(remember.read(self.layout.root).get("present_only", False)))
+                           present_only=lambda: bool(remember.read(self.layout.root).get("present_only", False)),
+                           size=tuple(kept) if isinstance(kept, list) and len(kept) == 2 else None,
+                           on_resize=lambda size: remember.write(self.layout.root, popup_size=list(size)))
         self.hotkey = start_hotkey(settings.hotkey, lambda: self.events.put("popup")) if settings.hotkey else hotkeys.Hotkey("no hotkey set")
         self.watcher = watcher if watcher is not None else Watcher(service, settings, say=self.say)
         self.listener = summons.Listener(self.layout.root, self._summoned)
@@ -87,6 +90,14 @@ class Tray:
 
     def open_window(self, words: str = "") -> None:
         self.launch(dugup_command(self.layout, "window", *(["--search", words] if words else [])))
+
+    def free_models(self) -> None:
+        """End the kept model workers and pause background updates, which would load them again."""
+        self.watcher.stop()
+        self.watcher.pause()
+        ended = self.service.free_models()
+        self.say(("Freed: " + ", ".join(ended) + ". " if ended else "No model was loaded. ")
+                 + "Background updates are paused so they do not load the models again; resume them from the menu.")
 
     def update_index(self) -> None:
         """Update now, in this process, through the watcher (paused or not)."""
@@ -167,6 +178,10 @@ class Tray:
             self.watcher.resume()
         elif command == "stop":
             self.watcher.stop()
+        elif command == "free":
+            self.free_models()
+        elif command == "about":
+            self.popup.about()
         elif command == "quit":
             self.quit()
 
@@ -192,6 +207,9 @@ def make_pystray_icon(tray: Tray):
         pystray.MenuItem("Update now", lambda: tray.events.put("update")),
         pystray.MenuItem(lambda item: "Resume updates" if tray.watcher.paused else "Pause updates", toggle_pause),
         pystray.MenuItem("Stop this update", lambda: tray.events.put("stop"), visible=lambda item: tray.watcher.running),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Free the graphics card and memory", lambda: tray.events.put("free")),
+        pystray.MenuItem("About DugUp", lambda: tray.events.put("about")),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit DugUp", lambda: tray.events.put("quit")),
     )

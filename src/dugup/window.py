@@ -439,6 +439,8 @@ class App:
         file.add_command(label="Choose what to index...", command=self.choose_what)
         file.add_separator()
         file.add_command(label="Settings...", command=self.open_setup)
+        file.add_command(label="Disk space...", command=self.show_disk_space)
+        file.add_command(label="Free the graphics card and memory...", command=self.free_models)
         file.add_separator()
         file.add_command(label="Quit", command=self.close)
         bar.add_cascade(label="File", menu=file)
@@ -460,11 +462,39 @@ class App:
         self.root.config(menu=bar)
         self.menu_bar = bar
 
+    def show_disk_space(self) -> None:
+        """What DugUp takes on disk, and what is free on that drive."""
+        use = self.service.disk_usage()
+        free = "could not be read" if use["free"] < 0 else format_bytes(use["free"])
+        self.tell("Disk space", f"In the data folder ({self.service.layout.root}):\n\n"
+                                f"    the index: {format_bytes(use['index'])}\n"
+                                f"    the models: {format_bytes(use['models'])}\n"
+                                f"    records of removals and renames: {format_bytes(use['records'])}\n"
+                                f"    everything else (logs, cache): {format_bytes(use['other'])}\n\n"
+                                f"    all told: {format_bytes(use['total'])}\n\n"
+                                f"Free on that drive: {free}.\n\n"
+                                "The index can be given a spending limit (Settings: Disk space); the models can be removed "
+                                "and fetched again later (dugup models remove).")
+
+    def free_models(self) -> None:
+        """End the kept model workers so the graphics card and memory go back to other programs."""
+        if self.busy():
+            self.say("Something is running; stop it first, then free the models.")
+            return
+        if not self.ask("Free the graphics card and memory?",
+                        "This ends the model workers DugUp keeps loaded: the question model (searching by meaning), the "
+                        "picture model (pictures by likeness), the plain-words server and the OCR reader.\n\n"
+                        "Searching by words keeps working. A search by meaning or by looks loads its model again on the "
+                        "next use, which takes a few seconds. Background updates in the tray would load them again too; "
+                        "pause those from the tray's menu if you need the card for a while."):
+            return
+        ended = self.service.free_models()
+        self.warm = None
+        self.say("Freed: " + ", ".join(ended) + "." if ended else "No model was loaded; nothing to free.")
+
     def _about(self) -> None:
-        from . import __version__
-        self.tell("About DugUp", f"DugUp {__version__}\n\nLocal file search: by the words in files, the words in pictures "
-                                 f"and scans, what a passage means, and what a picture looks like. Everything stays on this "
-                                 f"machine.\n\nData folder: {self.service.layout.root}\n\nhttps://github.com/benwade/DugUp")
+        from .about import about_text
+        self.tell("About DugUp", about_text(self.service.layout.root))
 
     def _place_sash(self, event=None) -> None:
         """Once, when the window first has its real size: give the results the wider side. After that the

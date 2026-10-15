@@ -252,6 +252,58 @@ class LocalService:
             self._forget_intent()
         return result
 
+    def free_models(self) -> List[str]:
+        """End every kept model worker (the question sketcher, the picture looker, the plain-words server, the
+        OCR reader), giving back their memory and the graphics card. Nothing is lost: the next search by
+        meaning or by looks starts one again (a few seconds). Returns what was ended, in words."""
+        ended: List[str] = []
+        with self._asker_lock:
+            if self._asker is not None:
+                self._asker[0].close()
+                self._asker = None
+                ended.append("the question model (searching by meaning)")
+        if self._looker is not None:
+            self._looker[0].close()
+            self._looker = None
+            ended.append("the picture model (pictures by likeness)")
+        backend = getattr(self._intent, "backend", None)
+        if backend is not None and getattr(backend, "_running", None) is not None:
+            self._intent.close()          # ends the server; the parser stays and starts it again on next use
+            ended.append("the plain-words model server")
+        close_ocr = getattr(self._ocr_backend, "close", None)
+        if self._ocr_backend is not None and close_ocr is not None:
+            close_ocr()
+            self._ocr_backend = None
+            ended.append("the OCR reader")
+        return ended
+
+    def disk_usage(self) -> Dict[str, int]:
+        """Bytes on disk: the index, the models, the records (removed and renames), the rest of the data
+        folder, and the free space on that drive."""
+        import shutil
+
+        def size_of(folder: Path) -> int:
+            total = 0
+            for path in folder.rglob("*"):
+                try:
+                    if path.is_file():
+                        total += path.stat().st_size
+                except OSError:
+                    pass
+            return total
+
+        root = self.layout.root
+        index = self.layout.index_bytes()
+        models_bytes = size_of(self.layout.models) if self.layout.models.exists() else 0
+        records = sum(size_of(root / name) for name in ("removed", "renames") if (root / name).exists())
+        everything = size_of(root) if root.exists() else 0
+        try:
+            free = shutil.disk_usage(str(root)).free
+        except OSError:
+            free = -1
+        return {"index": index, "models": models_bytes, "records": records,
+                "other": max(0, everything - index - models_bytes - records), "total": everything, "free": free}
+
     def remove_models(self) -> int:
         """End a running model server and delete what install_models put in place. Returns the bytes given back."""
         self._forget_intent()

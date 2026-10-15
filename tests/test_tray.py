@@ -7,6 +7,7 @@ import json
 import threading
 
 import pytest
+from types import SimpleNamespace
 
 from dugup import hotkey, remember, summons, tray as tray_module
 
@@ -170,6 +171,17 @@ def test_the_tray_takes_commands_and_the_popup_finds_files_by_name_then_by_words
         popup.search_now()
         assert "beta.txt" not in [r.name for r in popup.rows] and popup.rows
         remember.write(stage.layout.root, present_only=False)
+        # the box remembers its size through the tray's memory, and the tray's menu can free the models
+        popup.hide()
+        before = popup.size
+        popup._sized(SimpleNamespace(widget=popup.top, width=900, height=400))
+        assert popup.size == before, "a size change while hidden is not a user's resize"
+        popup.show()
+        popup._sized(SimpleNamespace(widget=popup.top, width=900, height=400))
+        assert popup.size == (900, 400) and remember.read(stage.layout.root)["popup_size"] == [900, 400]
+        popup.hide()
+        tray.handle("free")
+        assert watcher.paused and "paused" in said[-1]
         popup.query.set("zzzz-nothing")
         popup.search_now()
         assert popup.rows == [] and "Nothing found" in popup.note.get()

@@ -1313,10 +1313,24 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     assert [bar.entrycget(i, "label") for i in range(bar.index("end") + 1)] == ["File", "Index", "Pictures", "Help"]
     file_menu = bench.root.nametowidget(bar.entrycget(0, "menu"))
     labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) == "command"]
-    assert labels == ["Add folder...", "Choose what to index...", "Settings...", "Quit"]
+    assert labels == ["Add folder...", "Choose what to index...", "Settings...", "Disk space...",
+                      "Free the graphics card and memory...", "Quit"]
     help_menu = bench.root.nametowidget(bar.entrycget(3, "menu"))
     help_menu.invoke(0)
     assert bench.told and bench.told[-1][0] == "About DugUp" and "0.1.0" in bench.told[-1][1]
+    assert "PolyForm Noncommercial" in bench.told[-1][1] and "Ben Wade" in bench.told[-1][1], "the license is in the About box"
+    # disk space: the index, the models, the records, and what is free
+    app.show_disk_space()
+    assert bench.told[-1][0] == "Disk space" and "the index:" in bench.told[-1][1] and "Free on that drive" in bench.told[-1][1]
+    use = app.service.disk_usage()
+    assert use["index"] > 0 and use["total"] >= use["index"] and use["free"] > 0
+    # freeing the models: asks, ends what is loaded, says what went
+    bench.answer = False
+    app.free_models()
+    assert "ends the model workers" in bench.asked[-1]
+    bench.answer = True
+    app.free_models()
+    assert "nothing to free" in app.message.get() or "Freed:" in app.message.get()
     rows = {str(b.master) for b in app.run_buttons}
     assert len(rows) == 2, "the run buttons are spread over two rows"
 

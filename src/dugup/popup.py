@@ -13,7 +13,7 @@ import os
 import threading
 import tkinter as tk
 from tkinter import ttk
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from .shapes import Failure, SearchFilters, SearchRow, WHERE_ANYWHERE, WHERE_NAME
 
@@ -25,9 +25,10 @@ WIDTH = 720
 class Popup:
     def __init__(self, root: tk.Misc, service, folder_first: Callable[[], str], open_file: Callable[[str], str],
                  hand_to_window: Callable[[str], None], say: Optional[Callable[[str], None]] = None,
-                 present_only: Callable[[], bool] = lambda: False) -> None:
+                 present_only: Callable[[], bool] = lambda: False, size: Optional[Tuple[int, int]] = None,
+                 on_resize: Optional[Callable[[Tuple[int, int]], None]] = None) -> None:
         self.service, self.folder_first, self.open_file, self.hand_to_window = service, folder_first, open_file, hand_to_window
-        self.present_only = present_only
+        self.present_only, self.on_resize = present_only, on_resize
         self.say = say or (lambda text: None)
         self.rows: List[SearchRow] = []
         self.pending: Optional[str] = None
@@ -37,7 +38,9 @@ class Popup:
         top.withdraw()
         top.title("DugUp")
         top.attributes("-topmost", True)
-        top.resizable(False, False)
+        top.minsize(420, 200)
+        top.bind("<Configure>", self._sized)
+        self.size: Optional[Tuple[int, int]] = tuple(size) if size else None   # remembered between showings, and runs
         top.protocol("WM_DELETE_WINDOW", self.hide)
         frame = ttk.Frame(top, padding=8)
         frame.pack(fill="both", expand=True)
@@ -55,6 +58,7 @@ class Popup:
         ttk.Label(foot, textvariable=self.note, foreground="#666666").pack(side="left", fill="x", expand=True)
         self.window_button = ttk.Button(foot, text="Open the full window", command=self._to_window)
         self.window_button.pack(side="right")
+        ttk.Button(foot, text="?", width=2, command=self.about).pack(side="right", padx=(0, 4))
         for widget in (top, self.entry, self.list):
             widget.bind("<Escape>", lambda event: self.hide())
             widget.bind("<Return>", self._enter)
@@ -68,7 +72,7 @@ class Popup:
     def show(self) -> None:
         top = self.top
         top.update_idletasks()
-        width, height = WIDTH, max(top.winfo_reqheight(), 120)
+        width, height = self.size or (WIDTH, max(top.winfo_reqheight(), 120))
         x = (top.winfo_screenwidth() - width) // 2
         y = max(40, top.winfo_screenheight() // 3 - height // 2)
         top.geometry(f"{width}x{height}+{x}+{y}")
@@ -83,6 +87,17 @@ class Popup:
 
     def hide(self) -> None:
         self.top.withdraw()
+
+    def _sized(self, event) -> None:
+        if self.shown and event.widget is self.top and event.width > 50 and event.height > 50:
+            self.size = (event.width, event.height)
+            if self.on_resize is not None:
+                self.on_resize(self.size)
+
+    def about(self) -> None:
+        from tkinter import messagebox
+        from .about import about_text
+        messagebox.showinfo("About DugUp", about_text(self.service.layout.root), parent=self.top)
 
     @property
     def shown(self) -> bool:

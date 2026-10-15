@@ -391,6 +391,12 @@ def test_the_warm_up_is_decided_by_the_setting_and_the_sketches_and_a_sketch_mad
         question = svc.sketch_question("tomatoes")
         page = svc.search("tomatoes", filters=SearchFilters(where=WHERE_MEANING), question=question)
         assert page.rows[0].path == "/r/garden.txt"
+        # freeing the models ends the kept worker and says so; the next question starts one again
+        ended = svc.free_models()
+        assert ended == ["the question model (searching by meaning)"] and svc._asker is None
+        assert svc.free_models() == [], "nothing loaded now"
+        assert svc.search("tomatoes", filters=SearchFilters(where=WHERE_MEANING)).rows[0].path == "/r/garden.txt"
+        assert svc._asker is not None, "loaded again on use"
     assert LocalService(layout, Settings(meaning_warm_up="never")).wants_warm_meaning() is False
     assert LocalService(layout, Settings(meaning_warm_up="yes")).wants_warm_meaning() is True
     with LocalService(layout) as svc:

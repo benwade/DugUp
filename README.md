@@ -25,6 +25,17 @@ written from scratch in Python; it shares no code with it. It runs on Windows 11
 - **Honest about what it knows.** Every file ends in a stated state; a file that cannot be read says why;
   a file gone since the last scan stays findable, flagged, for 30 days.
 
+## Private by design
+
+Nothing you have leaves your machine. There is no account, no telemetry, no crash reporting, and no
+request to any server, with one exception: the models for meaning search, pictures and captions are
+downloaded once, on first use, from pinned addresses (each file checked against its recorded SHA-256),
+and you can fetch them yourself and drop them in the data folder instead. The plain-words reader talks
+only to a model server on this machine unless you set `intent_allow_remote` on purpose. Logs hold counts
+and reason codes, never your text or your file names. The index is a plain SQLite file in your own data
+folder, which you can delete at any time; the only other things DugUp writes are the records of what it
+moved to the trash or renamed, so you can undo them.
+
 ## What it touches on your disk
 
 Indexing only reads. The index lives in your own data folder (`%LOCALAPPDATA%\DugUp` on Windows,
@@ -444,6 +455,25 @@ it, not the only one, and every step is a command you can run again.
 Copies on another drive are never duplicates to this report: a file on your own drive and its backup on a
 cloud drive are a file and its backup. Run it per drive, and only on the drive you mean to clean.
 
+## Built as a service, with clients
+
+Everything the window does goes through one interface, `Service` (`protocols.py`): search, the index,
+OCR, meaning and looks, naming, the trash. The command line, the window, the tray and the search box
+are four clients of it, and the tests run against a fake implementation of the same interface. A program
+of your own can do the same in a few lines:
+
+    from dugup.datadir import DataLayout, resolve_data_dir
+    from dugup.service import LocalService
+    from dugup.settings import load
+
+    layout = DataLayout(resolve_data_dir())
+    settings, _ = load(layout.config)
+    with LocalService(layout, settings) as dugup:
+        for row in dugup.search("nursing license", limit=5).rows:
+            print(row.path, row.rank)
+
+The same footing will carry an MCP server, so an assistant on this machine can ask the index questions.
+
 ## Tests
 
     python -m pytest
@@ -472,4 +502,6 @@ cloud drive are a file and its backup. Run it per drive, and only on the drive y
 
 ## License
 
-MIT. See `LICENSE`.
+PolyForm Noncommercial 1.0.0, copyright Ben Wade: use it, copy it, change it and share it for any
+noncommercial purpose, with the notice kept; selling it, or using it in something sold, needs a separate
+agreement with the author. The full text is in `LICENSE`.

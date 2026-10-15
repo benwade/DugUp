@@ -2,6 +2,8 @@
 name = "dugup"
 version = "0.1.0"
 description = "DugUp: local file search for Windows and Linux"
+license = {file = "LICENSE"}
+authors = [{name = "Ben Wade"}]
 requires-python = ">=3.10"
 dependencies = ["platformdirs", "pypdfium2>=4.30", "tomli; python_version < '3.11'"]
 
