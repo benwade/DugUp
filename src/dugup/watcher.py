@@ -144,14 +144,31 @@ class Watcher:
                 return None
             return s.run_ocr(stop, None, fast=False)
         if step == "meaning":
-            if not self.settings.meaning_after_index or s.meaning_waiting() == 0:
+            if not self.settings.meaning_after_index or self._waiting("meaning") == 0:
                 return None
             return s.run_meaning(stop, None)
         if step == "looks":
-            if not self.settings.looks_after_index or s.looks_waiting() == 0:
+            if not self.settings.looks_after_index or self._waiting("looks") == 0:
                 return None
             return s.run_looks(stop, None, readers=self.gentle_readers())
         return None
+
+    def _waiting(self, what: str) -> int:
+        """How many files (or pictures) have no sketch yet, read through a connection of this thread's own:
+        the service's reading connection belongs to the tray's thread and must not be touched from here."""
+        s = self.service
+        opener = getattr(s, "_open_store", None)
+        if opener is None:                       # a stand-in service in the tests answers directly
+            return s.meaning_waiting() if what == "meaning" else s.looks_waiting()
+        store = opener()
+        try:
+            if what == "meaning":
+                done, could = store.sketch_counts(s.meaning_model())
+            else:
+                done, could, _ = store.look_counts(s.looks_model())
+            return max(0, could - done)
+        finally:
+            store.close()
 
     @staticmethod
     def _said(step: str, report) -> str:

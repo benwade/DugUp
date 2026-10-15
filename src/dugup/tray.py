@@ -63,6 +63,8 @@ class Tray:
         self.closed = False
         from .popup import Popup
         root.withdraw()
+        service.list_roots()      # the service's reading connection belongs to the thread that first uses it:
+                                  # this one, before the background update (on its own thread) can claim it
         self.popup = Popup(root, service, self.folder_first, self.desktop.open_file, self.open_window, self.say,
                            present_only=lambda: bool(remember.read(self.layout.root).get("present_only", False)))
         self.hotkey = start_hotkey(settings.hotkey, lambda: self.events.put("popup")) if settings.hotkey else hotkeys.Hotkey("no hotkey set")

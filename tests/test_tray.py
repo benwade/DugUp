@@ -186,3 +186,30 @@ def test_the_window_remembers_its_folder_for_the_popup(stage):
     from dugup.window import ALL_FOLDERS
     app.folder.set(ALL_FOLDERS)
     assert remember.read(stage.layout.root)["folder"] == ""
+
+
+def test_a_background_update_with_the_real_service_leaves_the_search_box_working(stage):
+    """The service's reading connection belongs to one thread. The watcher runs on another and must never
+    touch it (before the fix, its check for waiting sketches did, and every search from the box failed)."""
+    import tkinter as tk
+    from test_watcher import settings as watch_settings
+    root = tk.Toplevel(stage.root)
+    said = []
+    stage.service.run_meaning = lambda *a, **k: None      # the check for waiting sketches is the point, not the fill
+    stage.service.run_looks = lambda *a, **k: None
+    watcher = tray_module.Watcher(stage.service, watch_settings(watch_every_minutes=60, ocr_after_index=False),
+                                  cores=4, say=said.append)
+    tray = tray_module.Tray(root, stage.service, stage.service.settings, launch=lambda a: None, make_icon=lambda t: None,
+                            start_hotkey=lambda text, fire: hotkey.Hotkey(""), say=said.append, watcher=watcher)
+    try:
+        assert tray.watcher.tick()
+        watcher.thread.join(30)
+        assert not watcher.running and "Error" not in watcher.last_outcome, watcher.last_outcome
+        assert watcher.last_outcome.startswith("index ")
+        tray.popup.query.set("needle")
+        tray.popup.search_now()          # on this thread, with the shared connection: must still work
+        assert [r.name for r in tray.popup.rows][0] == "needle-name.txt"
+    finally:
+        tray.quit()
+        root.destroy()
+
