@@ -700,6 +700,55 @@ class LocalService:
                 journal(cleanup.record_line("trashed", path))
         return done
 
+    def rekeep_alike(self, same, keeper_row_id: int):
+        """A near-duplicate set with another keeper (alikesets.rekeep): closeness measured against it afresh."""
+        from . import alikesets
+        return alikesets.rekeep(self.store, same, keeper_row_id)
+
+    def trash_alike_extras(self, sets, journal: Optional[Callable[[str], None]] = None, mover=None):
+        """Move the extras of these near-duplicate sets to the trash, set by set, checking at that moment what
+        the preview assumed: the keeper is still there and is the file it was (size and time), each extra is
+        the file it was, and the protections as they stand now. A set whose keeper is gone or changed is left
+        whole, with the reason; an extra that changed is left, with the reason. Returns cleanup.Removal."""
+        from . import cleanup
+        done = cleanup.Removal()
+
+        def unchanged(record) -> str:
+            try:
+                st = os.stat(record.path)
+            except OSError:
+                return "it is not there now"
+            if st.st_size != record.size or abs(st.st_mtime - record.modified) > 1.0:
+                return "it changed since the preview (size or time)"
+            return ""
+
+        for same in sets:
+            keeper = same.keep.record
+            why = unchanged(keeper)
+            if why:
+                for m in same.extra:
+                    done.skipped.append((m.record.path, f"its keeper {os.path.basename(keeper.path)}: {why}"))
+                    if journal is not None:
+                        journal(cleanup.record_line("left", m.record.path, f"keeper {why}"))
+                continue
+            ready, held = [], []
+            for m in same.extra:
+                if m.closeness < same.threshold:
+                    held.append((m.record.path, "it is below the threshold against the keeper"))
+                else:
+                    problem = unchanged(m.record)
+                    (held.append((m.record.path, problem)) if problem else ready.append(m.record.path))
+            for path, problem in held:
+                done.skipped.append((path, problem))
+                if journal is not None:
+                    journal(cleanup.record_line("left", path, problem))
+            if journal is not None and ready:
+                journal(cleanup.record_line("keeping", keeper.path))
+            part = self.to_trash(ready, journal, mover)      # the protections as they stand now are checked here
+            done.moved.extend(part.moved)
+            done.skipped.extend(part.skipped)
+        return done
+
     # -- naming pictures
 
     def captions_ready(self) -> "bool | str":

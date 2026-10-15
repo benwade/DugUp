@@ -35,8 +35,10 @@ class Member:
 @dataclass
 class AlikeSet:
     keep: Member
-    extra: List[Member]
-    aside: List[Member] = field(default_factory=list)
+    extra: List[Member]                           # at or above the threshold against the keeper: proposed to go
+    aside: List[Member] = field(default_factory=list)     # protected: shown, never weighed
+    left: List[Member] = field(default_factory=list)      # in the chain, but below the threshold against this keeper
+    threshold: float = THRESHOLD
 
     @property
     def bytes_extra(self) -> int:
@@ -140,6 +142,41 @@ def choose_keeper(records: Sequence[FileRecord], preferred: Sequence[str], fold:
     return keeper, why or ("the shorter path" if len(pool) > 1 else "the only choice")
 
 
+def _around(keep: Member, open_ones: Sequence[FileRecord], shielded: Sequence[FileRecord],
+            close: Callable[[int, int], float], threshold: float) -> AlikeSet:
+    """A set measured against its keeper. A chain (A like B, B like C) can hold a picture that is not within
+    the threshold of the keeper at all; such a one is `left`, shown but never proposed to go."""
+    keeper = keep.record
+    near, left = [], []
+    for r in open_ones:
+        member = Member(r, close(r.row_id, keeper.row_id))
+        (near if member.closeness >= threshold else left).append(member)
+    near.sort(key=lambda m: -m.closeness)
+    left.sort(key=lambda m: -m.closeness)
+    aside = [Member(r, close(r.row_id, keeper.row_id), True) for r in shielded]
+    return AlikeSet(keep, near, aside, left, threshold)
+
+
+def rekeep(store, same: AlikeSet, keeper_row_id: int) -> AlikeSet:
+    """The same set with another of its open members as keeper, every closeness measured afresh against it
+    and the split at the threshold made again."""
+    from . import sketches
+    from .embedding import LOOKS_DIMS
+    members = [same.keep] + same.extra + same.left
+    chosen = next((m for m in members if m.record.row_id == keeper_row_id), None)
+    if chosen is None:
+        return same
+    raw = store.looks_of([m.record.row_id for m in members] + [m.record.row_id for m in same.aside])
+    vectors = {i: sketches.dequantize(v[1], LOOKS_DIMS, [v[0]])[0] for i, v in raw.items()}
+
+    def close(a: int, b: int) -> float:
+        va, vb = vectors.get(a), vectors.get(b)
+        return min(1.0, float(va @ vb)) if va is not None and vb is not None else 0.0
+
+    return _around(Member(chosen.record, 1.0, False, "chosen by hand"), [m.record for m in members if m is not chosen],
+                   [m.record for m in same.aside], close, same.threshold)
+
+
 def report(store, model: str, threshold: float = THRESHOLD, protected: Sequence[str] = (), preferred: Sequence[str] = (),
            fold: Callable[[str], str] = lambda p: p, stop=None,
            progress: Optional[Callable[[int, int], None]] = None, timer: Callable[[], float] = time.monotonic) -> AlikeReport:
@@ -188,13 +225,11 @@ def report(store, model: str, threshold: float = THRESHOLD, protected: Sequence[
         if len(open_ones) < 2:
             continue                  # as the file cleanup does: protected copies are shown aside, never weighed
         keeper, why = choose_keeper(open_ones, preferred, fold)
-        keep = Member(keeper, 1.0, False, why)
-        extra = [Member(r, close(r.row_id, keeper.row_id)) for r in open_ones if r is not keeper]
-        aside = [Member(r, close(r.row_id, keeper.row_id), True) for r in members if shielded(r) and r is not keeper]
-        if not extra:
+        made = _around(Member(keeper, 1.0, False, why), [r for r in open_ones if r is not keeper],
+                       [r for r in members if shielded(r) and r is not keeper], close, threshold)
+        if not made.extra:
             continue
-        extra.sort(key=lambda m: -m.closeness)
-        found.sets.append(AlikeSet(keep, extra, aside))
+        found.sets.append(made)
     found.sets.sort(key=lambda s: (-s.bytes_extra, s.keep.record.path))
     found.seconds = timer() - started
     return found

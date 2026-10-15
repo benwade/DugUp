@@ -1334,3 +1334,37 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     rows = {str(b.master) for b in app.run_buttons}
     assert len(rows) == 2, "the run buttons are spread over two rows"
 
+
+def test_an_evicted_thumbnail_is_made_again_when_asked_for(tmp_path, monkeypatch):
+    """The cache forgets old thumbnails to bound memory; forgetting must allow a fresh request, or a picture
+    scrolled back to stays "loading..." for the session."""
+    import queue
+    pytest.importorskip("tkinter")
+    from dugup import picturegrid
+    pytest.importorskip("PIL")
+    from PIL import Image
+    monkeypatch.setattr(picturegrid, "KEEP", 4)
+    paths = []
+    for n in range(5):
+        path = tmp_path / f"p{n}.png"
+        Image.new("RGB", (8, 8), (n * 40, 0, 0)).save(path)
+        paths.append(str(path))
+    events = queue.Queue()
+    thumbs = picturegrid.Thumbnails(events)
+    for path in paths:
+        thumbs.ask(path)
+    thumbs.thread.join(10)
+    assert len(thumbs.made) < 5, "the cache was bounded"
+    gone = next(p for p in paths if p not in thumbs.made)
+    assert thumbs.ask(gone) is None
+    thumbs.thread.join(10) if thumbs.thread.is_alive() else None
+    for _ in range(100):
+        if gone in thumbs.made:
+            break
+        if thumbs.thread is not None and thumbs.thread.is_alive():
+            thumbs.thread.join(0.05)
+        else:
+            break
+    assert thumbs.made.get(gone) is not None, "asked again after eviction, it is made again"
+    assert thumbs.pending() == 0
+

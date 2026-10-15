@@ -1461,7 +1461,8 @@ class SqliteStore:
         from .sketches import FINGERPRINT
         rows = self.conn.execute(
             "SELECT k.file_id, k.fingerprint FROM looks k JOIN files f ON f.id = k.file_id "
-            "WHERE k.model=? AND k.fingerprint IS NOT NULL AND f.missing_since IS NULL ORDER BY k.file_id", (model,)).fetchall()
+            "WHERE k.model=? AND k.fingerprint IS NOT NULL AND f.missing_since IS NULL AND f.looked = k.model "
+            "ORDER BY k.file_id", (model,)).fetchall()       # f.looked: a changed picture's old sketch is not evidence
         ids = np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows))
         matrix = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
             else np.zeros((0, FINGERPRINT), dtype=np.int8)
@@ -1474,7 +1475,8 @@ class SqliteStore:
         for at in range(0, len(ids), 400):
             chunk = ids[at:at + 400]
             marks = ",".join("?" * len(chunk))
-            for r in self.conn.execute(f"SELECT file_id, scale, sketch FROM looks WHERE sketch IS NOT NULL AND file_id IN ({marks})", chunk):
+            for r in self.conn.execute(f"SELECT k.file_id, k.scale, k.sketch FROM looks k JOIN files f ON f.id = k.file_id "
+                                       f"WHERE k.sketch IS NOT NULL AND f.looked = k.model AND k.file_id IN ({marks})", chunk):
                 found[r[0]] = (r[1], r[2])
         return found
 

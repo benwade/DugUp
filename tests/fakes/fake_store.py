@@ -376,7 +376,8 @@ class FakeStore:
         import numpy as np
         from dugup.sketches import FINGERPRINT
         lk = self._lk()
-        rows = sorted((i, v[3]) for i, v in lk.items() if v[0] == model and v[3] is not None and i in self.files and self.files[i].missing_since is None)
+        rows = sorted((i, v[3]) for i, v in lk.items() if v[0] == model and v[3] is not None and i in self.files
+                      and self.files[i].missing_since is None and self.looked.get(i) == model)
         ids = np.array([i for i, _ in rows], dtype=np.int64)
         matrix = np.frombuffer(b"".join(fp for _, fp in rows), dtype=np.int8).reshape(len(rows), FINGERPRINT) if rows \
             else np.zeros((0, FINGERPRINT), dtype=np.int8)
@@ -384,7 +385,7 @@ class FakeStore:
 
     def looks_of(self, file_ids):
         lk = self._lk()
-        return {i: (lk[i][1], lk[i][2]) for i in file_ids if i in lk and lk[i][2] is not None}
+        return {i: (lk[i][1], lk[i][2]) for i in file_ids if i in lk and lk[i][2] is not None and self.looked.get(i) == lk[i][0]}
 
     def look_of(self, file_id):
         from dugup.embedding import LOOKS_DIMS
@@ -400,6 +401,8 @@ class FakeStore:
         scored = []
         for i, (m, scale, sketch, fp, note) in lk.items():
             if m != model or sketch is None or i not in self.files or i == not_file or self.files[i].missing_since is not None:
+                continue
+            if self.looked.get(i) != model:         # a changed picture's old sketch is not evidence
                 continue
             if not self._file_passes(self.files[i], filters):
                 continue

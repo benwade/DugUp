@@ -808,6 +808,10 @@ class App:
                 row = _row_from_record(item.record, item.closeness)
                 rows.append(row)
                 badges[row.path] = (f"protected {number}", "#555555")
+            for item in same.left:
+                row = _row_from_record(item.record, item.closeness)
+                rows.append(row)
+                badges[row.path] = (f"left {number}", "#8a8a8a")     # near its chain, but not near enough to this keeper
         self.like_of = None
         self.last = None
         self.rows = []
@@ -832,31 +836,44 @@ class App:
         row = self.selected()
         if row is None or self.alike_report is None:
             return
-        for same in self.alike_report.sets:
-            for index, item in enumerate(same.extra):
+        for at, same in enumerate(self.alike_report.sets):
+            for item in same.extra + same.left:
                 if item.record.path == row.path:
-                    from .alikesets import Member
-                    old = same.keep
-                    same.keep = Member(item.record, 1.0, False, "chosen by hand")
-                    same.extra[index] = Member(old.record, item.closeness, False)
-                    same.extra.sort(key=lambda m: -m.closeness)
+                    made = self.service.rekeep_alike(same, item.record.row_id)    # closeness measured against it afresh
+                    self.alike_report.sets[at] = made
                     self._show_alike()
-                    self.say(f"Keeping {row.name} instead.")
+                    held = f"; {len(made.left)} fall below the threshold against it and are left" if made.left else ""
+                    self.say(f"Keeping {row.name} instead: {len(made.extra)} extra(s){held}.")
                     return
-        self.say("Select an extra (red) picture to make it the keeper of its set.")
+        self.say("Select an extra (red) or a left (grey) picture to make it the keeper of its set.")
 
     def trash_extras(self) -> None:
-        if self.alike_report is None or not self.alike_report.sets:
+        """The extras of every set to the trash, set by set, with the keeper checked at that moment."""
+        from . import trash
+        found = self.alike_report
+        if found is None or not found.sets:
             return
-        paths = [m.record.path for same in self.alike_report.sets for m in same.extra]
-        self.tree.selection_set(tuple(str(i) for i, r in enumerate(self.rows) if r.path in set(paths)))
-        self.trash_selected()
-        if self.alike_report is not None:
-            gone = {p for p in paths if not os.path.exists(p)}
-            for same in self.alike_report.sets:
-                same.extra = [m for m in same.extra if m.record.path not in gone]
-            self.alike_report.sets = [s for s in self.alike_report.sets if s.extra]
-            self._show_alike()
+        paths = [m.record.path for same in found.sets for m in same.extra]
+        names = "\n".join(os.path.basename(p) for p in paths[:8]) + (f"\n... and {len(paths) - 8:,} more" if len(paths) > 8 else "")
+        if not self.ask("Move the extras to the trash?",
+                        f"{len(paths):,} extra picture(s) in {len(found.sets):,} set(s) will be {trash.how()}:\n\n{names}\n\n"
+                        "Before each set its keeper is checked to be there and unchanged, and each extra to be the "
+                        "file it was; what fails that check is left alone and said so. Nothing is deleted outright."):
+            return
+        record, handle = self._record_file("removed", "trashed")
+        if handle is None:
+            self.say(f"The record could not be written ({record}), so nothing was moved.")
+            return
+        try:
+            done = self.service.trash_alike_extras(found.sets, journal=lambda line: (handle.write(line + "\n"), handle.flush()))
+        finally:
+            handle.close()
+        self._after_trash(done, record)
+        gone = {p for p, _ in done.moved}
+        for same in found.sets:
+            same.extra = [m for m in same.extra if m.record.path not in gone]
+        found.sets = [s for s in found.sets if s.extra]
+        self._show_alike()
 
     def result_pictures(self) -> List[str]:
         """The paths of the pictures among the current results (what the Pictures tab shows)."""
@@ -1062,28 +1079,18 @@ class App:
         problem, done, path = report
         self.say(problem or f"{done}: {path}")
 
-    def trash_selected(self) -> None:
-        """Move the selected file(s) to the trash, after a question; a record is kept; the rows go."""
-        from . import trash
-        paths = self.selected_paths()
-        if not paths:
-            self.say("Select a file first (Ctrl-click or Shift-click selects several).")
-            return
-        names = "\n".join(os.path.basename(p) for p in paths[:8]) + (f"\n... and {len(paths) - 8:,} more" if len(paths) > 8 else "")
-        answer = self.ask("Move to the trash?", f"{len(paths):,} file(s) will be {trash.how()}:\n\n{names}\n\n"
-                          "Nothing is deleted outright. Files in protected folders are left alone.")
-        if not answer:
-            return
-        folder = self.service.layout.root / "removed"
-        folder.mkdir(parents=True, exist_ok=True)
-        record = folder / f"trashed {datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S')}.txt"
-        lines = []
+    def _record_file(self, kind: str, stem: str):
+        """A new record file under the data folder, created exclusively (two records in one second cannot
+        share a name). (path, handle), or (reason, None)."""
+        from . import records
         try:
-            with open(record, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n") as handle:
-                done = self.service.to_trash(paths, journal=lambda line: (handle.write(line + "\n"), handle.flush(), lines.append(line)))
+            return records.open_new(self.service.layout.root / kind, stem)
         except OSError as exc:
-            self.say(f"The record could not be written ({type(exc).__name__}), so nothing was moved.")
-            return
+            return f"{type(exc).__name__}: {exc}", None
+
+    def _after_trash(self, done, record) -> None:
+        """Take the moved files out of the results and say what happened, truthfully: a record that failed
+        after a move is reported as such, never as nothing moved."""
         gone = {p for p, _ in done.moved}
         if gone:
             keep = [r for r in self.rows if r.path not in gone]
@@ -1097,11 +1104,51 @@ class App:
             self.grid.show([r for r in self.rows if r.kind == FileKind.IMAGE.value], self.grid.scores, self.grid.heading)
             self.renamer.results_changed(len(self.result_pictures()))
         text = f"Moved {len(done.moved):,} file(s) to the trash; left {len(done.skipped):,} alone. The record is in {record}."
+        if getattr(done, "record_problem", ""):
+            text = (f"Moved {len(done.moved):,} file(s) to the trash, but the record could not be kept up "
+                    f"({done.record_problem}); what was moved is in the trash and listed here:\n\n"
+                    + "\n".join(p for p, _ in done.moved))
         if done.skipped:
             text += "\n\n" + "\n".join(f"{os.path.basename(p)}: {why}" for p, why in done.skipped[:10])
         self.say(text.split("\n")[0])
-        if done.skipped:
-            self.tell("Some were left alone", text)
+        if done.skipped or getattr(done, "record_problem", ""):
+            self.tell("Some were left alone" if not getattr(done, "record_problem", "") else "The record failed", text)
+
+    def trash_selected(self) -> None:
+        """Move the selected file(s) to the trash, after a question; a record is kept; the rows go."""
+        from . import trash
+        paths = self.selected_paths()
+        if not paths:
+            self.say("Select a file first (Ctrl-click or Shift-click selects several).")
+            return
+        names = "\n".join(os.path.basename(p) for p in paths[:8]) + (f"\n... and {len(paths) - 8:,} more" if len(paths) > 8 else "")
+        answer = self.ask("Move to the trash?", f"{len(paths):,} file(s) will be {trash.how()}:\n\n{names}\n\n"
+                          "Nothing is deleted outright. Files in protected folders are left alone.")
+        if not answer:
+            return
+        record, handle = self._record_file("removed", "trashed")
+        if handle is None:
+            self.say(f"The record could not be written ({record}), so nothing was moved.")
+            return
+        problem = []
+
+        def journal(line: str) -> None:
+            try:
+                handle.write(line + "\n")
+                handle.flush()
+            except OSError as exc:          # the move has happened: the window must not say otherwise
+                problem.append(f"{type(exc).__name__}: {exc}")
+
+        try:
+            done = self.service.to_trash(paths, journal=journal)
+        finally:
+            try:
+                handle.close()
+            except OSError:
+                pass
+        if problem:
+            done.record_problem = problem[0]
+        self._after_trash(done, record)
 
     def open_selected(self) -> None:
         self._with_selected(self.desktop.open_file, "Opened")

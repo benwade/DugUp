@@ -96,6 +96,7 @@ class Thumbnails:
                 if len(self.made) >= KEEP:
                     for old in list(self.made)[: KEEP // 4]:
                         del self.made[old]
+                        self.asked.discard(old)      # forgotten entirely, so it can be asked for again
                 self.made[path] = image
             self.events.put(("thumb", path, image))
 

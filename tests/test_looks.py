@@ -287,6 +287,12 @@ def test_searching_by_looks_finds_the_closest_pictures_with_filters_and_leaves_t
     if hasattr(store, "remove_files"):
         store.set_missing(rows[3][0], 1.0)
         assert [r.name for r in store.search_looks(question, model).rows][0] == "a.png", "a missing picture is not found"
+    # a picture that changed (size or time) wants a new look: its old sketch answers no search and gives no example
+    store.upsert_file(FileRecord("/pics/a.png", 11, 10.0, kind=FileKind.IMAGE, state=FileState.DONE))
+    assert "a.png" not in [r.name for r in store.search_looks(question, model).rows], "the stale vector is not evidence"
+    assert store.look_of(rows[0][0]) is None
+    ids, _ = store.look_fingerprints(model)
+    assert rows[0][0] not in set(int(i) for i in ids), "nor does it reach the near-duplicate scan"
 
 
 def test_the_fill_and_like_commands_the_search_by_looks_and_the_index_run_going_on_to_pictures(tmp_path, monkeypatch):
@@ -375,6 +381,7 @@ def test_near_duplicate_sets_have_a_keeper_by_rule_leave_protected_pictures_asid
         rows = []
         for name, (v, size, when) in shots.items():
             Image.new("RGB", size, (200, 10, 10)).save(root / name, quality=95)
+            os.utime(root / name, (when, when))      # the index records the file's own time; removal checks it again
             record = FileRecord(str(root / name), os.path.getsize(root / name), when, kind=FileKind.IMAGE, state=FileState.DONE)
             store.upsert_file(record)
             v = v / np.linalg.norm(v)
@@ -406,9 +413,72 @@ def test_near_duplicate_sets_have_a_keeper_by_rule_leave_protected_pictures_asid
     assert cli.main(["alike", "duplicates", "--remove", "--data-dir", str(data)], stdout=out) == 1 and "needs --record" in out.getvalue()
     moved = []
     monkeypatch.setattr("dugup.trash.to_trash", lambda path, mover=None, _m=moved: (_m.append(path), os.remove(path), "")[2])
-    record = tmp_path / "moved.txt"
+    record = tmp_path / "moved-pictures.txt"
     out = io.StringIO()
     assert cli.main(["alike", "duplicates", "--protect", str(root / "Laptop"), "--remove", "--record", str(record), "--yes",
-                     "--data-dir", str(data)], stdout=out) == 0
+                     "--data-dir", str(data)], stdout=out) == 0, out.getvalue()
     assert sorted(os.path.basename(p) for p in moved) == ["photo (1).jpg", "photo (2).jpg"] and (root / "Laptop" / "photo.jpg").exists()
     assert "Moved 2 picture(s) to the trash" in out.getvalue() and record.read_text(encoding="utf-8-sig").count("trashed\t") == 2
+
+
+def test_a_chain_of_likeness_is_measured_against_the_keeper_and_removal_checks_the_set_at_that_moment(tmp_path, monkeypatch):
+    """A like B and B like C does not make C an extra of A: an extra must meet the threshold against the keeper
+    it is measured against; the rest of the chain is shown as left. Choosing another keeper measures afresh.
+    Removal checks, set by set, that the keeper is there and unchanged and that each extra is the file it was."""
+    pytest.importorskip("PIL")
+    from PIL import Image
+    from dugup import alikesets
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.shapes import FileKind, FileRecord, FileState
+    from dugup import sketches
+    root = tmp_path / "root"
+    root.mkdir()
+    layout = DataLayout(tmp_path / "data").ensure()
+    base = np.zeros(embedding.LOOKS_DIMS, dtype=np.float32)
+    base[0] = 1.0
+    other = np.zeros(embedding.LOOKS_DIMS, dtype=np.float32)
+    other[1] = 1.0
+
+    def at(degrees):
+        rad = np.deg2rad(degrees)
+        return np.cos(rad) * base + np.sin(rad) * other
+
+    shots = {"a.jpg": (at(0), 10.0), "b.jpg": (at(10), 20.0), "c.jpg": (at(20), 30.0)}
+    with LocalService(layout) as svc:
+        rows = []
+        for name, (v, when) in shots.items():
+            Image.new("RGB", (40, 30), (10, 10, 200)).save(root / name, quality=95)
+            os.utime(root / name, (when, when))
+            record = FileRecord(str(root / name), os.path.getsize(root / name), when, kind=FileKind.IMAGE, state=FileState.DONE)
+            svc.store.upsert_file(record)
+            data, scales = sketches.quantize(v[None, :])
+            rows.append((record.row_id, scales[0], data, sketches.fingerprint_of(v), ""))
+        svc.store.save_looks(looks.model_name(), rows)
+        found = svc.alike_pictures(0.97)
+        assert len(found.sets) == 1
+        same = found.sets[0]
+        assert os.path.basename(same.keep.record.path) == "a.jpg", "the larger file (same size) -> the older -> a"
+        assert [os.path.basename(m.record.path) for m in same.extra] == ["b.jpg"] and same.extra[0].closeness > 0.98
+        assert [os.path.basename(m.record.path) for m in same.left] == ["c.jpg"] and same.left[0].closeness < 0.95, \
+            "c is like b, not like a: shown as left, never proposed"
+        # keeping b instead: a and c are both within the threshold of b
+        again = svc.rekeep_alike(same, same.extra[0].record.row_id)
+        assert os.path.basename(again.keep.record.path) == "b.jpg" and again.keep.why == "chosen by hand"
+        assert sorted(os.path.basename(m.record.path) for m in again.extra) == ["a.jpg", "c.jpg"] and again.left == []
+        # removal, set by set: the keeper changed since the preview -> the whole set is left alone, with the reason
+        moved = []
+        mover = lambda path: (moved.append(path), os.remove(path), "")[2]
+        os.utime(root / "b.jpg", (99.0, 99.0))
+        lines = []
+        done = svc.trash_alike_extras([again], journal=lines.append, mover=mover)
+        assert moved == [] and len(done.skipped) == 2 and all("keeper" in why and "changed" in why for _, why in done.skipped)
+        # an extra that changed is left; the other goes; the record says keeping / trashed / left
+        os.utime(root / "b.jpg", (20.0, 20.0))
+        os.utime(root / "c.jpg", (77.0, 77.0))
+        lines.clear()
+        done = svc.trash_alike_extras([again], journal=lines.append, mover=mover)
+        assert [os.path.basename(p) for p in moved] == ["a.jpg"]
+        assert [(os.path.basename(p), why) for p, why in done.skipped] == [("c.jpg", "it changed since the preview (size or time)")]
+        assert any(l.startswith("keeping\t") for l in lines) and any(l.startswith("trashed\t") for l in lines) and any(l.startswith("left\t") for l in lines)
+

@@ -35,7 +35,9 @@ def test_unknown_keys_and_wrong_types_are_reported_not_swallowed():
 
 def test_values_that_cannot_work_fall_back_to_the_defaults_with_a_note():
     settings, notes = from_mapping({"chunk_chars": 100, "chunk_overlap": 100})
-    assert settings == Settings() and any("chunk_overlap" in n for n in notes)
+    assert settings.chunk_overlap < settings.chunk_chars and (settings.chunk_chars, settings.chunk_overlap) != (1800, 200), \
+        "one of the two falls back, not both, and the result is a valid pair"
+    assert any("chunk" in n and "default" in n for n in notes)
 
 
 def test_a_broken_config_file_is_the_defaults_with_a_note(tmp_path):
@@ -56,3 +58,17 @@ def test_the_fingerprint_changes_with_what_is_indexed_and_only_then():
     base = Settings().fingerprint()
     assert Settings(chunk_chars=900).fingerprint() != base
     assert Settings(batch_files=7, missing_retention_days=1).fingerprint() == base
+
+
+def test_one_bad_value_does_not_throw_the_good_ones_away():
+    """A typo in a timeout must not empty cleanup_protect: the protections a person wrote stay in force."""
+    from dugup.settings import from_mapping
+    settings, notes = from_mapping({"cleanup_protect": "G:\\Other computers\\My Laptop", "ocr_seconds": -5,
+                                    "near_words": 9})
+    assert settings.cleanup_protect == "G:\\Other computers\\My Laptop" and settings.near_words == 9
+    assert settings.ocr_seconds == 120.0 and any("ocr_seconds" in n and "default" in n for n in notes)
+    # two values that fail only together: one is set aside, the other kept
+    settings, notes = from_mapping({"chunk_chars": 100, "chunk_overlap": 150, "cleanup_protect": "X:\\keep"})
+    assert settings.cleanup_protect == "X:\\keep" and settings.chunk_overlap < settings.chunk_chars
+    assert notes
+

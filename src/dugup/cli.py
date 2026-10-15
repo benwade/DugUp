@@ -1810,6 +1810,8 @@ def cmd_alike_duplicates(args, service, out, environ, stop, ask: Callable[[str],
             safe_write(f"      extra  {item.record.path}   ({item.closeness:.3f})", out)
         for item in same.aside:
             safe_write(f"      kept aside (protected)  {item.record.path}   ({item.closeness:.3f})", out)
+        for item in same.left:
+            safe_write(f"      near, but below the threshold against the keeper: {item.record.path}   ({item.closeness:.3f})", out)
     if len(found.sets) > args.rows:
         safe_write(f"... and {len(found.sets) - args.rows:,} more set(s) (--rows N shows more)", out)
     if not args.remove or not found.sets:
@@ -1824,14 +1826,13 @@ def cmd_alike_duplicates(args, service, out, environ, stop, ask: Callable[[str],
         if reply.strip().lower() != "yes":
             safe_write("Nothing was moved.", out)
             return 0
-    paths = [m.record.path for same in found.sets for m in same.extra]
-    try:
-        handle = open(args.record, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n")
+    try:      # the record was created exclusively above (save_lines), empty; it is filled as the moves happen
+        handle = open(args.record, "a", encoding="utf-8", newline="\r\n" if os.name == "nt" else "\n")
     except OSError as exc:
         safe_write(f"The record could not be written ({type(exc).__name__}: {exc}); nothing was moved.", out)
         return 1
     try:
-        done = service.to_trash(paths, journal=lambda line: (handle.write(line + "\n"), handle.flush()))
+        done = service.trash_alike_extras(found.sets, journal=lambda line: (handle.write(line + "\n"), handle.flush()))
     finally:
         handle.close()
     safe_write(f"Moved {len(done.moved):,} picture(s) to the trash; left {len(done.skipped):,} alone. The record is in {args.record}.", out)

@@ -108,6 +108,7 @@ class Removal:
     moved: List[Tuple[str, str]] = field(default_factory=list)      # (extra moved to the trash, the copy kept)
     skipped: List[Tuple[str, str]] = field(default_factory=list)    # (extra left alone, why)
     stopped: bool = False
+    record_problem: str = ""        # set by a caller whose record failed after a move: the truth must still be told
 
     @property
     def bytes_freed(self) -> int:

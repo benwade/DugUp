@@ -254,8 +254,28 @@ def from_mapping(data: Mapping[str, object]) -> Tuple[Settings, List[str]]:
             notes.append(f"{key}: not a setting this version knows; ignored")
     try:
         return replace(Settings(), **changes), notes
-    except ValueError as exc:
-        return Settings(), notes + [f"{exc}; all defaults are used"]
+    except ValueError:
+        pass
+    # One value will not do. The others stay as written: a typo in a timeout must not empty the folders that
+    # are protected from removal. Each value is tried on its own first; what fails alone is set aside with a
+    # note; then, in case two values fail only together (an overlap larger than the chunk), the rest are
+    # tried as a whole and whittled down one at a time until they are accepted.
+    kept: Dict[str, object] = {}
+    for key, value in changes.items():
+        try:
+            replace(Settings(), **{key: value})
+            kept[key] = value
+        except ValueError as exc:
+            notes.append(f"{key}: {exc}; its default is used")
+    while kept:
+        try:
+            return replace(Settings(), **kept), notes
+        except ValueError as exc:
+            problem = str(exc)
+            culprit = next((k for k in kept if k in problem), next(reversed(kept)))
+            notes.append(f"{culprit}: {problem}; its default is used")
+            del kept[culprit]
+    return Settings(), notes
 
 
 def load(config: Path) -> Tuple[Settings, List[str]]:
