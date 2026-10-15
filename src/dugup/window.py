@@ -616,6 +616,10 @@ class App:
         else:
             self.grid.add([r for r in new_rows if r.kind == FileKind.IMAGE.value])
 
+    def result_pictures(self) -> List[str]:
+        """The paths of the pictures among the current results (what the Pictures tab shows)."""
+        return [r.path for r in self.rows if r.kind == FileKind.IMAGE.value]
+
     def _grid_selected(self, index: int) -> None:
         """A tile was clicked: select the same row in the list."""
         path = self.grid.rows[index].path if index < len(self.grid.rows) else None
@@ -676,6 +680,7 @@ class App:
                    else "closest in meaning to" if by_meaning else "for")
             self.say(f"Showing {len(self.rows):,} of {self.total:,} file(s) {way}: {words}{coverage}")
         self._refresh_grid(offset == 0, page.rows, by_looks)
+        self.renamer.results_changed(len(self.result_pictures()))
         if offset == 0 and self.rows:
             self.tree.selection_set("0")
             self.tree.focus("0")

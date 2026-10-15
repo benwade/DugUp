@@ -1013,11 +1013,12 @@ def test_the_rename_tab_previews_lets_names_be_edited_or_kept_renames_with_a_rec
     from fakes.fake_store import FakeStore  # noqa: F401  (the bench uses the real store)
     trip = bench.docs / "trip"
     trip.mkdir()
-    for name in ("IMG_7.jpg", "IMG_8.jpg", "IMG_9.jpg"):
-        Image.new("RGB", (40, 30), (200, 10, 10)).save(trip / name)
+    for n, name in enumerate(("IMG_7.jpg", "IMG_8.jpg", "IMG_9.jpg")):
+        Image.new("RGB", (40, 30), (200, 10 + 40 * n, 10)).save(trip / name)      # different bytes: not copies of one another
     bench.ready()
     app, tab = bench.app, bench.app.renamer
     assert str(tab.rename_button["state"]) == "disabled" and str(tab.undo_button["state"]) == "disabled"
+    tab.source.set("folder")
     tab.preview()
     assert "Choose a folder first" in tab.status.get()
     # the captions come from a stand-in, through the same background path as the real ones
@@ -1037,7 +1038,24 @@ def test_the_rename_tab_previews_lets_names_be_edited_or_kept_renames_with_a_rec
 
     monkeypatch.setattr("dugup.sandbox.SubprocessSandbox", StandIn)
     monkeypatch.setattr(LocalService, "captions_ready", lambda self: True)
+    # with nothing searched the tab starts from a folder; after a search with pictures it starts from the results
+    assert "none yet" in tab.results_text.get()
+    tab.source.set("results")
+    tab.preview()
+    assert "no pictures in the results" in tab.status.get()
+    names = bench.find("IMG")
+    assert len(names) == 3 and tab.results_text.get() == "the 3 picture(s) in the current results" and tab.source.get() == "results"
+    tab.pattern.set("{caption} {original}")
+    tab.preview()
+    for _ in range(200):
+        if not tab.busy():
+            break
+        tab.worker.join(0.05)
+    app.drain()
+    assert tab.plan is not None and len(tab.plan.to_rename) == 3, "the results' pictures, without choosing a folder"
+    tab.plan = None
     tab.folder.set(str(trip))
+    tab.source.set("folder")
     tab.pattern.set("{caption} {original}")
     tab.preview()
     assert str(tab.preview_button["state"]) == "disabled" and str(tab.stop_button["state"]) == "normal"

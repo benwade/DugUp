@@ -612,10 +612,11 @@ class LocalService:
             return f"the captioning model is not fetched yet ({size:,.0f} MB)"
         return True
 
-    def plan_names(self, folder: str, pattern: Optional[str] = None, caption: bool = True, longer: bool = False,
+    def plan_names(self, folder: Optional[str] = None, pattern: Optional[str] = None, caption: bool = True, longer: bool = False,
                    progress: Optional[Callable[[Progress], None]] = None, stop: Optional[StopSignal] = None,
-                   gpu: Optional[bool] = None, every: bool = False) -> "naming.Plan | Failure":
-        """What the pictures below a folder would be called (naming.plan). Captions are written now, by the
+                   gpu: Optional[bool] = None, every: bool = False, paths: Optional[Sequence[str]] = None) -> "naming.Plan | Failure":
+        """What the pictures below a folder, or the pictures at `paths` (a window's results, say), would be
+        called (naming.plan). Captions are written now, by the
         captioning model in a worker (fetched on first use), when the pattern asks for {caption} and `caption`
         is on. Only pictures whose name is a camera's (IMG_..., 20220401_142335, Screenshot ...) unless `every`;
         the others are left alone, and no caption is written for them. Changes nothing."""
@@ -625,13 +626,24 @@ class LocalService:
         problem = naming.check_pattern(pattern)
         if problem:
             return Failure(FailureReason.UNSUPPORTED, f"the pattern cannot be used: {problem}")
-        folder = os.path.abspath(os.path.expanduser(folder))
         store = self._open_store()           # its own connection: a window calls this from a background thread
         try:
-            if not any(_under(folder, r.path, self._fold) for r in store.list_roots()):
-                return Failure(FailureReason.OTHER, f"that folder is not inside an indexed folder: {folder}")
-            records = [r for r in store.list_files(prefix=folder, case_insensitive=self.case_insensitive)
-                       if r.kind is FileKind.IMAGE and r.missing_since is None]
+            if paths is not None:
+                records = []
+                for path in paths:
+                    record = store.get_file(path)
+                    if record is not None and record.kind is FileKind.IMAGE and record.missing_since is None:
+                        records.append(record)
+                if not records and paths:
+                    return Failure(FailureReason.OTHER, "none of those is a picture the index knows")
+            else:
+                if not folder:
+                    return Failure(FailureReason.OTHER, "name a folder, or the pictures themselves")
+                folder = os.path.abspath(os.path.expanduser(folder))
+                if not any(_under(folder, r.path, self._fold) for r in store.list_roots()):
+                    return Failure(FailureReason.OTHER, f"that folder is not inside an indexed folder: {folder}")
+                records = [r for r in store.list_files(prefix=folder, case_insensitive=self.case_insensitive)
+                           if r.kind is FileKind.IMAGE and r.missing_since is None]
         finally:
             store.close()
         started = _time.monotonic()

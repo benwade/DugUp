@@ -29,6 +29,8 @@ class RenameTab(ttk.Frame):
         super().__init__(parent, padding=4)
         self.host = host
         self.folder = tk.StringVar()
+        self.source = tk.StringVar(value="results")      # "results": the pictures in the current results; "folder"
+        self.results_text = tk.StringVar(value="the pictures in the current results (none yet)")
         self.pattern = tk.StringVar(value=host.service.settings.rename_pattern)
         self.with_caption = tk.BooleanVar(value=True)
         self.every = tk.BooleanVar(value=False)
@@ -42,18 +44,23 @@ class RenameTab(ttk.Frame):
         self.stop = threading.Event()
         self.last_record = ""
         self.columnconfigure(1, weight=1)
-        self.rowconfigure(3, weight=1)
-        ttk.Label(self, text="Folder:").grid(row=0, column=0, sticky="w")
-        host._readonly(self, self.folder, row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(self, text="Choose...", command=self.choose).grid(row=0, column=2, padx=2)
-        ttk.Label(self, text="Pattern:").grid(row=1, column=0, sticky="w")
-        ttk.Entry(self, textvariable=self.pattern).grid(row=1, column=1, sticky="ew", padx=4, pady=2)
+        self.rowconfigure(4, weight=1)
+        ttk.Label(self, text="Pictures:").grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(self, textvariable=self.results_text, variable=self.source, value="results").grid(row=0, column=1, sticky="w", padx=4)
+        folder_row = ttk.Frame(self)
+        folder_row.grid(row=1, column=1, columnspan=2, sticky="ew")
+        folder_row.columnconfigure(1, weight=1)
+        ttk.Radiobutton(folder_row, text="a folder:", variable=self.source, value="folder").grid(row=0, column=0, sticky="w", padx=4)
+        host._readonly(folder_row, self.folder, row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(folder_row, text="Choose...", command=self.choose).grid(row=0, column=2, padx=2)
+        ttk.Label(self, text="Pattern:").grid(row=2, column=0, sticky="w")
+        ttk.Entry(self, textvariable=self.pattern).grid(row=2, column=1, sticky="ew", padx=4, pady=2)
         ticks = ttk.Frame(self)
-        ticks.grid(row=1, column=2, sticky="w")
+        ticks.grid(row=2, column=2, sticky="w")
         ttk.Checkbutton(ticks, text="Describe each picture", variable=self.with_caption).pack(side="left")
         ttk.Checkbutton(ticks, text="Also pictures with real names", variable=self.every).pack(side="left", padx=(8, 0))
         bar = ttk.Frame(self)
-        bar.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(2, 4))
+        bar.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(2, 4))
         self.preview_button = ttk.Button(bar, text="Preview", command=self.preview)
         self.preview_button.pack(side="left")
         self.stop_button = ttk.Button(bar, text="Stop", command=self.stop.set, state="disabled")
@@ -70,8 +77,8 @@ class RenameTab(ttk.Frame):
         self.canvas = tk.Canvas(self, highlightthickness=0, background="#f4f4f4")
         self.scroll = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.scroll.set)
-        self.canvas.grid(row=3, column=0, columnspan=3, sticky="nsew")
-        self.scroll.grid(row=3, column=3, sticky="ns")
+        self.canvas.grid(row=4, column=0, columnspan=3, sticky="nsew")
+        self.scroll.grid(row=4, column=3, sticky="ns")
         self.inner = ttk.Frame(self.canvas)
         self.canvas_window = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
@@ -84,13 +91,31 @@ class RenameTab(ttk.Frame):
         chosen = self.host.choose_folder()
         if chosen:
             self.folder.set(chosen)
+            self.source.set("folder")
+
+    def results_changed(self, pictures: int) -> None:
+        """The window's results changed: say how many pictures they hold, and start from them when there are any."""
+        if pictures:
+            self.results_text.set(f"the {pictures:,} picture(s) in the current results")
+            if self.plan is None and not self.busy():
+                self.source.set("results")
+        else:
+            self.results_text.set("the pictures in the current results (none yet)")
+            if not self.folder.get():
+                self.source.set("folder")
 
     def busy(self) -> bool:
         return self.worker is not None and self.worker.is_alive()
 
     def preview(self) -> None:
         folder = self.folder.get().strip()
-        if not folder:
+        paths = None
+        if self.source.get() == "results":
+            paths = self.host.result_pictures()
+            if not paths:
+                self.status.set("There are no pictures in the results. Search first, or choose a folder.")
+                return
+        elif not folder:
             self.status.set("Choose a folder first.")
             return
         if self.busy():
@@ -108,7 +133,7 @@ class RenameTab(ttk.Frame):
 
         def work() -> None:
             try:
-                found = service.plan_names(folder, pattern, caption, False, events.put, stop, every=every)
+                found = service.plan_names(folder, pattern, caption, False, events.put, stop, every=every, paths=paths)
             except Exception as exc:
                 found = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
             events.put(("rename-plan", found))
