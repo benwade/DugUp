@@ -46,7 +46,8 @@ class Service:
 
 
 def settings(**kw):
-    base = dict(watch_every_minutes=60.0, ocr_after_index=True, meaning_after_index=True, looks_after_index=True)
+    base = dict(watch_every_minutes=60.0, ocr_after_index=True, meaning_after_index=True, looks_after_index=True,
+                watch_on_battery=False, watch_readers=0)
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -60,7 +61,7 @@ def finish(watcher):
 def test_a_run_is_due_at_once_then_every_period_and_goes_through_the_steps_gently():
     now = [1000.0]
     service, said = Service(), []
-    w = Watcher(service, settings(), clock=lambda: now[0], cores=16, say=said.append)
+    w = Watcher(service, settings(), clock=lambda: now[0], cores=16, say=said.append, on_battery=lambda: False)
     assert w.state() == "no update yet"
     assert w.tick(), "the first tick starts a run"
     finish(w)
@@ -121,3 +122,30 @@ def test_off_when_the_period_is_zero():
     w.now()
     assert w.tick(), "but Update now still works"
     finish(w)
+
+
+def test_on_battery_the_update_waits_for_mains_unless_told_otherwise_and_update_now_still_works():
+    power = {"battery": True}
+    w = Watcher(Service(), settings(), cores=8, on_battery=lambda: power["battery"])
+    assert not w.tick() and w.state() == "on battery: updates wait for mains power"
+    w.now()
+    assert w.tick()
+    finish(w)
+    power["battery"] = False
+    w2 = Watcher(Service(), settings(), cores=8, on_battery=lambda: True)
+    assert not w2.tick()
+    w3 = Watcher(Service(), settings(watch_on_battery=True), cores=8, on_battery=lambda: True)
+    assert w3.tick()
+    finish(w3)
+    w4 = Watcher(Service(), settings(), cores=8, on_battery=lambda: None)
+    assert w4.tick(), "a machine that cannot say is treated as on mains"
+    finish(w4)
+
+
+def test_gentle_readers_never_take_every_core():
+    assert Watcher(Service(), settings(), cores=16).gentle_readers() == 4
+    assert Watcher(Service(), settings(), cores=2).gentle_readers() == 1
+    assert Watcher(Service(), settings(), cores=1).gentle_readers() == 1
+    assert Watcher(Service(), settings(), cores=6).gentle_readers() == 1
+    assert Watcher(Service(), settings(watch_readers=3), cores=2).gentle_readers() == 3, "the setting is obeyed as given"
+

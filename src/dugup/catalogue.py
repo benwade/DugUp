@@ -222,6 +222,12 @@ def _entries() -> Tuple[Entry, ...]:
           "the tray's menu has \"Update now\" and \"Pause updates\" either way.",
           why="Once an hour keeps the index current without the machine ever feeling busy. A run you start yourself "
               "in the window goes at full speed and may stop the tray's run to get its turn."),
+        E("watch_on_battery", "tray", "Update by itself on battery power too",
+          "Off: while the tray runs on battery, the background update waits for mains power (\"Update now\" still "
+          "works). On a desktop this makes no difference.", choices=YES_NO),
+        E("watch_readers", "tray", "Readers a background update may use",
+          "How many files (or pictures) a background update reads side by side. 0 works it out: a quarter of the "
+          "cores, at least one, never all of them. A run you start yourself is not limited by this.", low=0, high=64),
         E("hotkey", "tray", "The search key",
           "Written the usual way: Win+Shift+F, Ctrl+Alt+D, Ctrl+Shift+Space. Empty means no key; the box can still be "
           "brought up with the tray icon or the command dugup popup. Takes effect when the tray is next started.",

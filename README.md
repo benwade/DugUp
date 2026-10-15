@@ -243,7 +243,8 @@ A second `dugup tray` does not start a second one: it brings up the search box o
 While the tray runs, **the index keeps itself current**: once when the tray starts and then every
 `watch_every_minutes` (an hour by default; 0 turns it off), the folders are scanned again, what changed is
 read, and OCR, meaning and looks follow for what is new, gently (a quarter of the cores, OCR in its gentle
-mode) so the machine stays yours. The tray's menu shows what it is doing and has "Update now", "Pause
+mode, never every core) so the machine stays yours; on a laptop running on its battery the update waits for
+mains power unless `watch_on_battery` says otherwise. The tray's menu shows what it is doing and has "Update now", "Pause
 updates" and "Stop this update". A run you start yourself in the window goes at full speed; if it finds
 the tray's run in the way, it offers to stop that and takes over as soon as the lock is free. The first
 background run after installing may fetch the meaning and picture models, as the window's Update would.

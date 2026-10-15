@@ -62,3 +62,41 @@ def index_readers_for(wanted: int, core_count: Optional[int] = None, free_bytes:
     """How many files to read side by side when indexing: the person's own number when given, else half the
     cores, at most 8, and never more than the free memory holds."""
     return readers_for(wanted, 1, INDEX_READER_MB, core_count, free_bytes, most=8)
+
+
+def on_battery() -> Optional[bool]:
+    """True when the machine runs on its battery, False on mains power, None when it cannot be told (a desktop
+    with no battery says False on Windows and None on Linux, where nothing in /sys says either way)."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class Power(ctypes.Structure):
+                _fields_ = [("ac", ctypes.c_ubyte), ("flag", ctypes.c_ubyte), ("percent", ctypes.c_ubyte),
+                            ("saver", ctypes.c_ubyte), ("life", ctypes.c_ulong), ("full", ctypes.c_ulong)]
+
+            power = Power()
+            if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(power)):   # type: ignore[attr-defined]
+                return None
+            return {0: True, 1: False}.get(int(power.ac))        # 255: unknown
+        base = "/sys/class/power_supply"
+        for name in os.listdir(base):
+            folder = os.path.join(base, name)
+            try:
+                with open(os.path.join(folder, "type"), encoding="ascii", errors="replace") as handle:
+                    kind = handle.read().strip()
+                if kind == "Mains":
+                    with open(os.path.join(folder, "online"), encoding="ascii", errors="replace") as handle:
+                        return handle.read().strip() == "0"
+            except OSError:
+                continue
+        for name in os.listdir(base):
+            try:
+                with open(os.path.join(base, name, "status"), encoding="ascii", errors="replace") as handle:
+                    return handle.read().strip() == "Discharging"
+            except OSError:
+                continue
+    except Exception:
+        return None
+    return None
+

@@ -118,6 +118,8 @@ class Settings:
     caption_gpu: bool = True               # write captions on a graphics card when the runtime can
     caption_source: str = "model"          # "model": the pinned captioning model; "server": a local model server (not built yet)
     watch_every_minutes: float = 60.0      # while the tray runs, the index updates itself this often (and once at start); 0: never
+    watch_on_battery: bool = False         # run those background updates on battery power too; off: they wait for mains power
+    watch_readers: int = 0                 # readers a background update may use; 0: a quarter of the cores, at least one, never all
     hotkey: str = "Win+Shift+F"            # the key that brings up the search box anywhere, while the tray runs; "" for none
     # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
     book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
@@ -208,6 +210,8 @@ def validate(s: Settings) -> List[str]:
         problems.append('caption_source must be "model" or "server"')
     if s.watch_every_minutes < 0:
         problems.append("watch_every_minutes must be 0 (never) or more")
+    if s.watch_readers < 0:
+        problems.append("watch_readers must be 0 (worked out) or more")
     if s.hotkey:
         from .hotkey import parse
         _, _, problem = parse(s.hotkey)

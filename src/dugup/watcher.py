@@ -20,6 +20,7 @@ import threading
 import time
 from typing import Callable, List, Optional
 
+from . import machine
 from .shapes import Failure, FailureReason
 
 STEPS = ("index", "ocr", "meaning", "looks")
@@ -27,8 +28,10 @@ STEPS = ("index", "ocr", "meaning", "looks")
 
 class Watcher:
     def __init__(self, service, settings, clock: Callable[[], float] = time.monotonic,
-                 cores: Optional[int] = None, say: Optional[Callable[[str], None]] = None) -> None:
+                 cores: Optional[int] = None, say: Optional[Callable[[str], None]] = None,
+                 on_battery: Callable[[], Optional[bool]] = machine.on_battery) -> None:
         self.service, self.settings, self.clock = service, settings, clock
+        self.on_battery = on_battery
         self.say = say or (lambda text: None)
         self.cores = cores or os.cpu_count() or 2
         self.paused = False
@@ -57,10 +60,14 @@ class Watcher:
             return False
         if self.asked_now:
             return True
-        if self.every_seconds <= 0:
+        if self.every_seconds <= 0 or self.waiting_for_mains():
             return False
         now = self.clock() if now is None else now
         return self.last_started is None or now - self.last_started >= self.every_seconds
+
+    def waiting_for_mains(self) -> bool:
+        """On battery, and the setting says to wait for mains power."""
+        return not getattr(self.settings, "watch_on_battery", False) and self.on_battery() is True
 
     def tick(self) -> bool:
         """Called often by the tray; starts a run when one is due. True when one was started."""
@@ -91,6 +98,8 @@ class Watcher:
             return "updates paused"
         if self.every_seconds <= 0:
             return "updates off (watch_every_minutes is 0)"
+        if self.waiting_for_mains():
+            return "on battery: updates wait for mains power"
         if self.last_finished is None:
             return "no update yet"
         ago = int(self.clock() - self.last_finished)
@@ -106,7 +115,11 @@ class Watcher:
         self.thread.start()
 
     def gentle_readers(self) -> int:
-        return max(1, self.cores // 4)
+        """A quarter of the cores, at least one, never all of them (two cores: one), unless the setting says."""
+        wanted = int(getattr(self.settings, "watch_readers", 0) or 0)
+        if wanted > 0:
+            return wanted
+        return max(1, min(self.cores - 1, self.cores // 4))
 
     def _run(self) -> None:
         stop = self.stop_flag
