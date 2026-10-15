@@ -271,6 +271,15 @@ fetched on first use into the data folder. It needs `pip install dugup[meaning]`
 - **Measuring.** `dugup alike measure --ask "a sentence" --like PICTURE` tries the model on a sample of your
   own pictures and reports speed, disk and what is found, without storing anything.
 
+## To trash, from the window
+
+Beside Open and Show in folder, **To trash** moves the selected file(s) (Ctrl-click or Shift-click for
+several) to the trash the way the cleanup does: the Windows shell with undo (a file on a cloud drive lands in
+that drive's trash), `send2trash` elsewhere. It asks first, naming the files; files in protected folders are
+left alone and said so; a record of what went is kept under the data folder (`removed\`); the index marks
+them gone and the rows leave the results. Nothing is deleted outright. With "Pictures like this" this is the
+by-hand way to clear near-duplicate photos: select the extras in the list and press it.
+
 ## Naming pictures by what they show
 
 Many pictures have names that say nothing (`IMG_4471.jpg`). `dugup rename FOLDER` shows what each picture in a

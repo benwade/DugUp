@@ -315,6 +315,8 @@ class App:
             ttk.Button(actions, text=text, command=command).pack(side="left", padx=2)
         self.like_button = ttk.Button(actions, text="Pictures like this", command=self.like_selected, state="disabled")
         self.like_button.pack(side="left", padx=(10, 2))
+        self.trash_button = ttk.Button(actions, text="To trash", command=self.trash_selected)
+        self.trash_button.pack(side="left", padx=(10, 2))
         self.more_button = ttk.Button(actions, text="More results", command=self.more, state="disabled")
         self.more_button.pack(side="right", padx=2)
         self.menu = tk.Menu(root, tearoff=False)
@@ -810,6 +812,47 @@ class App:
             return
         problem = action(row.path)
         self.say(problem or f"{done}: {row.path}")
+
+    def trash_selected(self) -> None:
+        """Move the selected file(s) to the trash, after a question; a record is kept; the rows go."""
+        from . import trash
+        paths = self.selected_paths()
+        if not paths:
+            self.say("Select a file first (Ctrl-click or Shift-click selects several).")
+            return
+        names = "\n".join(os.path.basename(p) for p in paths[:8]) + (f"\n... and {len(paths) - 8:,} more" if len(paths) > 8 else "")
+        answer = self.ask("Move to the trash?", f"{len(paths):,} file(s) will be {trash.how()}:\n\n{names}\n\n"
+                          "Nothing is deleted outright. Files in protected folders are left alone.")
+        if not answer:
+            return
+        folder = self.service.layout.root / "removed"
+        folder.mkdir(parents=True, exist_ok=True)
+        record = folder / f"trashed {datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S')}.txt"
+        lines = []
+        try:
+            with open(record, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n") as handle:
+                done = self.service.to_trash(paths, journal=lambda line: (handle.write(line + "\n"), handle.flush(), lines.append(line)))
+        except OSError as exc:
+            self.say(f"The record could not be written ({type(exc).__name__}), so nothing was moved.")
+            return
+        gone = {p for p, _ in done.moved}
+        if gone:
+            keep = [r for r in self.rows if r.path not in gone]
+            self.rows = []
+            self.tree.delete(*self.tree.get_children())
+            for row in keep:
+                self.tree.insert("", "end", iid=str(len(self.rows)), values=row_values(row))
+                self.rows.append(row)
+            self.total = max(0, self.total - len(gone))
+            self._show_nothing()
+            self.grid.show([r for r in self.rows if r.kind == FileKind.IMAGE.value], self.grid.scores, self.grid.heading)
+            self.renamer.results_changed(len(self.result_pictures()))
+        text = f"Moved {len(done.moved):,} file(s) to the trash; left {len(done.skipped):,} alone. The record is in {record}."
+        if done.skipped:
+            text += "\n\n" + "\n".join(f"{os.path.basename(p)}: {why}" for p, why in done.skipped[:10])
+        self.say(text.split("\n")[0])
+        if done.skipped:
+            self.tell("Some were left alone", text)
 
     def open_selected(self) -> None:
         self._with_selected(self.desktop.open_file, "Opened")

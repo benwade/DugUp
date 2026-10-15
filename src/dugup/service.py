@@ -595,6 +595,36 @@ class LocalService:
         return self.store.search_looks(vectors[0], self.looks_model(), limit, offset, filters,
                                        not_file=record.row_id if record is not None else None)
 
+    # -- the trash
+
+    def to_trash(self, paths: Sequence[str], journal: Optional[Callable[[str], None]] = None, mover=None):
+        """Move these files to the trash (trash.to_trash), one at a time: never a file in a protected folder
+        (cleanup_protect), never one that is not there. The index marks each one gone. Returns
+        cleanup.Removal: moved (path, "") and skipped (path, why). `journal(line)` is told of each as it goes."""
+        from . import cleanup, trash
+        protected = [p.strip() for p in self.settings.cleanup_protect.split(";") if p.strip()]
+        done = cleanup.Removal()
+        for path in paths:
+            why = ""
+            if any(_under(path, folder, self._fold) for folder in protected):
+                why = "it is in a protected folder"
+            elif not os.path.isfile(path):
+                why = "it is not there now"
+            else:
+                why = (mover or trash.to_trash)(path)
+            if why:
+                done.skipped.append((path, why))
+                if journal is not None:
+                    journal(cleanup.record_line("left", path, why))
+                continue
+            done.moved.append((path, ""))
+            record = self.store.get_file(path)
+            if record is not None and record.row_id is not None:
+                self.store.set_missing(record.row_id, time.time())
+            if journal is not None:
+                journal(cleanup.record_line("trashed", path))
+        return done
+
     # -- naming pictures
 
     def captions_ready(self) -> "bool | str":

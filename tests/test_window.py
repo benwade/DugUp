@@ -1133,3 +1133,49 @@ def test_the_rename_tab_previews_lets_names_be_edited_or_kept_renames_with_a_rec
     app.ask = lambda title, text: False
     tab.rename()
     assert (trip / "IMG_7.jpg").exists() and (trip / "IMG_8.jpg").exists()
+
+
+def test_to_trash_moves_the_selected_files_after_a_question_keeps_a_record_and_takes_the_rows_out(bench, monkeypatch):
+    from dugup.service import LocalService
+    (bench.docs / "one.txt").write_text("needle one", encoding="utf-8")
+    (bench.docs / "two.txt").write_text("needle two", encoding="utf-8")
+    (bench.docs / "three.txt").write_text("needle three", encoding="utf-8")
+    bench.ready()
+    app = bench.app
+    moved = []
+
+    def mover(path):
+        moved.append(path)
+        os.remove(path)
+        return ""
+
+    monkeypatch.setattr("dugup.trash.to_trash", lambda path, mover=None, _m=mover: _m(path))
+    app.tree.selection_set(())
+    app.trash_selected()
+    assert "Select a file first" in app.message.get()
+    names = bench.find("needle")
+    assert len(names) >= 3
+    first = names.index("one.txt")
+    second = names.index("two.txt")
+    app.tree.selection_set((str(first), str(second)))
+    asked = []
+    app.ask = lambda title, text: asked.append((title, text)) or False
+    app.trash_selected()
+    assert asked and "2 file(s)" in asked[0][1] and not moved and (bench.docs / "one.txt").exists(), "no is no"
+    app.ask = lambda title, text: True
+    app.trash_selected()
+    assert sorted(os.path.basename(p) for p in moved) == ["one.txt", "two.txt"]
+    assert not (bench.docs / "one.txt").exists() and (bench.docs / "three.txt").exists()
+    assert "one.txt" not in bench.names() and "two.txt" not in bench.names() and "Moved 2 file(s) to the trash" in app.message.get()
+    record = sorted((bench.layout.root / "removed").glob("trashed *.txt"))[-1]
+    text = record.read_text(encoding="utf-8-sig")
+    assert text.count("trashed\t") == 2
+    assert app.service.store.get_file(str(bench.docs / "one.txt")).missing_since is not None, "the index knows it is gone"
+    # a second press on a file that is gone by now says so
+    moved.clear()
+    os.remove(bench.docs / "three.txt")
+    app.tree.selection_set((str(bench.names().index("three.txt")),))
+    told = []
+    app.tell = lambda title, text: told.append(text)
+    app.trash_selected()
+    assert not moved and told and "it is not there now" in told[0]

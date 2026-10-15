@@ -265,3 +265,23 @@ def test_same_bytes_reads_afresh_and_the_fallback_folder_keeps_every_version(tmp
     kept = sorted(p.read_text(encoding="utf-8") for p in (tmp_path / "removed").rglob("f*.txt"))
     assert kept == ["one", "two"], "nothing overwritten"
     assert trash._run_started in str(next((tmp_path / "removed").rglob("f.txt")))
+
+
+def test_the_service_moves_files_to_the_trash_but_never_from_a_protected_folder(tmp_path):
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.settings import Settings
+    from dugup.shapes import FileRecord, FileState
+    root = tmp_path / "root"
+    (root / "Laptop").mkdir(parents=True)
+    (root / "a.txt").write_text("a", encoding="utf-8")
+    (root / "Laptop" / "b.txt").write_text("b", encoding="utf-8")
+    moved, lines = [], []
+    with LocalService(DataLayout(tmp_path / "data").ensure(), Settings(cleanup_protect=str(root / "Laptop"))) as svc:
+        svc.store.upsert_file(FileRecord(str(root / "a.txt"), 1, 1.0, state=FileState.DONE))
+        done = svc.to_trash([str(root / "a.txt"), str(root / "Laptop" / "b.txt"), str(root / "gone.txt")],
+                            journal=lines.append, mover=lambda p: (moved.append(p), os.remove(p), "")[2])
+    assert [os.path.basename(p) for p, _ in done.moved] == ["a.txt"] and moved == [str(root / "a.txt")]
+    assert sorted(why for _, why in done.skipped) == ["it is in a protected folder", "it is not there now"]
+    assert (root / "Laptop" / "b.txt").exists()
+    assert lines[0].startswith("trashed\t") and sum(1 for l in lines if l.startswith("left\t")) == 2
