@@ -326,6 +326,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="only the very word forms typed: education then does not find educate")
     search.add_argument("--every-copy", action="store_true",
                         help="list every file; the usual is to show a file kept in several places once, with its other places")
+    search.add_argument("--here", action="store_true",
+                        help="only files that are here now: not ones gone since the last scan, nor ones on a drive not reachable now")
     search.add_argument("--meaning", action="store_true",
                         help="find passages by what they are about rather than by the words: a question in your own words "
                              "(needs sketches: dugup meaning fill)")
@@ -1086,7 +1088,8 @@ def cmd_search(args, env, out, environ) -> int:
         return 1
     query = " ".join(args.words)
     with service:
-        filters = SearchFilters(exact=args.exact, every_copy=args.every_copy) if (args.exact or args.every_copy) else None
+        filters = (SearchFilters(exact=args.exact, every_copy=args.every_copy, present_only=args.here)
+                   if (args.exact or args.every_copy or args.here) else None)
         if args.meaning or args.both or args.looks:
             filters = replace(filters or SearchFilters(), where=WHERE_LOOKS if args.looks else WHERE_BOTH if args.both else WHERE_MEANING)
         page = service.search(query, max(0, args.limit), max(0, args.offset), args.sort, args.desc, filters)

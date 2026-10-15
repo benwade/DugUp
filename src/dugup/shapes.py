@@ -175,6 +175,10 @@ class SearchFilters:
                                             # find "educate" (case and accents still do not matter)
     every_copy: bool = False                # show every file; the usual is to show a file that is kept in
                                             # several places once, with its other places listed (SearchRow.also_at)
+    present_only: bool = False              # leave out files that were gone at the last scan, and files in
+                                            # folders that cannot be reached right now (`away` says which)
+    away: Tuple[str, ...] = ()              # folders not reachable now; the Service fills this in when
+                                            # present_only is set, so the store can leave their files out
 
     def __post_init__(self) -> None:
         if self.where not in WHERE_CHOICES:

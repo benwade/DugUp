@@ -1616,6 +1616,12 @@ class SqliteStore:
             if value is not None:
                 clauses.append(f"{column} {sign} ?")
                 args.append(value)
+        if filters.present_only:
+            clauses.append("f.missing_since IS NULL")
+            for folder in filters.away:
+                clause, more = _under_clause(folder, filters.case_insensitive, "f.path")
+                clauses.append(f"NOT ({clause})")
+                args.extend(more)
         return match, seg, seg_args, "".join(f" AND {c}" for c in clauses), args, terms
 
     def search_words(self, query: str, limit: int = 100, offset: int = 0,

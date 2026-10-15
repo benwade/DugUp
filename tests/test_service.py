@@ -11,7 +11,7 @@ from dugup.indexer import POLICY_NOTE
 from dugup.lockfile import RunLock
 from dugup.protocols import Extraction, Service
 from dugup.service import LocalService
-from dugup.shapes import (POLICY_NAMES_ONLY, POLICY_OPEN, Failure, FailureReason, FileState, Passage, Root,
+from dugup.shapes import (POLICY_NAMES_ONLY, POLICY_OPEN, Failure, FailureReason, FileState, Passage, Root, SearchFilters,
                              SegmentIn, SegmentKind)
 
 WAIT = 30.0   # only bounds how long a broken program can hang the tests; a correct one never waits for it
@@ -150,6 +150,33 @@ def test_files_of_an_unreachable_folder_stay_in_results_and_are_flagged(service,
     os.rename(away, docs)
     service.run_indexing()
     assert service.search("needle").rows[0].unavailable is False
+
+
+def test_only_files_that_are_here_now(service, docs, tmp_path):
+    """present_only leaves out a file gone at the last scan and the files of a folder that cannot be reached;
+    without it they stay, flagged, as before. The same narrowing serves every kind of search (one builder)."""
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "needle.txt").write_text("needle in the other folder", encoding="utf-8")
+    for n in range(4):       # company, so losing one file is not "the folder lost most of its files" (nothing marked)
+        (other / f"keep{n}.txt").write_text("nothing here", encoding="utf-8")
+    service.set_root(Root(str(docs)))
+    service.set_root(Root(str(other)))
+    service.run_indexing()
+    (other / "needle.txt").unlink()            # gone at the next scan
+    service.run_indexing()
+    away = tmp_path / "unplugged"
+    os.rename(docs, away)                      # and the whole first folder cannot be reached
+    service.run_indexing()
+    page = service.search("needle")
+    assert page.total == 2 and {(r.name, r.unavailable, r.missing_since is not None) for r in page.rows} == \
+        {("a.txt", True, False), ("needle.txt", False, True)}
+    here = service.search("needle", filters=SearchFilters(present_only=True))
+    assert here.total == 0 and here.rows == []
+    os.rename(away, docs)
+    service.run_indexing()
+    here = service.search("needle", filters=SearchFilters(present_only=True))
+    assert [r.name for r in here.rows] == ["a.txt"] and here.total == 1
 
 
 def test_a_bad_sort_key_is_a_stated_failure_not_an_exception(service):

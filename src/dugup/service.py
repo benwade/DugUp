@@ -173,12 +173,21 @@ class LocalService:
 
     # -- search
 
+    def _completed(self, filters: Optional[SearchFilters]) -> Optional[SearchFilters]:
+        """Filters with what only the service knows: how paths compare here, and which folders are away."""
+        if filters is None:
+            return None
+        if filters.case_insensitive is None and (filters.folder is not None or filters.present_only):
+            filters = replace(filters, case_insensitive=self.case_insensitive)
+        if filters.present_only:
+            filters = replace(filters, away=tuple(r.path for r in self.store.list_roots() if not r.reachable))
+        return filters
+
     def search(self, query: str, limit: int = 100, offset: int = 0, sort="rank",
                descending: bool = False, filters: Optional[SearchFilters] = None, question=None) -> "SearchPage | Failure":
         """`question`: the sketch of `query` already made (sketch_question), for a search by meaning whose
         sketching was done on another thread; None makes it here."""
-        if filters is not None and filters.folder is not None and filters.case_insensitive is None:
-            filters = replace(filters, case_insensitive=self.case_insensitive)
+        filters = self._completed(filters)
         try:
             if filters is not None and filters.where == WHERE_LOOKS:
                 if question is None:
@@ -576,8 +585,7 @@ class LocalService:
         example = self.store.look_of(file_id)
         if example is None:
             return Failure(FailureReason.OTHER, "that picture has no sketch yet (dugup alike fill makes them)")
-        if filters is not None and filters.folder is not None and filters.case_insensitive is None:
-            filters = replace(filters, case_insensitive=self.case_insensitive)
+        filters = self._completed(filters)
         try:
             return self.store.search_looks(example, self.looks_model(), limit, offset, filters, sort=sort,
                                            descending=descending, not_file=file_id)

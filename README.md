@@ -311,6 +311,10 @@ the picture model, so a folder of those may cluster; look before trashing.
 
 ## To trash, from the window
 
+A file that was gone at the last scan stays in the results for 30 days, flagged (a drive may be merely
+unplugged), and so do the files of a folder that cannot be reached right now. **Only files that are here
+now** (a tick under the search form; `--here` on the command line) leaves both out. The tick is remembered.
+
 Selecting works the usual way, in the list and in the Pictures grid alike: a click chooses one, Ctrl-click
 adds or removes one, Shift-click takes a range, Ctrl+A takes every row; selected tiles carry a tick. The
 details pane shows the first of them; Open, Edit and Show in folder act on that one only (thirty viewers by

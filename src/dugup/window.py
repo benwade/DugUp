@@ -88,7 +88,7 @@ ALL_FOLDERS = "All indexed folders"
 
 def build_filters(folder: str = "", where: str = WHERE_ANYWHERE, kinds: Sequence[str] = (), after: str = "",
                   before: str = "", smallest: str = "", largest: str = "", exact: bool = False,
-                  every_copy: bool = False) -> SearchFilters:
+                  every_copy: bool = False, present_only: bool = False) -> SearchFilters:
     """The filters a filled-in form stands for. Raises ValueError with a sentence for the person who typed."""
     low, high = parse_size(smallest), parse_size(largest)
     start, end = parse_day(after), parse_day(before, end_of_day=True)
@@ -100,7 +100,7 @@ def build_filters(folder: str = "", where: str = WHERE_ANYWHERE, kinds: Sequence
     chosen = tuple(k for k in kinds if k in every)
     return SearchFilters(folder=folder or None, kinds=() if set(chosen) == every else chosen, where=where,
                          modified_after=start, modified_before=end, min_size=low, max_size=high, exact=bool(exact),
-                         every_copy=bool(every_copy))
+                         every_copy=bool(every_copy), present_only=bool(present_only))
 
 
 COLUMNS = (("name", "Name", 190), ("folder", "Folder", 195), ("kind", "Type", 60), ("size", "Size", 85),
@@ -243,6 +243,8 @@ class App:
         self.kinds: Dict[str, object] = {value: tk.BooleanVar(value=True) for _, value in KIND_LABELS}
         self.exact = tk.BooleanVar(value=False)
         self.every_copy = tk.BooleanVar(value=False)
+        self.present_only = tk.BooleanVar(value=bool(remember.read(self.service.layout.root).get("present_only", False)))
+        self.present_only.trace_add("write", lambda *_: remember.write(self.service.layout.root, present_only=self.present_only.get()))
 
         self.sentence = tk.StringVar()
         self.asker: Optional[threading.Thread] = None
@@ -286,6 +288,8 @@ class App:
             entry.pack(side="left", padx=(0, 10))
             entry.bind("<Return>", lambda event: self.search())
         ttk.Label(narrow, text="(dates as 2026-10-12; sizes as 200k, 5m, 1g)").pack(side="left")
+        ttk.Checkbutton(narrow, text="Only files that are here now", variable=self.present_only).pack(side="left", padx=(14, 2))
+        ttk.Label(narrow, text="(off: files gone since the last scan, or on a drive not reachable now, are shown flagged)").pack(side="left")
         ttk.Button(narrow, text="Clear filters", command=self.clear_filters).pack(side="left", padx=10)
 
         panes = ttk.PanedWindow(root, orient="horizontal")
@@ -459,7 +463,7 @@ class App:
             raise ValueError("No kind of file is ticked, so nothing can be found. Tick at least one.")
         return build_filters("" if folder == ALL_FOLDERS else folder, where, kinds, self.after_day.get(),
                              self.before_day.get(), self.smallest.get(), self.largest.get(), self.exact.get(),
-                             self.every_copy.get())
+                             self.every_copy.get(), self.present_only.get())
 
     def clear_filters(self) -> None:
         self.folder.set(ALL_FOLDERS)
