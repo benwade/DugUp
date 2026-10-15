@@ -203,6 +203,14 @@ class Bench:
         self.app.drain()
         self.root.update()
 
+    def handed(self):
+        """Let a hand-off to the desktop (open, edit, show) finish: it runs on a thread and answers through the events."""
+        hander = getattr(self.app, "hander", None)
+        if hander is not None:
+            hander.join(5)
+        self.app.drain()
+        self.root.update()
+
     def text(self, widget):
         return widget.get("1.0", "end").rstrip("\n")
 
@@ -362,12 +370,18 @@ def test_file_actions_go_to_the_desktop_and_problems_are_shown(bench):
     bench.find()
     path = str(bench.docs / "alpha.txt")
     app.open_selected()
+    assert app.message.get() == f"Opening... {path}", "said at once, before the desktop answers"
+    bench.handed()
+    assert app.message.get() == f"Opened: {path}"
     app.edit_selected()
+    bench.handed()
     app.show_in_folder()
+    bench.handed()
     assert bench.desktop.calls == [("open", path), ("edit", path), ("show", path)]
     assert app.message.get() == f"Shown in its folder: {path}"
     bench.desktop.answer = "The file is not at this path right now."
     app.open_selected()
+    bench.handed()
     assert app.message.get() == "The file is not at this path right now."
     app.copy_path()
     assert bench.copied == [path] and app.message.get() == f"Copied: {path}"

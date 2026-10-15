@@ -961,12 +961,30 @@ class App:
             self.places_button.configure(text=f"More... ({self.places_shown:,} of {total:,} shown)", state="normal")
 
     def _with_selected(self, action: Callable[[str], str], done: str) -> None:
+        """Hand the selected file to the desktop, off the window thread: on a cloud drive, even asking whether
+        the file is there can stall for seconds while the drive fetches it, and the window must not stall
+        with it. The outcome comes back through the events as ("handed", ...)."""
         row = self.selected()
         if row is None:
             self.say("Select a file first.")
             return
-        problem = action(row.path)
-        self.say(problem or f"{done}: {row.path}")
+        path = row.path
+        starting = {"Opened": "Opening", "Opened for editing": "Opening for editing", "Shown in its folder": "Showing in its folder"}
+        self.say(f"{starting.get(done, 'Working')}... {path}")
+
+        def hand():
+            try:
+                problem = action(path)
+            except Exception as exc:       # the desktop said no in a way nobody foresaw: say so, do not die
+                problem = f"Could not do that: {type(exc).__name__}: {exc}"
+            self.events.put(("handed", (problem, done, path)))
+
+        self.hander = threading.Thread(target=hand, name="dugup-desktop", daemon=True)
+        self.hander.start()
+
+    def _handed(self, report) -> None:
+        problem, done, path = report
+        self.say(problem or f"{done}: {path}")
 
     def trash_selected(self) -> None:
         """Move the selected file(s) to the trash, after a question; a record is kept; the rows go."""
@@ -1385,6 +1403,8 @@ class App:
                 self._alike_found(report)
             elif what == "warm":
                 self._warmed(report)
+            elif what == "handed":
+                self._handed(report)
             else:
                 self._finished(what, report)
 
