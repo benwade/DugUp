@@ -71,6 +71,19 @@ class Thumbnails:
             self.thread.start()
         return None
 
+    def retry_failures(self) -> None:
+        """Forget the ones that could not be made, so they are tried again: on a cloud drive a picture that
+        was not fetched yet may well be there now."""
+        with self.lock:
+            for path in [p for p, image in self.made.items() if image is None]:
+                del self.made[path]
+                self.asked.discard(path)
+
+    def pending(self) -> int:
+        """How many thumbnails are asked for and not yet made."""
+        with self.lock:
+            return len(self.asked) - len(self.made)
+
     def _work(self) -> None:
         while True:
             try:
@@ -109,10 +122,13 @@ class PictureGrid(ttk.Frame):
         self.on_select, self.on_open = on_select, on_open
         self.canvas = tk.Canvas(self, highlightthickness=0, background="#f4f4f4")
         self.scroll = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=self.scroll.set)
+        self.canvas.configure(yscrollcommand=self._scrolled)
         self.canvas.pack(side="left", fill="both", expand=True)
         self.scroll.pack(side="right", fill="y")
         self.canvas.bind("<Configure>", lambda event: self._reflow())
+        self.drawn: Tuple[int, int] = (0, -1)        # the lines of tiles on the canvas right now (first, last)
+        self.redraw_pending = False
+        self.reflowing = False
         self.canvas.bind("<Button-1>", self._click)
         self.canvas.bind("<Double-1>", self._double)
         bind_wheel(self.canvas, self.canvas)
@@ -129,6 +145,7 @@ class PictureGrid(ttk.Frame):
         self.rows, self.scores, self.heading = list(rows), scores, heading
         self.badges = dict(badges or {})
         self.photos.clear()
+        self.thumbnails.retry_failures()
         self.chosen, self.anchor = [], None
         self._reflow()
 
@@ -157,13 +174,55 @@ class PictureGrid(ttk.Frame):
             self.canvas.yview_moveto(row_at / max(1, total_rows))
 
     def thumb_arrived(self, path: str) -> None:
-        """A thumbnail is ready: redraw if a tile wants it."""
-        if any(getattr(r, "path", "") == path for r in self.rows):
-            self._reflow()
+        """A thumbnail is ready: redraw, once, if a tile on screen wants it. Many arrive in a burst, so the
+        redraw is put off until the window is idle and they share one."""
+        first, last = self.drawn
+        if self.thumbnails.pending() == 0:
+            self._redraw_soon()          # the last one: the loading note goes
+            return
+        for index in range(first * self.columns, min(len(self.rows), (last + 1) * self.columns)):
+            if getattr(self.rows[index], "path", "") == path:
+                self._redraw_soon()
+                return
+
+    def _redraw_soon(self) -> None:
+        if not self.redraw_pending:
+            self.redraw_pending = True
+            self.after_idle(self._redraw_now)
+
+    def _redraw_now(self) -> None:
+        self.redraw_pending = False
+        self._reflow()
+
+    def _scrolled(self, first: str, last: str) -> None:
+        """The canvas moved: the scrollbar follows, and tiles that came into view are drawn."""
+        self.scroll.set(first, last)
+        if not self.reflowing and self._visible_lines() != self.drawn:
+            self._redraw_soon()
+
+    def _visible_lines(self) -> Tuple[int, int]:
+        """The first and last line of tiles that are on screen, with one line of margin either side."""
+        canvas = self.canvas
+        top = 24 if self.heading else 0
+        height = max(TILE_H, canvas.winfo_height())
+        y0 = canvas.canvasy(0)
+        first = max(0, int((y0 - top - GAP) // TILE_H) - 1)
+        last = int((y0 + height - top - GAP) // TILE_H) + 1
+        lines = (len(self.rows) + self.columns - 1) // max(1, self.columns)
+        return first, min(last, max(0, lines - 1))
 
     # -- drawing
 
     def _reflow(self) -> None:
+        """Draw the tiles on screen (and one line either side). The rest exist only as geometry: thousands of
+        pictures cost nothing until they are scrolled to, and their thumbnails are not asked for until then."""
+        self.reflowing = True
+        try:
+            self._draw()
+        finally:
+            self.reflowing = False
+
+    def _draw(self) -> None:
         canvas = self.canvas
         canvas.delete("all")
         width = max(TILE_W, canvas.winfo_width())
@@ -176,8 +235,18 @@ class PictureGrid(ttk.Frame):
             canvas.create_text(GAP, top + GAP, anchor="nw", text="No pictures to show. Search by looks, or choose a picture "
                                                                "and press \"Pictures like this\".", fill="#555555")
             canvas.configure(scrollregion=(0, 0, width, 60))
+            self.drawn = self._visible_lines()
             return
-        for index, row in enumerate(self.rows):
+        lines = (len(self.rows) + self.columns - 1) // self.columns
+        canvas.configure(scrollregion=(0, 0, width, top + GAP + lines * TILE_H))
+        first, last = self._visible_lines()
+        self.drawn = (first, last)
+        shown = range(first * self.columns, min(len(self.rows), (last + 1) * self.columns))
+        for index in list(self.photos):
+            if index not in shown:
+                del self.photos[index]         # off screen: tkinter's copy goes, the thumbnail itself is kept
+        for index in shown:
+            row = self.rows[index]
             col, line = index % self.columns, index // self.columns
             x, y = GAP + col * TILE_W, top + GAP + line * TILE_H
             chosen = index in self.chosen
@@ -199,7 +268,7 @@ class PictureGrid(ttk.Frame):
                     canvas.create_image(x + THUMB // 2, y + THUMB // 2, image=photo)
             else:
                 canvas.create_rectangle(x, y, x + THUMB, y + THUMB, fill="#e4e4e4", outline="#cccccc")
-                canvas.create_text(x + THUMB // 2, y + THUMB // 2, text="..." if path not in self.thumbnails.made else "no picture",
+                canvas.create_text(x + THUMB // 2, y + THUMB // 2, text="loading..." if path not in self.thumbnails.made else "no picture",
                                    fill="#888888")
             badge = self.badges.get(path)
             if badge is not None:
@@ -213,8 +282,12 @@ class PictureGrid(ttk.Frame):
             label = name if len(name) <= 22 else name[:19] + "..."
             score = f"  {getattr(row, 'rank', 0.0):.2f}" if self.scores else ""
             canvas.create_text(x + THUMB // 2, y + THUMB + 4, anchor="n", text=label + score, width=THUMB)
-        lines = (len(self.rows) + self.columns - 1) // self.columns
-        canvas.configure(scrollregion=(0, 0, width, top + GAP + lines * TILE_H))
+        waiting = self.thumbnails.pending()
+        if waiting:         # said where the eye is, in the corner of the grid: on a cloud drive this is a download
+            note = f"Loading {waiting:,} thumbnail{'s' if waiting != 1 else ''}..."
+            y0 = canvas.canvasy(0) + 4
+            canvas.create_rectangle(width - 8 - 7 * len(note), y0, width - 4, y0 + 20, fill="#2b6cb0", outline="#2b6cb0")
+            canvas.create_text(width - 8, y0 + 10, anchor="e", text=note, fill="white", font=("TkDefaultFont", 9, "bold"))
 
     def _index_at(self, event) -> Optional[int]:
         x = self.canvas.canvasx(event.x) - GAP
