@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 FILE = "tray.json"
-COMMANDS = ("ping", "popup", "window", "update", "quit")
+COMMANDS = ("ping", "popup", "window", "update", "pause", "resume", "stop", "status", "quit")
 
 
 def address_file(root: Path | str) -> Path:

@@ -80,8 +80,8 @@ GROUPS: Tuple[Group, ...] = (
           "preview first, a record of every change, and an undo."),
     Group("tray", "The tray and the search key",
           "DugUp can stay in the tray (dugup tray), with the index open, so that one key brings up a small search "
-          "box anywhere: type a few letters of a name, Enter opens the file. The tray can start with the computer "
-          "(dugup tray --startup add)."),
+          "box anywhere: type a few letters of a name, Enter opens the file. While it runs, the index keeps itself "
+          "current. The tray can start with the computer (dugup tray --startup add)."),
     Group("speed", "How hard to work",
           "Building the index for the first time is heavy work, and that is temporary. Afterwards DugUp only "
           "reads what is new or changed. These settings say how much of the computer it may take while it works."),
@@ -216,6 +216,12 @@ def _entries() -> Tuple[Entry, ...]:
           "unless {ext} is named.",
           why="\"{caption} {taken}\" gives names like \"Two dogs on snowy porch 2024-01-13.jpg\". Put {original} in to keep "
               "the old name in sight.", everyday=True),
+        E("watch_every_minutes", "tray", "Update the index by itself, every (minutes)",
+          "While the tray runs, the folders are scanned again this often, and once when the tray starts; what changed "
+          "is read, then OCR, meaning and looks for what is new, gently (a quarter of the cores). 0 turns this off; "
+          "the tray's menu has \"Update now\" and \"Pause updates\" either way.",
+          why="Once an hour keeps the index current without the machine ever feeling busy. A run you start yourself "
+              "in the window goes at full speed and may stop the tray's run to get its turn."),
         E("hotkey", "tray", "The search key",
           "Written the usual way: Win+Shift+F, Ctrl+Alt+D, Ctrl+Shift+Space. Empty means no key; the box can still be "
           "brought up with the tray icon or the command dugup popup. Takes effect when the tray is next started.",

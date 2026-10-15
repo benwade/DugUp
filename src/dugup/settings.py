@@ -117,6 +117,7 @@ class Settings:
     rename_pattern: str = "{caption} {taken}"   # what a renamed picture is called; fields: {caption} {taken} {time} {camera} {folder} {original} {n} {ext}
     caption_gpu: bool = True               # write captions on a graphics card when the runtime can
     caption_source: str = "model"          # "model": the pinned captioning model; "server": a local model server (not built yet)
+    watch_every_minutes: float = 60.0      # while the tray runs, the index updates itself this often (and once at start); 0: never
     hotkey: str = "Win+Shift+F"            # the key that brings up the search box anywhere, while the tray runs; "" for none
     # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
     book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
@@ -205,6 +206,8 @@ def validate(s: Settings) -> List[str]:
         problems.append("looks_readers must not be negative")
     if s.caption_source not in ("model", "server"):
         problems.append('caption_source must be "model" or "server"')
+    if s.watch_every_minutes < 0:
+        problems.append("watch_every_minutes must be 0 (never) or more")
     if s.hotkey:
         from .hotkey import parse
         _, _, problem = parse(s.hotkey)

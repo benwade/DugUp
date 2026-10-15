@@ -1021,12 +1021,13 @@ class LocalService:
 
     def run_indexing(self, stop: Optional[StopSignal] = None, progress: Optional[Callable[[Progress], None]] = None,
                      roots: Optional[Sequence[str]] = None, on_settings_change: str = REFUSE,
-                     retry_failed: bool = False) -> "IndexReport | Failure":
+                     retry_failed: bool = False, readers: Optional[int] = None) -> "IndexReport | Failure":
         """Index now, in the calling thread, until done or stopped. Only one run at a time, across programs.
-        A run that finishes also compacts the index when enough of it is unused space."""
-        return self._tidy(self._run_indexing(stop, progress, roots, on_settings_change, retry_failed))
+        A run that finishes also compacts the index when enough of it is unused space. `readers`: files read
+        side by side (None: as the machine and the setting say; a gentle background run passes fewer)."""
+        return self._tidy(self._run_indexing(stop, progress, roots, on_settings_change, retry_failed, readers))
 
-    def _run_indexing(self, stop, progress, roots, on_settings_change, retry_failed) -> "IndexReport | Failure":
+    def _run_indexing(self, stop, progress, roots, on_settings_change, retry_failed, readers=None) -> "IndexReport | Failure":
         if not self._run_guard.acquire(blocking=False):
             return Failure(FailureReason.BUSY, "an indexing run is already going on in this program")
         try:
@@ -1041,7 +1042,7 @@ class LocalService:
                         if progress is not None:
                             progress(p)
 
-                    more = self._more_index_readers(self.index_readers() - 1)
+                    more = self._more_index_readers((readers if readers else self.index_readers()) - 1)
                     indexer = Indexer(store, self.source, self.extractor, self.settings, tell, self.clock,
                                       extra_excludes=(str(self.layout.root),), room=self.room,
                                       size_now=self.layout.index_bytes, case_insensitive=self.case_insensitive,

@@ -1263,3 +1263,45 @@ def test_near_duplicate_pictures_are_found_shown_with_keepers_and_the_extras_can
     app.trash_extras()
     assert [os.path.basename(p) for p in moved] == ["small.jpg"] and not (bench.docs / "small.jpg").exists()
     assert app.alike_report.sets == [] and "No near-duplicates" in app.alike_text.get()
+
+
+def test_when_the_tray_is_updating_the_window_offers_to_stop_it_and_runs_after(bench, monkeypatch):
+    """The lock is taken by another program; when that is the tray's own update, the window asks, tells the
+    tray to stop, and starts its run once the tray reports idle. Declining leaves everything as it is."""
+    from dugup import summons, window as w
+    bench.ready()
+    app = bench.app
+    tray = {"state": "updating", "stops": 0}
+
+    def fake_summon(root, command, timeout=3.0):
+        if command == "status":
+            return tray["state"]
+        if command == "stop":
+            tray["stops"] += 1
+            tray["state"] = "idle"
+            return "ok"
+        return None
+
+    monkeypatch.setattr(summons, "summon", fake_summon)
+    busy = Failure(FailureReason.BUSY, "another program is indexing into this data folder right now")
+    real_run = app.service.run_indexing
+    answers = [busy]
+
+    def run(*a, **k):          # the first call finds the lock taken; later ones run for real
+        return answers.pop(0) if answers else real_run(*a, **k)
+
+    monkeypatch.setattr(app.service, "run_indexing", run)
+    bench.answer = False
+    app.start("index")
+    bench.finish_run()
+    assert "tray is updating" in bench.asked[-1] and tray["stops"] == 0
+    assert "try again" in app.progress_text.get()
+    # now agree: the tray is told to stop and the run goes once the tray is idle
+    tray["state"] = "updating"
+    answers.append(busy)
+    bench.answer = True
+    app.start("index")
+    bench.finish_run()
+    assert tray["stops"] == 1 and not answers, "the tray was told to stop, and the run went for real after it"
+    assert "tray" not in app.progress_text.get()
+

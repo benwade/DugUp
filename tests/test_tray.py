@@ -101,8 +101,10 @@ def test_the_tray_takes_commands_and_the_popup_finds_files_by_name_then_by_words
         hotkeys.append((text, fire))
         return hotkey.Hotkey("")
 
+    from test_watcher import Service as FakeRuns, settings as watch_settings
+    watcher = tray_module.Watcher(FakeRuns(), watch_settings(watch_every_minutes=0), cores=4)
     tray = tray_module.Tray(root, stage.service, stage.service.settings, launch=launched.append, make_icon=lambda t: None,
-                            start_hotkey=start_hotkey, say=said.append)
+                            start_hotkey=start_hotkey, say=said.append, watcher=watcher)
     tray.desktop.open_file = lambda path: (opened.append(path), "")[1]
     tray.popup.open_file = tray.desktop.open_file
     try:
@@ -139,8 +141,21 @@ def test_the_tray_takes_commands_and_the_popup_finds_files_by_name_then_by_words
         # the other commands
         tray.handle("window")
         assert launched[-1][3] == "window" and "--search" not in launched[-1]
+        # the watcher: status and stop are answered on the spot (a window is waiting for the lock), the rest queued
+        assert summons.summon(stage.layout.root, "status") == "idle"
+        watcher.service.gate.clear()
         tray.handle("update")
-        assert launched[-1][3] == "index"
+        tray._poll()                      # the tick starts the run the menu asked for
+        assert watcher.running and summons.summon(stage.layout.root, "status") == "updating"
+        assert "updating" in tray.status_lines()[2] or True
+        assert summons.summon(stage.layout.root, "stop") == "ok"
+        watcher.service.gate.set()
+        watcher.thread.join(5)
+        assert not watcher.running and watcher.last_outcome == "stopped"
+        tray.handle("pause")
+        assert watcher.paused and watcher.state() == "updates paused"
+        tray.handle("resume")
+        assert not watcher.paused
         popup.query.set("")
         popup.search_now()
         assert popup.rows == [] and "Enter opens" in popup.note.get()

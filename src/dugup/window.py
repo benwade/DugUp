@@ -1324,6 +1324,34 @@ class App:
         self.tabs.select(1)
         self.worker.start()
 
+    def _tray_in_the_way(self, what: str) -> bool:
+        """The lock was taken by another program: when that is the tray's own update, offer to stop it and run
+        this one as soon as the lock is free. True when that is being done (or was declined and said)."""
+        from . import summons
+        root = self.service.layout.root
+        if summons.summon(root, "status") != "updating":
+            return False
+        if not self.ask("The tray is updating the index",
+                        "DugUp's tray is updating the index right now (its gentle background run).\n\n"
+                        "Stop that and run yours now? Nothing is lost: what the tray did not finish is picked "
+                        "up at its next update."):
+            self.progress_text.set("Waiting for the tray's update is fine too; try again when it is done.")
+            self.refresh_status("The tray is updating the index; this run was not started.")
+            return True
+        summons.summon(root, "stop")
+        self.progress_text.set("Asked the tray to stop; this run starts as soon as it has.")
+        self._retry_after_tray(what, 0)
+        return True
+
+    def _retry_after_tray(self, what: str, tries: int) -> None:
+        from . import summons
+        if self.closed:
+            return
+        if summons.summon(self.service.layout.root, "status") == "updating" and tries < 300:   # up to 30 s
+            self.root.after(100, lambda: self._retry_after_tray(what, tries + 1))
+            return
+        self.start(what)
+
     def stop_work(self) -> None:
         if self.busy():
             self.stop.set()
@@ -1470,6 +1498,8 @@ class App:
             self.refresh_status('Plain-words search is ready: type a sentence in the "In plain words" box at the top.')
             return
         if isinstance(report, Failure):
+            if report.reason is FailureReason.BUSY and self._tray_in_the_way(what):
+                return
             self.progress_text.set("It could not run.")
             self.refresh_status(f"Could not do that ({report.reason.value.replace('_', ' ')}): {report.detail}")
             return
