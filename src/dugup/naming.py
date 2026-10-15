@@ -348,6 +348,30 @@ def same_moment(when_ns: int, seconds: float) -> bool:
     return abs(when_ns - int(round(seconds * 1e9))) <= MOMENT_NS
 
 
+def same_as_indexed(identity: Optional[Tuple], record) -> str:
+    """"" when a file's identity on disk (seen_identity) is the file the index describes in `record` (size,
+    time to the microsecond, and the file id when the index kept one), else why not. What the index holds
+    about a file (its sketch, its text) is evidence about that file only."""
+    if identity is None:
+        return "it is not there now"
+    if identity[0] != record.size:
+        return "it changed since it was indexed (the size differs)"
+    if not same_moment(identity[1], record.modified):
+        return "it changed since it was indexed (the time differs)"
+    kept = getattr(record, "file_id", None) or ""
+    ident = identity[3] if len(identity) > 3 else 0
+    if kept and ident:
+        dev_text, _, ino_text = kept.rpartition(":")
+        try:
+            dev0, ino0 = (int(dev_text) if dev_text else 0), int(ino_text)
+        except ValueError:
+            return ""
+        dev = identity[2] if len(identity) > 3 else 0
+        if ino0 != ident or (dev0 and dev and dev0 != dev):
+            return "it is not the file that was indexed (the file id differs)"
+    return ""
+
+
 def same_file(path: str, seen: Tuple, tolerance_ns: int = 0) -> str:
     """"" when the file at `path` is the file `seen` at the preview (seen_identity), else why not. Size and
     time must match (exactly, or within `tolerance_ns` for a record written at a coarser precision); the

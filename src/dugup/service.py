@@ -784,24 +784,22 @@ class LocalService:
 
     def _trash_alike_extras(self, sets, journal, mover=None):
         from . import cleanup
-        from .naming import identity_of, same_file, same_moment
+        from .naming import same_as_indexed, same_file
         from .records import RecordError
         done = cleanup.Removal()
 
         def unchanged(member) -> str:
-            """The member is the file it was when the set was made: size, exact time, device and file id as
-            seen then, or the content where the filesystem gives no id (a member made without a look at the
-            disk falls back to the index's size and time)."""
+            """The member is the file it was when the set was made, and that was the file the index described:
+            a member found stale when the set was made (changed since it was indexed) stays so; otherwise size,
+            exact time, device and file id as seen then, or the content where the filesystem gives no id, and
+            once more against the index, so the sketch that justified the set is about the file that goes."""
             record = member.record
-            if member.identity is not None:
-                return same_file(record.path, member.identity)
-            try:
-                now = identity_of(record.path)
-            except OSError:
+            if member.stale:
+                return member.stale
+            if member.identity is None:
                 return "it is not there now"
-            if now[0] != record.size or not same_moment(now[1], record.modified):
-                return "it changed since the preview (size or time)"
-            return ""
+            why = same_file(record.path, member.identity)
+            return why or same_as_indexed(member.identity, record)
 
         for same in sets:
             keeper = same.keep.record

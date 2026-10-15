@@ -234,3 +234,26 @@ def test_a_rename_never_replaces_a_file_that_is_there(tmp_path):
         naming.rename_no_replace(str(tmp_path / "missing.txt"), str(tmp_path / "d.txt"))
     assert not (tmp_path / "d.txt").exists(), "a failed rename leaves no placeholder behind"
 
+
+
+def test_a_file_on_disk_is_matched_against_what_the_index_holds(tmp_path):
+    """same_as_indexed: the index's size, time (to the microsecond) and file id, when it kept one, must all
+    describe the file at the path now, or what the index holds about it is no evidence."""
+    from dataclasses import replace
+    from dugup.naming import same_as_indexed, seen_identity
+    from dugup.shapes import FileRecord
+    path = tmp_path / "p.jpg"
+    path.write_bytes(b"1234")
+    os.utime(path, ns=(1_700_000_000_123_456_789,) * 2)
+    seen = seen_identity(str(path))
+    st = os.stat(path)
+    record = FileRecord(str(path), 4, st.st_mtime, file_id=f"{st.st_dev}:{st.st_ino}" if st.st_ino else None)
+    assert same_as_indexed(seen, record) == ""
+    assert same_as_indexed(seen, replace(record, file_id=None)) == "", "an index without ids goes by size and time"
+    assert same_as_indexed(None, record) == "it is not there now"
+    assert "size differs" in same_as_indexed(seen, replace(record, size=5))
+    assert "time differs" in same_as_indexed(seen, replace(record, modified=st.st_mtime + 0.01))
+    if st.st_ino:
+        assert "file id differs" in same_as_indexed(seen, replace(record, file_id=f"{st.st_dev}:{st.st_ino + 1}"))
+        assert same_as_indexed(seen, replace(record, file_id=f"0:{st.st_ino}")) == "", "a device the index did not keep is not held against it"
+    assert same_as_indexed(seen, replace(record, file_id="odd")) == "", "an id in a form not understood is not held against it"

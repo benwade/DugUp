@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .shapes import FileRecord
@@ -31,11 +31,17 @@ class Member:
     protected: bool = False
     why: str = ""              # for the keeper: which rule chose it
     identity: Optional[Tuple] = None   # naming.seen_identity when the set was made; None: the file was not there
+    stale: str = ""            # why the index's sketch is not evidence about the file at the path now ("" when it is)
 
     def __post_init__(self) -> None:
-        if self.identity is None:
-            from .naming import seen_identity
+        """Look at the file once, and check that it is the file the index described: the sketch the set was
+        built from belongs to the indexed file, so a file that changed since (edited, replaced) is stale, shown
+        but never proposed, until a scan renews it. The identity kept here is what the act checks against."""
+        from .naming import same_as_indexed, seen_identity
+        if self.identity is None and not self.stale:      # a copy of a stale member is never looked at again
             self.identity = seen_identity(self.record.path)
+        if not self.stale:
+            self.stale = same_as_indexed(self.identity, self.record)
 
 
 @dataclass
@@ -45,6 +51,7 @@ class AlikeSet:
     aside: List[Member] = field(default_factory=list)     # protected: shown, never weighed
     left: List[Member] = field(default_factory=list)      # in the chain, but below the threshold against this keeper
     threshold: float = THRESHOLD
+    stale: List[Member] = field(default_factory=list)     # changed since indexed: the sketch is not about them; never weighed
 
     @property
     def bytes_extra(self) -> int:
@@ -148,29 +155,40 @@ def choose_keeper(records: Sequence[FileRecord], preferred: Sequence[str], fold:
     return keeper, why or ("the shorter path" if len(pool) > 1 else "the only choice")
 
 
-def _around(keep: Member, open_ones: Sequence[FileRecord], shielded: Sequence[FileRecord],
+def _around(keep: Member, open_ones: Sequence[Member], shielded: Sequence[Member],
             close: Callable[[int, int], float], threshold: float) -> AlikeSet:
     """A set measured against its keeper. A chain (A like B, B like C) can hold a picture that is not within
-    the threshold of the keeper at all; such a one is `left`, shown but never proposed to go."""
+    the threshold of the keeper at all; such a one is `left`, shown but never proposed to go. Members come in
+    as they were first seen (their identity is kept, never looked up again here): one that is stale, or a
+    keeper that is, stays so, so choosing another keeper cannot restore trust in a file that changed."""
     keeper = keep.record
-    near, left = [], []
-    for r in open_ones:
-        member = Member(r, close(r.row_id, keeper.row_id))
-        (near if member.closeness >= threshold else left).append(member)
+
+    def measured(member: Member, protected: bool = False) -> Member:
+        return replace(member, closeness=close(member.record.row_id, keeper.row_id), protected=protected, why="")
+
+    near, left, stale = [], [], []
+    for m in open_ones:
+        member = measured(m)
+        (stale if member.stale else near if member.closeness >= threshold else left).append(member)
+    if keep.stale:                      # a changed keeper is no evidence for its extras: shown, nothing proposed
+        stale.extend(near)
+        near = []
     near.sort(key=lambda m: -m.closeness)
     left.sort(key=lambda m: -m.closeness)
-    aside = [Member(r, close(r.row_id, keeper.row_id), True) for r in shielded]
-    return AlikeSet(keep, near, aside, left, threshold)
+    stale.sort(key=lambda m: -m.closeness)
+    aside = [measured(m, True) for m in shielded]
+    return AlikeSet(keep, near, aside, left, threshold, stale)
 
 
 def rekeep(store, same: AlikeSet, keeper_row_id: int) -> AlikeSet:
     """The same set with another of its open members as keeper, every closeness measured afresh against it
-    and the split at the threshold made again."""
+    and the split at the threshold made again. The members are the ones first seen: a stale member stays
+    stale, and a stale member cannot be chosen (the set comes back as it was)."""
     from . import sketches
     from .embedding import LOOKS_DIMS
-    members = [same.keep] + same.extra + same.left
+    members = [same.keep] + same.extra + same.left + same.stale
     chosen = next((m for m in members if m.record.row_id == keeper_row_id), None)
-    if chosen is None:
+    if chosen is None or chosen.stale:
         return same
     raw = store.looks_of([m.record.row_id for m in members] + [m.record.row_id for m in same.aside])
     vectors = {i: sketches.dequantize(v[1], LOOKS_DIMS, [v[0]])[0] for i, v in raw.items()}
@@ -179,8 +197,8 @@ def rekeep(store, same: AlikeSet, keeper_row_id: int) -> AlikeSet:
         va, vb = vectors.get(a), vectors.get(b)
         return min(1.0, float(va @ vb)) if va is not None and vb is not None else 0.0
 
-    return _around(Member(chosen.record, 1.0, False, "chosen by hand"), [m.record for m in members if m is not chosen],
-                   [m.record for m in same.aside], close, same.threshold)
+    return _around(replace(chosen, closeness=1.0, protected=False, why="chosen by hand"),
+                   [m for m in members if m is not chosen], list(same.aside), close, same.threshold)
 
 
 def report(store, model: str, threshold: float = THRESHOLD, protected: Sequence[str] = (), preferred: Sequence[str] = (),
@@ -227,12 +245,14 @@ def report(store, model: str, threshold: float = THRESHOLD, protected: Sequence[
         def shielded(r: FileRecord) -> bool:
             return any(fold(r.path).startswith(fold(f.rstrip("/\\")) + sep) for f in protected for sep in ("/", "\\"))
 
-        open_ones = [r for r in members if not shielded(r)]
-        if len(open_ones) < 2:
+        open_ones = [Member(r, 0.0) for r in members if not shielded(r)]
+        fresh = [m for m in open_ones if not m.stale]      # the sketch is evidence only about the file as indexed
+        if len(fresh) < 2:
             continue                  # as the file cleanup does: protected copies are shown aside, never weighed
-        keeper, why = choose_keeper(open_ones, preferred, fold)
-        made = _around(Member(keeper, 1.0, False, why), [r for r in open_ones if r is not keeper],
-                       [r for r in members if shielded(r) and r is not keeper], close, threshold)
+        keeper, why = choose_keeper([m.record for m in fresh], preferred, fold)
+        keep = next(m for m in fresh if m.record is keeper)
+        made = _around(replace(keep, closeness=1.0, why=why), [m for m in open_ones if m is not keep],
+                       [Member(r, 0.0, True) for r in members if shielded(r)], close, threshold)
         if not made.extra:
             continue
         found.sets.append(made)

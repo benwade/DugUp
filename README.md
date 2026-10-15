@@ -371,6 +371,13 @@ shown before anything moves: 0.97 and above is a copy or a re-save; two shots a 
 too, and whether they are duplicates is yours to say. Screenshots and scanned pages all look much alike to
 the picture model, so a folder of those may cluster; look before trashing.
 
+A sketch is evidence about the picture as it was indexed, so a picture that changed since (edited, or replaced
+by another file at the same name) is shown as **changed** and never proposed, as keeper or as extra, until the
+next index update sketches it again; choosing another keeper weighs the pictures as they were first seen and
+cannot bring a changed one back in. At the moment of trashing, each extra and its keeper are checked once more
+against what the preview saw (size, time, file id) and against the index; anything that differs is left,
+with the reason.
+
 ## To trash, from the window
 
 A file that was gone at the last scan stays in the results for 30 days, flagged (a drive may be merely

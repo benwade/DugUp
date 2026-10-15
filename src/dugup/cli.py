@@ -1831,6 +1831,8 @@ def cmd_alike_duplicates(args, service, out, environ, stop, ask: Callable[[str],
             safe_write(f"      kept aside (protected)  {item.record.path}   ({item.closeness:.3f})", out)
         for item in same.left:
             safe_write(f"      near, but below the threshold against the keeper: {item.record.path}   ({item.closeness:.3f})", out)
+        for item in same.stale:
+            safe_write(f"      changed since it was indexed, not weighed until a scan renews it: {item.record.path}   ({item.stale})", out)
     if len(found.sets) > args.rows:
         safe_write(f"... and {len(found.sets) - args.rows:,} more set(s) (--rows N shows more)", out)
     if not args.remove or not found.sets:

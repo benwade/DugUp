@@ -814,6 +814,10 @@ class App:
                 row = _row_from_record(item.record, item.closeness)
                 rows.append(row)
                 badges[row.path] = (f"left {number}", "#8a8a8a")     # near its chain, but not near enough to this keeper
+            for item in same.stale:
+                row = _row_from_record(item.record, item.closeness)
+                rows.append(row)
+                badges[row.path] = (f"changed {number}", "#8a6d00")  # changed since it was indexed: shown, never proposed
         self.like_of = None
         self.last = None
         self.rows = []
@@ -845,7 +849,8 @@ class App:
                     self.alike_report.sets[at] = made
                     self._show_alike()
                     held = f"; {len(made.left)} fall below the threshold against it and are left" if made.left else ""
-                    self.say(f"Keeping {row.name} instead: {len(made.extra)} extra(s){held}.")
+                    changed = f"; {len(made.stale)} changed since indexed and are not weighed" if made.stale else ""
+                    self.say(f"Keeping {row.name} instead: {len(made.extra)} extra(s){held}{changed}.")
                     return
         self.say("Select an extra (red) or a left (grey) picture to make it the keeper of its set.")
 

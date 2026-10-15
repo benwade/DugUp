@@ -481,8 +481,13 @@ def test_a_chain_of_likeness_is_measured_against_the_keeper_and_removal_checks_t
         os.replace(swap, root / "b.jpg")
         done = svc.trash_alike_extras([again], journal=lines.append, mover=mover)
         assert moved == [] and all("file id differs" in why for _, why in done.skipped)
-        # back to a keeper that is the file it was: the set is made afresh with the file as it stands now
+        # choosing a keeper again does not restore trust: the members keep the identity first seen, and the
+        # replaced b is still not that file. Only a fresh report, made from the index, looks again.
         again = svc.rekeep_alike(again, again.keep.record.row_id)
+        done = svc.trash_alike_extras([again], journal=lines.append, mover=mover)
+        assert moved == [] and all("file id differs" in why for _, why in done.skipped)
+        again = svc.rekeep_alike(svc.alike_pictures(0.97).sets[0], same.extra[0].record.row_id)
+        assert os.path.basename(again.keep.record.path) == "b.jpg" and sorted(os.path.basename(m.record.path) for m in again.extra) == ["a.jpg", "c.jpg"]
         # an extra replaced by a different file of the same size, time preserved, is left; the other goes
         swap.write_bytes((root / "c.jpg").read_bytes())
         os.utime(swap, ns=(os.stat(root / "c.jpg").st_mtime_ns,) * 2)
@@ -493,3 +498,117 @@ def test_a_chain_of_likeness_is_measured_against_the_keeper_and_removal_checks_t
         assert [(os.path.basename(p), why) for p, why in done.skipped] == [("c.jpg", "it is not the file that was previewed (the file id differs)")]
         assert any(l.startswith("keeping\t") for l in lines) and any(l.startswith("trashed\t") for l in lines) and any(l.startswith("left\t") for l in lines)
 
+
+
+def test_a_picture_that_changed_since_it_was_indexed_is_never_proposed_and_choosing_a_keeper_cannot_restore_trust(tmp_path, monkeypatch):
+    """The sketch in the index is evidence about the file as it was indexed. A picture edited after that (a
+    different size) is shown as changed, never proposed, whether it would be an extra or the keeper; one
+    replaced after the preview by a same-sized file with the time preserved is told by its file id, and
+    choosing another keeper keeps what was first seen rather than looking again, so the replacement never
+    reaches the mover; a replaced file cannot be chosen as keeper at all."""
+    pytest.importorskip("PIL")
+    from PIL import Image
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.shapes import FileKind, FileRecord, FileState
+    from dugup import sketches
+    root = tmp_path / "root"
+    root.mkdir()
+    layout = DataLayout(tmp_path / "data").ensure()
+    base = np.zeros(embedding.LOOKS_DIMS, dtype=np.float32)
+    base[0] = 1.0
+    other = np.zeros(embedding.LOOKS_DIMS, dtype=np.float32)
+    other[1] = 1.0
+
+    def at(degrees):
+        rad = np.deg2rad(degrees)
+        return np.cos(rad) * base + np.sin(rad) * other
+
+    def index(svc, shots):
+        rows = []
+        for name, (v, when) in shots.items():
+            Image.new("RGB", (40, 30), (10, 10, 200)).save(root / name, quality=95)
+            os.utime(root / name, (when, when))
+            st = os.stat(root / name)
+            record = FileRecord(str(root / name), st.st_size, when, kind=FileKind.IMAGE, state=FileState.DONE,
+                                file_id=f"{st.st_dev}:{st.st_ino}" if st.st_ino else None)
+            svc.store.upsert_file(record)
+            data, scales = sketches.quantize(v[None, :])
+            rows.append((record.row_id, scales[0], data, sketches.fingerprint_of(v), ""))
+        svc.store.save_looks(looks.model_name(), rows)
+
+    moved = []
+    mover = lambda path: (moved.append(path), os.remove(path), "")[2]
+    shots = {"a.jpg": (at(0), 10.0), "b.jpg": (at(5), 20.0), "c.jpg": (at(10), 30.0)}
+    with LocalService(layout) as svc:
+        index(svc, shots)
+        # 1. an extra edited after indexing, before the report is opened: a different size is enough
+        with open(root / "c.jpg", "ab") as handle:
+            handle.write(b"x" * 34)
+        found = svc.alike_pictures(0.97)
+        same = found.sets[0]
+        assert os.path.basename(same.keep.record.path) == "a.jpg"
+        assert [os.path.basename(m.record.path) for m in same.extra] == ["b.jpg"]
+        assert [(os.path.basename(m.record.path), m.stale) for m in same.stale] == [("c.jpg", "it changed since it was indexed (the size differs)")]
+        done = svc.trash_alike_extras([same], journal=[].append, mover=mover)
+        assert [os.path.basename(p) for p in moved] == ["b.jpg"] and done.skipped == [], "the changed one was never proposed"
+        # a member made stale cannot be handed to the mover by a set built by hand around it either
+        moved.clear()
+        from dugup import alikesets
+        from dataclasses import replace
+        forced = replace(same, extra=same.stale, stale=[])
+        done = svc.trash_alike_extras([forced], journal=[].append, mover=mover)
+        assert moved == [] and done.skipped and "changed since it was indexed" in done.skipped[0][1]
+        # 2. the would-be keeper edited after indexing: the set is built around another, and if a set still
+        # names the changed file as keeper nothing of it goes
+        index(svc, shots)
+        with open(root / "a.jpg", "ab") as handle:
+            handle.write(b"x" * 34)
+        found = svc.alike_pictures(0.97)
+        same = found.sets[0]
+        assert os.path.basename(same.keep.record.path) == "b.jpg" and [os.path.basename(m.record.path) for m in same.extra] == ["c.jpg"]
+        assert [os.path.basename(m.record.path) for m in same.stale] == ["a.jpg"]
+        stale_keeper = replace(same, keep=same.stale[0], extra=same.extra + [same.keep], stale=[])
+        done = svc.trash_alike_extras([stale_keeper], journal=[].append, mover=mover)
+        assert moved == [] and len(done.skipped) == 2 and all("keeper" in why and "changed since it was indexed" in why for _, why in done.skipped)
+        # 3. replaced after the preview by a different file of the same size with the time preserved, then
+        # another keeper chosen: the replacement never reaches the mover, and cannot itself be chosen
+        index(svc, shots)
+        found = svc.alike_pictures(0.97)
+        same = found.sets[0]
+        assert os.path.basename(same.keep.record.path) == "a.jpg" and sorted(os.path.basename(m.record.path) for m in same.extra) == ["b.jpg", "c.jpg"]
+
+        def swap_in(name):
+            swap = root / "swap.jpg"
+            swap.write_bytes((root / name).read_bytes())
+            os.utime(swap, ns=(os.stat(root / name).st_mtime_ns,) * 2)
+            os.replace(swap, root / name)
+
+        swap_in("c.jpg")
+        c_row = next(m.record.row_id for m in same.extra if m.record.path.endswith("c.jpg"))
+        b_row = next(m.record.row_id for m in same.extra if m.record.path.endswith("b.jpg"))
+        again = svc.rekeep_alike(same, b_row)
+        assert os.path.basename(again.keep.record.path) == "b.jpg"
+        done = svc.trash_alike_extras([again], journal=[].append, mover=mover)
+        assert [os.path.basename(p) for p in moved] == ["a.jpg"]
+        assert [(os.path.basename(p), why) for p, why in done.skipped] == [("c.jpg", "it is not the file that was previewed (the file id differs)")]
+        chosen = svc.rekeep_alike(again, c_row)       # the replacement chosen as keeper: it carries the identity first seen
+        assert chosen.keep.identity == next(m.identity for m in same.extra if m.record.row_id == c_row)
+        moved.clear()
+        done = svc.trash_alike_extras([chosen], journal=[].append, mover=mover)
+        assert moved == [] and all("keeper" in why and "file id differs" in why for _, why in done.skipped)
+        # 4. the replaced keeper chosen by hand: the set was previewed with a.jpg; a is replaced; choosing a
+        # again looks at nothing afresh, and the act refuses the whole set
+        moved.clear()
+        index(svc, shots)
+        same = svc.alike_pictures(0.97).sets[0]
+        again = svc.rekeep_alike(same, b_row)
+        swap_in("a.jpg")
+        a_row = same.keep.record.row_id
+        back = svc.rekeep_alike(again, a_row)
+        assert os.path.basename(back.keep.record.path) == "a.jpg"
+        done = svc.trash_alike_extras([back], journal=[].append, mover=mover)
+        assert moved == [] and len(done.skipped) == 2 and all("keeper" in why and "file id differs" in why for _, why in done.skipped)
+        # a fresh report sees the replacement against the index's file id and shows it as changed
+        fresh = svc.alike_pictures(0.97).sets[0]
+        assert [(os.path.basename(m.record.path), m.stale) for m in fresh.stale] == [("a.jpg", "it is not the file that was indexed (the file id differs)")]
