@@ -24,8 +24,10 @@ WIDTH = 720
 
 class Popup:
     def __init__(self, root: tk.Misc, service, folder_first: Callable[[], str], open_file: Callable[[str], str],
-                 hand_to_window: Callable[[str], None], say: Optional[Callable[[str], None]] = None) -> None:
+                 hand_to_window: Callable[[str], None], say: Optional[Callable[[str], None]] = None,
+                 present_only: Callable[[], bool] = lambda: False) -> None:
         self.service, self.folder_first, self.open_file, self.hand_to_window = service, folder_first, open_file, hand_to_window
+        self.present_only = present_only
         self.say = say or (lambda text: None)
         self.rows: List[SearchRow] = []
         self.pending: Optional[str] = None
@@ -106,11 +108,12 @@ class Popup:
         found: List[SearchRow] = []
         seen = set()
         folder = self.folder_first() or ""
+        here = self.present_only()          # the window's "Only files that are here now" tick, remembered
         steps = []
         if folder:
-            steps.append(SearchFilters(folder=folder, where=WHERE_NAME))
-        steps.append(SearchFilters(where=WHERE_NAME))
-        steps.append(SearchFilters(where=WHERE_ANYWHERE))
+            steps.append(SearchFilters(folder=folder, where=WHERE_NAME, present_only=here))
+        steps.append(SearchFilters(where=WHERE_NAME, present_only=here))
+        steps.append(SearchFilters(where=WHERE_ANYWHERE, present_only=here))
         note = ""
         for filters in steps:
             if len(found) >= ROWS:

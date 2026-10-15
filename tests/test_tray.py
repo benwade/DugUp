@@ -144,6 +144,17 @@ def test_the_tray_takes_commands_and_the_popup_finds_files_by_name_then_by_words
         popup.query.set("")
         popup.search_now()
         assert popup.rows == [] and "Enter opens" in popup.note.get()
+        # the window's "here now" tick reaches the popup through the same memory
+        remember.write(stage.layout.root, folder="")
+        gone = stage.docs / "beta.txt"
+        stage.service.store.set_missing(stage.service.store.get_file(str(gone)).row_id, 1.0)
+        popup.query.set("needle")
+        popup.search_now()
+        assert "beta.txt" in [r.name for r in popup.rows]
+        remember.write(stage.layout.root, present_only=True)
+        popup.search_now()
+        assert "beta.txt" not in [r.name for r in popup.rows] and popup.rows
+        remember.write(stage.layout.root, present_only=False)
         popup.query.set("zzzz-nothing")
         popup.search_now()
         assert popup.rows == [] and "Nothing found" in popup.note.get()

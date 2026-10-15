@@ -62,7 +62,8 @@ class Tray:
         self.closed = False
         from .popup import Popup
         root.withdraw()
-        self.popup = Popup(root, service, self.folder_first, self.desktop.open_file, self.open_window, self.say)
+        self.popup = Popup(root, service, self.folder_first, self.desktop.open_file, self.open_window, self.say,
+                           present_only=lambda: bool(remember.read(self.layout.root).get("present_only", False)))
         self.hotkey = start_hotkey(settings.hotkey, lambda: self.events.put("popup")) if settings.hotkey else hotkeys.Hotkey("no hotkey set")
         self.listener = summons.Listener(self.layout.root, self._summoned)
         self.listener.start()
