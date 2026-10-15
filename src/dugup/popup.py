@@ -58,7 +58,7 @@ class Popup:
         ttk.Label(foot, textvariable=self.note, foreground="#666666").pack(side="left", fill="x", expand=True)
         self.window_button = ttk.Button(foot, text="Open the full window", command=self._to_window)
         self.window_button.pack(side="right")
-        ttk.Button(foot, text="?", width=2, command=self.about).pack(side="right", padx=(0, 4))
+        ttk.Button(foot, text="About", command=self.about).pack(side="right", padx=(0, 6))
         for widget in (top, self.entry, self.list):
             widget.bind("<Escape>", lambda event: self.hide())
             widget.bind("<Return>", self._enter)

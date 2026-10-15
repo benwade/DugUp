@@ -225,3 +225,16 @@ def test_a_background_update_with_the_real_service_leaves_the_search_box_working
         tray.quit()
         root.destroy()
 
+
+def test_the_window_is_started_with_a_console_free_python_on_windows(tmp_path, monkeypatch):
+    import sys
+    quiet = tmp_path / "pythonw.exe"
+    monkeypatch.setattr(tray_module.os, "name", "nt")
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
+    assert tray_module.quiet_python() == str(tmp_path / "python.exe"), "no pythonw beside it: the plain one"
+    quiet.write_bytes(b"")
+    assert tray_module.quiet_python() == str(quiet)
+    class Layout:
+        root = tmp_path
+    assert tray_module.dugup_command(Layout, "window")[0] == str(quiet)
+

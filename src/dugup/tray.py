@@ -43,9 +43,20 @@ def _detached(args: Sequence[str]) -> None:
     subprocess.Popen(list(args), **quiet)    # type: ignore[arg-type]
 
 
+def quiet_python() -> str:
+    """The interpreter to start a window with. On Windows, pythonw.exe beside the running one: a venv's
+    python.exe is a launcher that starts the real Python as a child, which, started without a console, is
+    given a new console window of its own; pythonw.exe never shows one."""
+    if os.name == "nt":
+        quiet = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        if os.path.exists(quiet):
+            return quiet
+    return sys.executable
+
+
 def dugup_command(layout, *words: str) -> List[str]:
     """`dugup <words>` the way this very installation runs it, with the data folder passed along."""
-    return [sys.executable, "-m", "dugup", *words, "--data-dir", str(layout.root)]
+    return [quiet_python(), "-m", "dugup", *words, "--data-dir", str(layout.root)]
 
 
 class Tray:
