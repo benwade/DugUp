@@ -98,10 +98,11 @@ class Thumbnails:
 
 
 class PictureGrid(ttk.Frame):
-    """The tiles. `rows` are SearchRow-like objects (path, name, rank); a click selects (on_select(index)),
-    a double click opens (on_open(index))."""
+    """The tiles. `rows` are SearchRow-like objects (path, name, rank). A click selects one tile; Ctrl-click
+    adds or removes one; Shift-click takes the range from the last plain click. Every change is reported as
+    on_select(indexes), the selected tiles in order; a double click opens (on_open(index))."""
 
-    def __init__(self, parent, thumbnails: Thumbnails, on_select: Callable[[int], None],
+    def __init__(self, parent, thumbnails: Thumbnails, on_select: Callable[[List[int]], None],
                  on_open: Callable[[int], None]) -> None:
         super().__init__(parent)
         self.thumbnails = thumbnails
@@ -118,7 +119,8 @@ class PictureGrid(ttk.Frame):
         self.rows: List[object] = []
         self.scores: bool = False
         self.photos: Dict[int, object] = {}          # tile index -> PhotoImage (kept, or tkinter drops it)
-        self.selected: Optional[int] = None
+        self.chosen: List[int] = []                  # the selected tiles, in the order they were chosen
+        self.anchor: Optional[int] = None            # where a Shift-click range starts: the last plain click
         self.columns = 1
         self.heading = ""
         self.badges: Dict[str, Tuple[str, str]] = {}      # path -> (text, colour) drawn over the tile's corner
@@ -127,18 +129,30 @@ class PictureGrid(ttk.Frame):
         self.rows, self.scores, self.heading = list(rows), scores, heading
         self.badges = dict(badges or {})
         self.photos.clear()
-        self.selected = None
+        self.chosen, self.anchor = [], None
         self._reflow()
 
     def add(self, rows: Sequence[object]) -> None:
         self.rows.extend(rows)
         self._reflow()
 
+    @property
+    def selected(self) -> Optional[int]:
+        """The first selected tile, or None."""
+        return self.chosen[0] if self.chosen else None
+
     def select(self, index: Optional[int]) -> None:
-        self.selected = index
+        """Select one tile (or none) and scroll to it."""
+        self.select_many([index] if index is not None else [])
+
+    def select_many(self, indexes: Sequence[int]) -> None:
+        """Make exactly these tiles the selection (from the list beside, say); the first is scrolled into view."""
+        self.chosen = [i for i in indexes if 0 <= i < len(self.rows)]
+        if self.chosen:
+            self.anchor = self.chosen[0]
         self._reflow()
-        if index is not None and self.rows:
-            row_at = index // max(1, self.columns)
+        if self.chosen and self.rows:
+            row_at = self.chosen[0] // max(1, self.columns)
             total_rows = (len(self.rows) + self.columns - 1) // max(1, self.columns)
             self.canvas.yview_moveto(row_at / max(1, total_rows))
 
@@ -166,7 +180,8 @@ class PictureGrid(ttk.Frame):
         for index, row in enumerate(self.rows):
             col, line = index % self.columns, index // self.columns
             x, y = GAP + col * TILE_W, top + GAP + line * TILE_H
-            if index == self.selected:
+            chosen = index in self.chosen
+            if chosen:
                 canvas.create_rectangle(x - 3, y - 3, x + THUMB + 3, y + THUMB + 30, outline="#2b6cb0", width=3)
             path = getattr(row, "path", "")
             image = self.thumbnails.ask(path)
@@ -191,6 +206,9 @@ class PictureGrid(ttk.Frame):
                 text, colour = badge
                 canvas.create_rectangle(x, y, x + 8 + 7 * len(text), y + 18, fill=colour, outline=colour)
                 canvas.create_text(x + 4, y + 9, anchor="w", text=text, fill="white", font=("TkDefaultFont", 8, "bold"))
+            if chosen:      # a tick in the top right corner: selected, unmistakably
+                canvas.create_oval(x + THUMB - 22, y + 2, x + THUMB - 2, y + 22, fill="#2b6cb0", outline="white", width=2)
+                canvas.create_text(x + THUMB - 12, y + 12, text="\u2713", fill="white", font=("TkDefaultFont", 11, "bold"))
             name = getattr(row, "name", os.path.basename(path))
             label = name if len(name) <= 22 else name[:19] + "..."
             score = f"  {getattr(row, 'rank', 0.0):.2f}" if self.scores else ""
@@ -211,10 +229,23 @@ class PictureGrid(ttk.Frame):
 
     def _click(self, event) -> None:
         index = self._index_at(event)
-        if index is not None:
-            self.selected = index
-            self._reflow()
-            self.on_select(index)
+        if index is None:
+            return
+        control, shift = bool(event.state & 0x0004), bool(event.state & 0x0001)
+        if control:
+            if index in self.chosen:
+                self.chosen.remove(index)
+            else:
+                self.chosen.append(index)
+            if self.anchor is None:
+                self.anchor = index
+        elif shift and self.anchor is not None:
+            low, high = sorted((self.anchor, index))
+            self.chosen = list(range(low, high + 1))
+        else:
+            self.chosen, self.anchor = [index], index
+        self._reflow()
+        self.on_select(list(self.chosen))
 
     def _double(self, event) -> None:
         index = self._index_at(event)

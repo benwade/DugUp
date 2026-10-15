@@ -291,8 +291,13 @@ the picture model, so a folder of those may cluster; look before trashing.
 
 ## To trash, from the window
 
-Beside Open and Show in folder, **To trash** moves the selected file(s) (Ctrl-click or Shift-click for
-several) to the trash the way the cleanup does: the Windows shell with undo (a file on a cloud drive lands in
+Selecting works the usual way, in the list and in the Pictures grid alike: a click chooses one, Ctrl-click
+adds or removes one, Shift-click takes a range, Ctrl+A takes every row; selected tiles carry a tick. The
+details pane shows the first of them; Open, Edit and Show in folder act on that one only (thirty viewers by
+accident is worse than one on purpose), while To trash, the Rename tab and "Keep this one instead" take them
+all.
+
+Beside Open and Show in folder, **To trash** moves the selected file(s) to the trash the way the cleanup does: the Windows shell with undo (a file on a cloud drive lands in
 that drive's trash), `send2trash` elsewhere. It asks first, naming the files; files in protected folders are
 left alone and said so; a record of what went is kept under the data folder (`removed\`); the index marks
 them gone and the rows leave the results. Nothing is deleted outright. With "Pictures like this" this is the

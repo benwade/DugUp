@@ -993,6 +993,28 @@ def test_pictures_by_looks_fill_the_pictures_tab_and_like_this_shows_a_picture_s
     app.tree.selection_set("0")
     app.show_selected()
     assert app.grid.selected == 0
+    # several at once: Ctrl-click on a tile adds it, and the list follows; Shift-click takes a range
+    class Click:
+        def __init__(self, index, state):
+            from dugup import picturegrid as pg
+            col, line = index % app.grid.columns, index // app.grid.columns
+            top = 24 if app.grid.heading else 0
+            self.x, self.y, self.state = pg.GAP + col * pg.TILE_W + 10, top + pg.GAP + line * pg.TILE_H + 10, state
+    app.grid._click(Click(2, 0x0004))
+    bench.root.update()
+    assert app.grid.chosen == [0, 2] and sorted(app.tree.selection()) == ["0", "2"]
+    app.grid._click(Click(2, 0x0004))
+    bench.root.update()
+    assert app.grid.chosen == [0] and app.tree.selection() == ("0",), "Ctrl-click again takes it off"
+    app.grid._click(Click(2, 0x0001))
+    bench.root.update()
+    assert app.grid.chosen == [0, 1, 2] and len(app.tree.selection()) == 3, "Shift-click: the range from the last plain click"
+    assert len(app.selected_paths()) == 3 and app.selected().name == "red.png", "actions get all three; the details show the first"
+    app.tree.selection_set(["1", "2"])        # and the list leads the grid the other way
+    app.show_selected()
+    assert sorted(app.grid.chosen) == [1, 2]
+    app.tree.selection_set("0")
+    app.show_selected()
     app.like_selected()
     bench.root.update()
     assert [r.name for r in app.rows] == ["red2.png", "blue.png"], "its likes, closest first, itself left out"

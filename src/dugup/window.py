@@ -299,7 +299,7 @@ class App:
         self.order_text = tk.StringVar(value=self.order.describe())
         self._readonly(bar, self.order_text, row=0, column=1, sticky="ew", padx=4)
         ttk.Button(bar, text="Best match first", command=self.reset_order).grid(row=0, column=2)
-        self.tree = ttk.Treeview(left, columns=[key for key, _, _ in COLUMNS], show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(left, columns=[key for key, _, _ in COLUMNS], show="headings", selectmode="extended")
         for key, title, width in COLUMNS:
             self.tree.heading(key, text=title, command=lambda key=key: self.sort_by(key))
             self.tree.column(key, width=width, anchor="e" if key in ("size", "matches") else "w", stretch=key in ("name", "folder"))
@@ -310,6 +310,7 @@ class App:
         scroll.grid(row=1, column=1, sticky="ns")
         across.grid(row=2, column=0, sticky="ew")
         self.tree.bind("<<TreeviewSelect>>", lambda event: self.show_selected())
+        self.tree.bind("<Control-a>", lambda event: (self.tree.selection_set(self.tree.get_children()), "break")[1])
         self.tree.bind("<Double-1>", lambda event: self.open_selected())
         self.tree.bind("<Return>", lambda event: self.open_selected())
         self.tree.bind("<Button-3>", self._menu)
@@ -785,19 +786,21 @@ class App:
         """The paths of the pictures among the current results (what the Pictures tab shows)."""
         return [r.path for r in self.rows if r.kind == FileKind.IMAGE.value]
 
-    def _grid_selected(self, index: int) -> None:
-        """A tile was clicked: select the same row in the list."""
-        path = self.grid.rows[index].path if index < len(self.grid.rows) else None
-        self.grid.selected = index
-        for at, row in enumerate(self.rows):
-            if row.path == path:
-                self.tree.selection_set(str(at))
-                self.tree.focus(str(at))
-                self.tree.see(str(at))
-                break
+    def _grid_selected(self, indexes) -> None:
+        """Tiles were chosen: select the same rows in the list (the first one is shown in the details)."""
+        if isinstance(indexes, int):
+            indexes = [indexes]
+        paths = [self.grid.rows[i].path for i in indexes if i < len(self.grid.rows)]
+        wanted = {path: n for n, path in enumerate(paths)}
+        items = sorted((str(at) for at, row in enumerate(self.rows) if row.path in wanted), key=lambda s: wanted[self.rows[int(s)].path])
+        self.tree.selection_set(items)
+        if items:
+            self.tree.focus(items[0])
+            self.tree.see(items[0])
+        self.show_selected()
 
     def _grid_opened(self, index: int) -> None:
-        self._grid_selected(index)
+        self._grid_selected([index])
         self.open_selected()
 
     def _warmed(self, answer) -> None:
@@ -883,11 +886,10 @@ class App:
         self.like_button.configure(state="normal" if row.kind == FileKind.IMAGE.value else "disabled")
         if self.tabs.select() == str(self.renamer):
             self.renamer.follow_selection()
-        for at, tile in enumerate(self.grid.rows):
-            if tile.path == row.path:
-                if self.grid.selected != at:
-                    self.grid.select(at)
-                break
+        chosen = set(self.selected_paths())        # the grid shows the same choice as the list
+        tiles = [at for at, tile in enumerate(self.grid.rows) if tile.path in chosen]
+        if set(tiles) != set(self.grid.chosen):
+            self.grid.select_many(tiles)
         self.path_text.set(row.path)
         self.facts_text.set(f"{row.kind}, {format_bytes(row.size)}, modified {format_date(row.modified)}")
         record = self.service.store.get_file(row.path)
@@ -907,7 +909,11 @@ class App:
         if row.also_at:
             hits.insert("end", "The same file is also at:\n" + "".join(f"    {place}\n" for place in row.also_at) + "\n")
         shown = self._insert_places(row, row.evidence)
-        if not shown:
+        if not shown and not row.evidence:
+            hits.insert("end", "Found by what it shows, not by its words, so there is no passage to show here."
+                        if (self.like_of is not None or (self.last and self.last[1] and self.last[1].where == WHERE_LOOKS))
+                        else "No passage to show for this result.")
+        elif not shown:
             hits.insert("end", "The passages are no longer in the index (the file was read again). Search again.")
         elif row.matches > shown:
             hits.insert("end", f"These are the {shown} best of {row.matches:,} places in this file.")
