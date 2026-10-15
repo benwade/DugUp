@@ -42,6 +42,7 @@ Windows (PowerShell):
     pip install -r requirements-dev.txt
     pip install -e .
     pip install -r requirements-ocr.txt     (optional: to read pictures and scanned pages)
+    pip install pystray                     (optional: the icon for "dugup tray")
 
 Linux:
 
@@ -199,6 +200,25 @@ folder; see `src/dugup/settings.py` for the names and defaults. The ones most li
     max_index_mb = 0           # spending limit for the index; 0 means none (dugup space --limit sets it)
     min_free_mb = 200          # a run stops when the drive has less than this free
     figure_fraction = 0.1      # a picture this share of a typed page gets the page read by OCR too; 0: off
+
+## From the tray: a key that searches anywhere
+
+    dugup tray
+
+keeps DugUp running with the index open, and **Ctrl+Alt+Space** then brings up a small search box over
+whatever you are doing: type a few letters, the files appear as you type, Enter opens the one at the top
+(arrows pick another), Esc closes. Names are searched first, in the folder the main window was last set to
+and then everywhere, and words in the files after that when names found too little. Ctrl+Enter hands what
+you typed to the full window for the heavier searches.
+
+The key is the setting `hotkey` (written the usual way: `Win+Shift+F`, `Ctrl+Alt+D`); the tray says at
+start when another program already has it. On Windows the key is registered with the system and nothing
+is installed for it. On Linux the desktop's own keyboard settings can bind a key to `dugup popup`, which
+reaches the running tray; that command works on Windows too. With `pystray` installed there is an icon in
+the tray (Search, Open the window, Update the index now, Quit); without it the key and `dugup popup` work
+all the same, and `dugup tray --quit` ends it. `dugup tray --startup add` makes it start when you log in
+(a small entry in the Startup folder, or an autostart file on Linux); `--startup remove` takes that back.
+A second `dugup tray` does not start a second one: it brings up the search box of the one running.
 
 ## Searching by meaning
 

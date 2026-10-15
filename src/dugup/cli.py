@@ -279,7 +279,13 @@ def build_parser() -> argparse.ArgumentParser:
     space.add_argument("--limit", type=int, default=None, metavar="MB",
                        help="stop indexing and OCR when the index is larger than this many megabytes (0: no limit)")
 
-    sub.add_parser("window", parents=[common], help="open the search window")
+    window = sub.add_parser("window", parents=[common], help="open the search window")
+    window.add_argument("--search", metavar="WORDS", help="search for these words as soon as the window opens")
+    tray = sub.add_parser("tray", parents=[common], help="stay in the tray, with a key that brings up a search box anywhere")
+    tray.add_argument("--startup", choices=("add", "remove"), help="make the tray start when you log in, or stop that")
+    tray.add_argument("--quit", action="store_true", help="end the tray that is running")
+    tray.add_argument("--no-icon", action="store_true", help="no icon in the tray (the key and `dugup popup` still work)")
+    sub.add_parser("popup", parents=[common], help="bring up the running tray's search box")
 
     config = sub.add_parser("config", help="show and change settings (each with a line of guidance)")
     config_sub = config.add_subparsers(dest="config_command", required=True)
@@ -1468,9 +1474,72 @@ def cmd_window(args, env, out, environ) -> int:
     except BaseException:
         root.destroy()
         raise
-    App(root, service)
+    app = App(root, service)
+    if getattr(args, "search", None):
+        app.words.set(args.search)
+        root.after(0, app.search)
     root.mainloop()
     return 0
+
+
+def cmd_tray(args, env, out, environ) -> int:
+    from . import summons, tray as tray_module
+    layout = _layout(args, environ, create=True)
+    if args.startup == "add":
+        path = tray_module.install_startup(layout)
+        safe_write(f"The tray will start when you log in (the entry is {path}). Start it now with: dugup tray", out)
+        return 0
+    if args.startup == "remove":
+        path = tray_module.remove_startup()
+        safe_write("The tray will no longer start when you log in." if path else "There was no start-at-login entry.", out)
+        return 0
+    if args.quit:
+        answer = summons.summon(layout.root, "quit")
+        safe_write("The tray was told to quit." if answer else "No tray is running.", out)
+        return 0
+    if summons.summon(layout.root, "ping") == "pong":
+        summons.summon(layout.root, "popup")
+        safe_write("DugUp is already in the tray; its search box was brought up.", out)
+        return 0
+    try:
+        import tkinter
+    except ImportError:
+        safe_write("The tray needs tkinter, which this Python does not have.", out)
+        return 1
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError as exc:
+        safe_write(f"A window cannot be opened here ({(str(exc).splitlines() or ['no reason'])[0]}), so there is no tray.", out)
+        return 1
+    try:
+        service = _service(args, environ, out, create=True)
+    except BaseException:
+        root.destroy()
+        raise
+    tray = tray_module.Tray(root, service, service.settings, make_icon=(lambda t: None) if args.no_icon else None,
+                            say=lambda text: safe_write(text, out))
+    for line in tray.status_lines():
+        safe_write(line, out)
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        tray.quit()
+        try:
+            root.destroy()
+        except Exception:
+            pass
+    return 0
+
+
+def cmd_popup(args, env, out, environ) -> int:
+    from . import summons
+    layout = _layout(args, environ, create=False)
+    if summons.summon(layout.root, "popup"):
+        return 0
+    safe_write("No tray is running, so there is no search box to bring up. Start it with: dugup tray", out)
+    return 1
 
 
 def cmd_meaning(args, env, out, environ, stop: Optional[threading.Event] = None, install_signals: bool = True) -> int:
@@ -2017,7 +2086,7 @@ def _remove_duplicates(found, service, args, out, environ, stop, install_signals
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "rename": cmd_rename, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
+            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "rename": cmd_rename, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "tray": cmd_tray, "popup": cmd_popup, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

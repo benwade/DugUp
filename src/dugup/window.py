@@ -31,6 +31,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from .cli import (format_bytes, format_date, format_seconds, megabytes, print_compacted, print_meaning_report, print_ocr_report, print_report,
                   progress_text)
 from .desktop import Desktop
+from . import remember
 from .waitwindow import bring_to_front
 from .indexer import KEEP, REFUSE, REREAD, Progress
 from .shapes import (MAX_SORT_KEYS, WHERE_ANYWHERE, WHERE_BOTH, WHERE_LOOKS, WHERE_MEANING, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind,
@@ -235,6 +236,7 @@ class App:
         form.columnconfigure(1, weight=1)
         self.words = tk.StringVar()
         self.folder = tk.StringVar(value=ALL_FOLDERS)
+        self.folder.trace_add("write", lambda *_: remember.write(self.service.layout.root, folder="" if self.folder.get() == ALL_FOLDERS else self.folder.get()))
         self.where = tk.StringVar(value=WHERE_LABELS[0][0])
         self.after_day, self.before_day = tk.StringVar(), tk.StringVar()
         self.smallest, self.largest = tk.StringVar(), tk.StringVar()
@@ -1063,6 +1065,11 @@ class App:
 
     def refresh_folders(self) -> None:
         self.folder_box.configure(values=[ALL_FOLDERS] + [r.path for r in self.service.list_roots()])
+        if self.folder.get() == ALL_FOLDERS and not getattr(self, "folder_restored", False):
+            self.folder_restored = True          # the folder the window was last set to, when it is still indexed
+            kept = str(remember.read(self.service.layout.root).get("folder") or "")
+            if kept and kept in self.folder_box.cget("values"):
+                self.folder.set(kept)
         if self.folder.get() not in self.folder_box.cget("values"):
             self.folder.set(ALL_FOLDERS)
 

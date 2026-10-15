@@ -78,6 +78,10 @@ GROUPS: Tuple[Group, ...] = (
           "Many pictures have names that say nothing (IMG_4471.jpg). DugUp can rename them from what they show: a "
           "captioning model writes a sentence about each, and a pattern you set turns it into a name. Always a "
           "preview first, a record of every change, and an undo."),
+    Group("tray", "The tray and the search key",
+          "DugUp can stay in the tray (dugup tray), with the index open, so that one key brings up a small search "
+          "box anywhere: type a few letters of a name, Enter opens the file. The tray can start with the computer "
+          "(dugup tray --startup add)."),
     Group("speed", "How hard to work",
           "Building the index for the first time is heavy work, and that is temporary. Afterwards DugUp only "
           "reads what is new or changed. These settings say how much of the computer it may take while it works."),
@@ -212,6 +216,10 @@ def _entries() -> Tuple[Entry, ...]:
           "unless {ext} is named.",
           why="\"{caption} {taken}\" gives names like \"Two dogs on snowy porch 2024-01-13.jpg\". Put {original} in to keep "
               "the old name in sight.", everyday=True),
+        E("hotkey", "tray", "The search key",
+          "Written the usual way: Ctrl+Alt+Space, Win+Shift+F, Ctrl+Alt+D. Empty means no key; the box can still be "
+          "brought up with the tray icon or the command dugup popup. Takes effect when the tray is next started.",
+          why="Ctrl+Alt+Space is free on most machines. If another program has the key, the tray says so when it starts."),
         E("caption_source", "naming", "Where captions come from",
           "\"model\": the pinned captioning model, fetched on first use. \"server\": a local model server of your own "
           "(not built yet; the seam is here for it).",

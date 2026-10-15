@@ -117,6 +117,7 @@ class Settings:
     rename_pattern: str = "{caption} {taken}"   # what a renamed picture is called; fields: {caption} {taken} {time} {camera} {folder} {original} {n} {ext}
     caption_gpu: bool = True               # write captions on a graphics card when the runtime can
     caption_source: str = "model"          # "model": the pinned captioning model; "server": a local model server (not built yet)
+    hotkey: str = "Ctrl+Alt+Space"         # the key that brings up the search box anywhere, while the tray runs; "" for none
     # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
     book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
     book_folder_level: str = "names"       # what a folder with such a name starts at; "" makes no guess about books
@@ -204,6 +205,11 @@ def validate(s: Settings) -> List[str]:
         problems.append("looks_readers must not be negative")
     if s.caption_source not in ("model", "server"):
         problems.append('caption_source must be "model" or "server"')
+    if s.hotkey:
+        from .hotkey import parse
+        _, _, problem = parse(s.hotkey)
+        if problem:
+            problems.append(f"hotkey: {problem}")
     if s.ocr_fast_readers < 0 or s.ocr_reader_threads < 1 or s.ocr_reader_memory_mb < 0:
         problems.append("ocr_fast_readers and ocr_reader_memory_mb must not be negative, and ocr_reader_threads must be at least 1")
     if s.missing_retention_days < 0:
