@@ -392,24 +392,28 @@ class App:
         index = ttk.Frame(right, padding=4)
         index.columnconfigure(0, weight=1)
         index.rowconfigure(2, weight=1)
-        buttons = ttk.Frame(index)
+        buttons = ttk.Frame(index)              # two rows: the buttons fall off a narrow window in one
         buttons.grid(row=0, column=0, sticky="ew")
+        upper, lower = ttk.Frame(buttons), ttk.Frame(buttons)
+        upper.pack(fill="x")
+        lower.pack(fill="x", pady=(3, 0))
         self.run_buttons = []
-        for text, command in (("Add folder...", self.add_folder), ("Choose what to index...", self.choose_what),
-                              ("Update the index", lambda: self.start("index")),
-                              ("Read pictures and scans (OCR)", lambda: self.start("ocr")),
-                              ("Read a folder now, fast...", self.read_folder_now)):
-            button = ttk.Button(buttons, text=text, command=command)
+        for where, text, command in ((upper, "Add folder...", self.add_folder), (upper, "Choose what to index...", self.choose_what),
+                                     (upper, "Update the index", lambda: self.start("index")),
+                                     (lower, "Read pictures and scans (OCR)", lambda: self.start("ocr")),
+                                     (lower, "Read a folder now, fast...", self.read_folder_now)):
+            button = ttk.Button(where, text=text, command=command)
             button.pack(side="left", padx=2)
             self.run_buttons.append(button)
-        self.setup_button = ttk.Button(buttons, text="Set up plain-words search...", command=self.set_up_plain_words)
+        self.setup_button = ttk.Button(lower, text="Set up plain-words search...", command=self.set_up_plain_words)
         if self.service.intent is None:          # only when a model was asked for (intent_reader) and none is there
             self.setup_button.pack(side="left", padx=2)
             self.run_buttons.append(self.setup_button)
-        self.stop_button = ttk.Button(buttons, text="Stop", command=self.stop_work, state="disabled")
+        self.stop_button = ttk.Button(upper, text="Stop", command=self.stop_work, state="disabled")
         self.stop_button.pack(side="left", padx=2)
-        ttk.Button(buttons, text="Refresh", command=self.refresh_status).pack(side="left", padx=2)
-        ttk.Button(buttons, text="Settings...", command=self.open_setup).pack(side="left", padx=2)
+        ttk.Button(upper, text="Refresh", command=self.refresh_status).pack(side="left", padx=2)
+        ttk.Button(lower, text="Settings...", command=self.open_setup).pack(side="left", padx=2)
+        self._menu_bar()
         self.progress_text = tk.StringVar(value="Nothing is running.")
         self._readonly(index, self.progress_text, row=1, column=0, sticky="ew", pady=3)
         self.status = tk.Text(index, wrap="word", state="disabled", font="TkDefaultFont")
@@ -425,6 +429,42 @@ class App:
         self.message = tk.StringVar(value='Type words and press Enter. Put "a phrase" in double quotes to find it as typed.')
         self._readonly(root, self.message, row=2, column=0, sticky="ew", padx=6, pady=4)
         self.words_entry.focus_set()
+
+    def _menu_bar(self) -> None:
+        """The usual menus; everything in them is also a button somewhere, so nothing is reachable only here."""
+        tk = self.tk
+        bar = tk.Menu(self.root, tearoff=False)
+        file = tk.Menu(bar, tearoff=False)
+        file.add_command(label="Add folder...", command=self.add_folder)
+        file.add_command(label="Choose what to index...", command=self.choose_what)
+        file.add_separator()
+        file.add_command(label="Settings...", command=self.open_setup)
+        file.add_separator()
+        file.add_command(label="Quit", command=self.close)
+        bar.add_cascade(label="File", menu=file)
+        index = tk.Menu(bar, tearoff=False)
+        index.add_command(label="Update the index", command=lambda: self.start("index"))
+        index.add_command(label="Read pictures and scans (OCR)", command=lambda: self.start("ocr"))
+        index.add_command(label="Read a folder now, fast...", command=self.read_folder_now)
+        index.add_separator()
+        index.add_command(label="Stop", command=self.stop_work)
+        index.add_command(label="Refresh the status", command=self.refresh_status)
+        bar.add_cascade(label="Index", menu=index)
+        pictures = tk.Menu(bar, tearoff=False)
+        pictures.add_command(label="Pictures like the selected one", command=self.like_selected)
+        pictures.add_command(label="Find near-duplicates", command=self.find_alike)
+        bar.add_cascade(label="Pictures", menu=pictures)
+        help_menu = tk.Menu(bar, tearoff=False)
+        help_menu.add_command(label="About DugUp", command=self._about)
+        bar.add_cascade(label="Help", menu=help_menu)
+        self.root.config(menu=bar)
+        self.menu_bar = bar
+
+    def _about(self) -> None:
+        from . import __version__
+        self.tell("About DugUp", f"DugUp {__version__}\n\nLocal file search: by the words in files, the words in pictures "
+                                 f"and scans, what a passage means, and what a picture looks like. Everything stays on this "
+                                 f"machine.\n\nData folder: {self.service.layout.root}\n\nhttps://github.com/benwade/DugUp")
 
     def _place_sash(self, event=None) -> None:
         """Once, when the window first has its real size: give the results the wider side. After that the

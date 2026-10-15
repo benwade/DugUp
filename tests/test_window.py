@@ -1305,3 +1305,18 @@ def test_when_the_tray_is_updating_the_window_offers_to_stop_it_and_runs_after(b
     assert tray["stops"] == 1 and not answers, "the tray was told to stop, and the run went for real after it"
     assert "tray" not in app.progress_text.get()
 
+
+def test_the_menu_bar_carries_the_buttons_and_about(bench):
+    """Everything in the menus is a button somewhere too; the Index tab's buttons sit in two rows."""
+    app = bench.app
+    bar = app.menu_bar
+    assert [bar.entrycget(i, "label") for i in range(bar.index("end") + 1)] == ["File", "Index", "Pictures", "Help"]
+    file_menu = bench.root.nametowidget(bar.entrycget(0, "menu"))
+    labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) == "command"]
+    assert labels == ["Add folder...", "Choose what to index...", "Settings...", "Quit"]
+    help_menu = bench.root.nametowidget(bar.entrycget(3, "menu"))
+    help_menu.invoke(0)
+    assert bench.told and bench.told[-1][0] == "About DugUp" and "0.1.0" in bench.told[-1][1]
+    rows = {str(b.master) for b in app.run_buttons}
+    assert len(rows) == 2, "the run buttons are spread over two rows"
+

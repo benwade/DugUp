@@ -224,7 +224,7 @@ folder; see `src/dugup/settings.py` for the names and defaults. The ones most li
 ## Settings
 
 There are many, on purpose: the machine this runs on may be a 32-core workstation or a laptop with 8 GB,
-and the settings are how it is made to fit. **Settings...** in the window shows every one of them, by the
+and the settings are how it is made to fit. **Settings...** (in the File menu, and on the Index tab) shows every one of them, by the
 part of the program it belongs to, the everyday ones first and then the ones that command the most of the
 machine, each with a line of help and a tag (heavy, medium, light) saying what turning it up costs. A box at
 the top finds a setting by any word in its name or its help ("readers", "battery", "card"); a setting that
