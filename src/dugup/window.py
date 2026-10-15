@@ -1028,7 +1028,12 @@ class App:
         item = self.tree.identify_row(event.y)
         if item:
             self.tree.selection_set(item)
-            self.menu.tk_popup(event.x_root, event.y_root)
+            try:
+                self.menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                # the menu takes a grab on the mouse; on Windows that grab can outlive the menu when another
+                # program (the viewer being opened) takes the focus, leaving this window deaf to every click
+                self.menu.grab_release()
 
     # -- the index
 
