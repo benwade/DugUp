@@ -472,15 +472,24 @@ def test_a_chain_of_likeness_is_measured_against_the_keeper_and_removal_checks_t
         os.utime(root / "b.jpg", (99.0, 99.0))
         lines = []
         done = svc.trash_alike_extras([again], journal=lines.append, mover=mover)
-        assert moved == [] and len(done.skipped) == 2 and all("keeper" in why and "changed" in why for _, why in done.skipped)
-        # an extra replaced by a different file of the same size (a later time) is left; the other goes
+        assert moved == [] and len(done.skipped) == 2 and all("keeper" in why and "time differs" in why for _, why in done.skipped)
+        # a keeper replaced by a different file of the same size with its time preserved is told by its file id
         os.utime(root / "b.jpg", (20.0, 20.0))
-        other = root / "other.jpg"
-        other.write_bytes((root / "c.jpg").read_bytes())
-        os.replace(other, root / "c.jpg")
+        swap = root / "swap.jpg"
+        swap.write_bytes((root / "b.jpg").read_bytes())
+        os.utime(swap, ns=(os.stat(root / "b.jpg").st_mtime_ns,) * 2)
+        os.replace(swap, root / "b.jpg")
+        done = svc.trash_alike_extras([again], journal=lines.append, mover=mover)
+        assert moved == [] and all("file id differs" in why for _, why in done.skipped)
+        # back to a keeper that is the file it was: the set is made afresh with the file as it stands now
+        again = svc.rekeep_alike(again, again.keep.record.row_id)
+        # an extra replaced by a different file of the same size, time preserved, is left; the other goes
+        swap.write_bytes((root / "c.jpg").read_bytes())
+        os.utime(swap, ns=(os.stat(root / "c.jpg").st_mtime_ns,) * 2)
+        os.replace(swap, root / "c.jpg")
         lines.clear()
         done = svc.trash_alike_extras([again], journal=lines.append, mover=mover)
         assert [os.path.basename(p) for p in moved] == ["a.jpg"]
-        assert [(os.path.basename(p), why) for p, why in done.skipped] == [("c.jpg", "it changed since the preview (size or time)")]
+        assert [(os.path.basename(p), why) for p, why in done.skipped] == [("c.jpg", "it is not the file that was previewed (the file id differs)")]
         assert any(l.startswith("keeping\t") for l in lines) and any(l.startswith("trashed\t") for l in lines) and any(l.startswith("left\t") for l in lines)
 

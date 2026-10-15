@@ -1693,10 +1693,17 @@ def cmd_rename(args, env, out, environ, stop: Optional[threading.Event] = None, 
                 safe_write(f"The record could not be read ({type(exc).__name__}: {exc}).", out)
                 return 1
             done = service.undo_names(text)
-            safe_write(f"Put back {len(done.renamed):,} name(s); left {len(done.skipped):,}.", out)
+            safe_write(f"Put back {len(done.renamed):,} name(s); left {len(done.skipped):,}"
+                       + (" (stopped)" if done.stopped else "") + (f". The record of this undo is in {done.record}." if done.record else "."), out)
+            if done.record_problem:
+                safe_write(f"Stopped: the record could not be written ({done.record_problem}). What was put back:", out)
+                for new_path, old_path in done.renamed:
+                    safe_write(f"  {new_path} -> {old_path}", out)
+            if done.index_problems:
+                safe_write(f"{len(done.index_problems)} put-back file(s) could not be updated in the index; the next index update sees the names.", out)
             for path, why in done.skipped[:20]:
                 safe_write(f"  left: {path}: {why}", out)
-            return 0
+            return 0 if not done.record_problem else 1
         if not args.folder:
             safe_write("Name a folder to preview, or --undo RECORD.", out)
             return 1

@@ -30,6 +30,12 @@ class Member:
     closeness: float           # to the keeper (1.0 for the keeper itself)
     protected: bool = False
     why: str = ""              # for the keeper: which rule chose it
+    identity: Optional[Tuple] = None   # naming.seen_identity when the set was made; None: the file was not there
+
+    def __post_init__(self) -> None:
+        if self.identity is None:
+            from .naming import seen_identity
+            self.identity = seen_identity(self.record.path)
 
 
 @dataclass

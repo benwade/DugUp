@@ -84,7 +84,7 @@ def test_apply_renames_what_is_unchanged_records_each_step_and_undo_puts_the_nam
         lines = []
         done = naming.apply(changes, store, journal=lines.append)
         assert [os.path.basename(o) for o, _ in done.renamed] == ["a.jpg"], done.skipped
-        assert sorted(why for _, why in done.skipped) == ["a file with the new name is there now", "it changed since the preview", "it is not there now"]
+        assert sorted(why for _, why in done.skipped) == ["a file with the new name is there now", "it is not the file that was previewed (the size differs)", "it is not there now"]
         assert (folder / "Picture 0.jpg").exists() and not (folder / "a.jpg").exists()
         assert store.get_file(str(folder / "Picture 0.jpg")) is not None and store.get_file(str(folder / "a.jpg")) is None, "the index followed"
         assert lines[0].startswith("renaming\t") and lines[1].startswith("renamed\t"), "intent first, then the outcome"
@@ -92,7 +92,7 @@ def test_apply_renames_what_is_unchanged_records_each_step_and_undo_puts_the_nam
         pairs = naming.read_record("pattern\t{caption}\n" + "\n".join(lines))
         assert len(pairs) == 1 and pairs[0][:2] == (str(folder / "a.jpg"), str(folder / "Picture 0.jpg"))
         st = os.stat(folder / "Picture 0.jpg")
-        assert pairs[0][2:] == (1, st.st_mtime_ns, st.st_ino), "the file's identity (size, exact time, file id) is in the record"
+        assert pairs[0][2:] == (1, st.st_mtime_ns, st.st_ino, 0), "the file's identity (size, exact time, file id; no tolerance) is in the record"
         # a file put in the renamed one's place is not the one that was renamed: undo leaves it alone, even
         # when it has the same size and the same time (a different file id)
         kept = (folder / "Picture 0.jpg").read_bytes()
@@ -104,17 +104,31 @@ def test_apply_renames_what_is_unchanged_records_each_step_and_undo_puts_the_nam
         assert (folder / "Picture 0.jpg").read_bytes() == b"y", "and the replacement was not moved anywhere"
         # the original back in place (same bytes; a new file id, so the record's id is recorded afresh)
         (folder / "Picture 0.jpg").write_bytes(kept)
-        pairs = [(pairs[0][0], pairs[0][1], 1, None, None)]       # a record from before identities were kept
+        pairs = [(pairs[0][0], pairs[0][1], 1, None, None, 0)]    # a record from before identities were kept
         back = naming.undo(pairs, store)
         assert back.renamed == [(str(folder / "Picture 0.jpg"), str(folder / "a.jpg"))] and (folder / "a.jpg").exists()
         assert store.get_file(str(folder / "a.jpg")) is not None
         assert naming.undo(pairs, store).skipped[0][1] == "it is not at its new name now"
         # an intent with no outcome (a crash between the lines) is still a pair: undo looks at the disk
         crashed = naming.read_record("renaming\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1000000000\t77")
-        assert crashed == [("/p/x.jpg", "/p/Y.jpg", 5, 1000000000, 77)]
-        assert naming.read_record("renamed\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1.5") == [("/p/x.jpg", "/p/Y.jpg", 5, 1500000000, None)], \
-            "an older record, with seconds, still reads"
+        assert crashed == [("/p/x.jpg", "/p/Y.jpg", 5, 1000000000, 77, 0)]
+        assert naming.read_record("renamed\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1.500") == [("/p/x.jpg", "/p/Y.jpg", 5, 1500000000, None, 1000000)], \
+            "an older record, with seconds to three places, reads with a tolerance of a millisecond"
         assert naming.read_record("renaming\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1.0\nleft\t/p/x.jpg\trefused") == []
+        # Solace's acceptance test: a different file of the same size put in a previewed file's place, with its
+        # time preserved to the nanosecond, is not renamed (the file id differs)
+        (folder / "f.jpg").write_bytes(b"F")
+        stf = os.stat(folder / "f.jpg")
+        f = FileRecord(str(folder / "f.jpg"), stf.st_size, stf.st_mtime, kind=FileKind.IMAGE, state=FileState.DONE)
+        store.upsert_file(f)
+        plan_f = naming.plan([f], "{caption}", {f.path: "picture f"}, clock)
+        assert plan_f[0].identity is not None and plan_f[0].identity[3] == stf.st_ino
+        swap = folder / "swap.jpg"
+        swap.write_bytes(b"G")
+        os.utime(swap, ns=(stf.st_mtime_ns, stf.st_mtime_ns))
+        os.replace(swap, folder / "f.jpg")
+        held = naming.apply(plan_f, store)
+        assert held.renamed == [] and "file id differs" in held.skipped[0][1] and (folder / "f.jpg").read_bytes() == b"G"
         # the protections as they stand at apply time, whatever the preview assumed
         (folder / "e.jpg").write_bytes(b"x")
         st = os.stat(folder / "e.jpg")

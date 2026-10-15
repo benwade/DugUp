@@ -355,6 +355,12 @@ class RenameTab(ttk.Frame):
         done = self.host.service.undo_names(text)
         self.undo_button.configure(state="disabled")
         message = f"Put back {len(done.renamed):,} name(s); left {len(done.skipped):,}."
+        if done.record_problem:
+            message = (f"Put back {len(done.renamed):,} name(s) and then stopped: the record could not be written "
+                       f"({done.record_problem}). What was put back:\n\n"
+                       + ("\n".join(f"{os.path.basename(n)} -> {os.path.basename(o)}" for n, o in done.renamed) or "(nothing)"))
+        if done.index_problems:
+            message += f"\n\n{len(done.index_problems)} put-back file(s) could not be updated in the index; the next index update sees the names."
         if done.skipped:
             message += "\n\n" + "\n".join(f"{os.path.basename(p)}: {why}" for p, why in done.skipped[:10])
         self.status.set(message.split("\n")[0])

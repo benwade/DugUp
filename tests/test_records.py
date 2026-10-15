@@ -11,7 +11,7 @@ import pytest
 
 from dugup import cleanup, naming, records
 from dugup.records import Journal, RecordError
-from dugup.shapes import FileKind, FileRecord, FileState
+from dugup.shapes import Failure, FileKind, FileRecord, FileState
 from dugup.store import SqliteStore
 
 
@@ -167,3 +167,95 @@ def test_exact_copy_cleanup_has_its_intent_on_the_record_before_the_mover_runs(t
     seen.clear()
     done = cleanup.remove_extras(found, mover, lambda p: None, journal=journal_over(handle))
     assert seen == [] and done.moved == [] and done.stopped and done.record_problem
+
+
+def test_undo_through_the_service_honours_current_protections_and_writes_its_own_record(tmp_path, pictures):
+    """Solace's acceptance test: rename, protect the folder, undo through the public entry point: the undo is
+    refused, and the undo has a record of its own under renames/ (the original record stays intact)."""
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.settings import Settings
+    folder, store, recs = pictures
+    store.close()
+    layout = DataLayout(tmp_path / "data").ensure()
+    with LocalService(layout, Settings()) as svc:
+        for r in recs:
+            svc.store.upsert_file(r)
+        plan = naming.Plan("{caption}", naming.plan(recs[:1], "{caption}", {recs[0].path: "apple pie"}, lambda m: "d"))
+        done = svc.apply_names(plan)                  # no journal given: the service opens a record of its own
+        assert [os.path.basename(o) for o, _ in done.renamed] == ["a.jpg"] and done.record and os.path.exists(done.record)
+        text = open(done.record, encoding="utf-8-sig").read()
+        assert text.startswith("pattern\t") and "renaming\t" in text and "renamed\t" in text
+        assert not isinstance(svc.apply_settings({"cleanup_protect": str(folder)}), Failure)
+        back = svc.undo_names(text)
+        assert back.renamed == [] and back.skipped[0][1] == "it is in a protected folder now"
+        assert back.record and os.path.exists(back.record) and os.path.basename(back.record).startswith("undo ")
+        assert open(done.record, encoding="utf-8-sig").read() == text, "the original record is left as it was"
+        assert (folder / "Apple pie.jpg").exists()
+        svc.apply_settings({"cleanup_protect": ""})
+        back = svc.undo_names(text)
+        assert [os.path.basename(n) for n, _ in back.renamed] == ["Apple pie.jpg"] and (folder / "a.jpg").exists()
+        assert "renaming\t" in open(back.record, encoding="utf-8-sig").read()
+
+
+def test_undo_through_the_service_stops_on_a_failed_intent_and_after_a_failed_outcome(tmp_path, pictures, monkeypatch):
+    from dugup import records
+    from dugup.datadir import DataLayout
+    from dugup.service import LocalService
+    from dugup.settings import Settings
+    folder, store, recs = pictures
+    store.close()
+    layout = DataLayout(tmp_path / "data").ensure()
+    with LocalService(layout, Settings()) as svc:
+        for r in recs:
+            svc.store.upsert_file(r)
+        plan = naming.Plan("{caption}", naming.plan(recs[:2], "{caption}", {recs[0].path: "apple pie", recs[1].path: "blue boat"}, lambda m: "d"))
+        done = svc.apply_names(plan)
+        assert len(done.renamed) == 2
+        text = open(done.record, encoding="utf-8-sig").read()
+        # the service's own record cannot be synced: no file is put back
+        real_sync = records.sync
+        monkeypatch.setattr(records, "sync", lambda handle: (_ for _ in ()).throw(OSError(5, "sync refused")))
+        back = svc.undo_names(text)
+        assert back.renamed == [] and back.stopped and "sync refused" in back.record_problem
+        assert (folder / "Apple pie.jpg").exists() and (folder / "Blue boat.jpg").exists()
+        monkeypatch.setattr(records, "sync", real_sync)
+        # the first outcome fails: one put back and reported, the second untouched
+        calls = {"n": 0}
+        real_open = records.open_new
+
+        def opening(folder_, stem):
+            path, handle = real_open(folder_, stem)
+            if stem == "undo":
+                class Breaking:
+                    def __init__(self, inner):
+                        self.inner = inner
+                    def write(self, text_):
+                        calls["n"] += 1
+                        if calls["n"] == 2:           # intent 1 ok, outcome 1 fails
+                            raise OSError(28, "No space left on device")
+                        return self.inner.write(text_)
+                    def __getattr__(self, name):
+                        return getattr(self.inner, name)
+                return path, Breaking(handle)
+            return path, handle
+
+        monkeypatch.setattr(records, "open_new", opening)
+        back = svc.undo_names(text)
+        assert len(back.renamed) == 1 and back.stopped and "No space left" in back.record_problem
+        assert (folder / "b.jpg").exists() and (folder / "Apple pie.jpg").exists(), "the last rename was undone first; the other left"
+
+
+def test_a_record_from_the_previous_format_still_undoes_an_unchanged_file(tmp_path, pictures):
+    """The a94d25b format wrote the time as seconds to three places. Compared at that precision, an unchanged
+    file with a sub-millisecond time undoes; a new-format record still rejects a same-size, same-time replacement."""
+    folder, store, recs = pictures
+    a = folder / "a.jpg"
+    os.utime(a, ns=(1600000000123456700, 1600000000123456700))
+    os.rename(a, folder / "A renamed.jpg")
+    old_line = f"renamed\t{a}\tto\t{folder / 'A renamed.jpg'}\t1\t{1600000000123456700 / 1e9:.3f}"
+    pairs = naming.read_record(old_line)
+    assert pairs[0][5] == 1_000_000, "a millisecond of tolerance, the precision it was written with"
+    back = naming.undo(pairs, store)
+    assert [os.path.basename(n) for n, _ in back.renamed] == ["A renamed.jpg"] and a.exists()
+

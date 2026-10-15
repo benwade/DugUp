@@ -66,6 +66,7 @@ class Change:
     new: str                       # the path it would get ("" when it is left alone)
     caption: str = ""              # the sentence the model wrote, if any
     why: str = ""                  # why it is left alone, when it is
+    identity: Optional[Tuple] = None   # seen_identity(old) at the preview; None: not looked at then
 
 
 @dataclass
@@ -200,7 +201,7 @@ def plan(records: Sequence[FileRecord], pattern: str, captions: Dict[str, str], 
         if fold(new) == fold(old):
             changes.append(Change(record, old, "", captions.get(old, ""), "it has that name already"))
             continue
-        changes.append(Change(record, old, new, captions.get(old, "")))
+        changes.append(Change(record, old, new, captions.get(old, ""), identity=seen_identity(old)))
     # two files that want the same name: each after the first gets a number, as {n} or at the end
     wanted: Dict[str, List[Change]] = {}
     for change in changes:
@@ -238,6 +239,7 @@ class Applied:
     stopped: bool = False
     index_problems: List[Tuple[str, str]] = field(default_factory=list)   # (path, note): renamed on disk, index not
     record_problem: str = ""        # the record failed: before a file (nothing more touched) or after (the change is in renamed)
+    record: str = ""                # the record this operation wrote, when it opened one of its own (undo)
 
 
 RENAME_NOREPLACE = 1
@@ -300,12 +302,41 @@ def _claim_then_replace(old: str, new: str) -> None:
         raise
 
 
-def identity_of(path: str) -> Tuple[int, int, int]:
-    """(size, time in nanoseconds, file id) of the file at `path`, from one stat. The file id is the inode on
-    POSIX and the volume file index on Windows (0 where the filesystem gives none): a different file put at
-    the same path has a different id, however alike its size and time."""
+def identity_of(path: str) -> Tuple[int, int, int, int]:
+    """(size, time in nanoseconds, device, file id) of the file at `path`, from one stat. The file id is the
+    inode on POSIX and the volume file index on Windows (0 where the filesystem gives none): a different file
+    put at the same path has a different id, however alike its size and time. Where there is no id, a
+    fingerprint of the content (content_fingerprint) stands in for destructive decisions."""
     st = os.stat(path)
-    return st.st_size, int(st.st_mtime_ns), int(getattr(st, "st_ino", 0) or 0)
+    return st.st_size, int(st.st_mtime_ns), int(getattr(st, "st_dev", 0) or 0), int(getattr(st, "st_ino", 0) or 0)
+
+
+def content_fingerprint(path: str, limit: int = 4 * 1024 * 1024) -> str:
+    """A hash of the file's first `limit` bytes and its size: the fallback identity on a filesystem that gives
+    no file id. Raises OSError when the file cannot be read."""
+    import hashlib
+    h = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as handle:
+        while size < limit:
+            piece = handle.read(min(65536, limit - size))
+            if not piece:
+                break
+            h.update(piece)
+            size += len(piece)
+    return h.hexdigest()[:32]
+
+
+def seen_identity(path: str) -> Optional[Tuple]:
+    """What a preview keeps of a file so the act can check it is the same file: (size, time ns, device, file
+    id, fingerprint-or-""). The fingerprint is taken only where the filesystem gives no id. None when the file
+    cannot be looked at."""
+    try:
+        size, when, dev, ident = identity_of(path)
+        mark = "" if ident else content_fingerprint(path)
+        return (size, when, dev, ident, mark)
+    except OSError:
+        return None
 
 
 MOMENT_NS = 2_000             # two microseconds: the index keeps the time as a float of seconds, this as nanoseconds
@@ -317,13 +348,44 @@ def same_moment(when_ns: int, seconds: float) -> bool:
     return abs(when_ns - int(round(seconds * 1e9))) <= MOMENT_NS
 
 
-def same_identity(now: Tuple[int, int, int], then: Tuple[int, Optional[int], Optional[int]]) -> bool:
-    """Whether the file now is the file then: size and exact time must match; the id too when both are known."""
-    size, when, ident = now
-    size0, when0, ident0 = then
+def same_file(path: str, seen: Tuple, tolerance_ns: int = 0) -> str:
+    """"" when the file at `path` is the file `seen` at the preview (seen_identity), else why not. Size and
+    time must match (exactly, or within `tolerance_ns` for a record written at a coarser precision); the
+    device and file id too when both sides have them; where neither has an id, the content fingerprint."""
+    try:
+        size, when, dev, ident = identity_of(path)
+    except FileNotFoundError:
+        return "it is not there now"
+    except OSError as exc:
+        return f"it could not be looked at ({type(exc).__name__})"
+    size0, when0 = seen[0], seen[1]
+    dev0, ident0 = (seen[2], seen[3]) if len(seen) > 3 else (0, seen[2] if len(seen) > 2 else 0)
+    mark0 = seen[4] if len(seen) > 4 else ""
+    if size != size0:
+        return "it is not the file that was previewed (the size differs)"
+    if when0 is not None and abs(when - when0) > tolerance_ns:
+        return "it is not the file that was previewed (the time differs)"
+    if ident0 and ident:
+        if ident != ident0 or (dev0 and dev and dev != dev0):
+            return "it is not the file that was previewed (the file id differs)"
+    elif mark0:
+        try:
+            if content_fingerprint(path) != mark0:
+                return "it is not the file that was previewed (the content differs)"
+        except OSError as exc:
+            return f"it could not be read ({type(exc).__name__})"
+    return ""
+
+
+def same_identity(now: Tuple, then: Tuple, tolerance_ns: int = 0) -> bool:
+    """Whether a stat identity now matches one seen before (size, time within tolerance, ids when both known)."""
+    size, when = now[0], now[1]
+    ident = now[3] if len(now) > 3 else (now[2] if len(now) > 2 else 0)
+    size0, when0 = then[0], then[1]
+    ident0 = then[3] if len(then) > 3 else (then[2] if len(then) > 2 else 0)
     if size != size0:
         return False
-    if when0 is not None and when != when0:
+    if when0 is not None and abs(when - when0) > tolerance_ns:
         return False
     if ident0 and ident and ident != ident0:
         return False
@@ -349,24 +411,27 @@ def apply(changes: Sequence[Change], store, journal: Optional[Callable[[str], No
         if not change.new:
             continue
         why = ""
-        identity = (change.record.size, None, None)
+        identity: Tuple = (change.record.size, 0, 0, 0)
         if any(fold(change.old).startswith(fold(f.rstrip("/\\")) + sep) for f in protected for sep in ("/", "\\")):
             why = "it is in a protected folder now"
         if not why:
+            if change.identity is not None:
+                why = same_file(change.old, change.identity)       # seen at the preview: the same file, now
             try:
                 identity = identity_of(change.old)
-                if identity[0] != change.record.size or not same_moment(identity[1], change.record.modified):
+                if not why and change.identity is None and (
+                        identity[0] != change.record.size or not same_moment(identity[1], change.record.modified)):
                     why = "it changed since the preview"
             except FileNotFoundError:
-                why = "it is not there now"
+                why = why or "it is not there now"
             except OSError as exc:
-                why = f"it could not be looked at ({type(exc).__name__})"
+                why = why or f"it could not be looked at ({type(exc).__name__})"
         if not why and os.path.lexists(change.new):
             why = "a file with the new name is there now"
         if not why:
             if journal is not None:
                 try:
-                    journal("\t".join(("renaming", change.old, "to", change.new, str(identity[0]), str(identity[1]), str(identity[2]))))
+                    journal("\t".join(("renaming", change.old, "to", change.new, str(identity[0]), str(identity[1]), str(identity[3]))))
                 except RecordError as exc:
                     done.skipped.append((change.old, f"the record could not be written ({exc}); nothing more was renamed"))
                     done.record_problem, done.stopped = str(exc), True
@@ -393,7 +458,7 @@ def apply(changes: Sequence[Change], store, journal: Optional[Callable[[str], No
         done.renamed.append((change.old, change.new))
         if journal is not None:
             try:
-                journal("\t".join(("renamed", change.old, "to", change.new, str(identity[0]), str(identity[1]), str(identity[2]))
+                journal("\t".join(("renamed", change.old, "to", change.new, str(identity[0]), str(identity[1]), str(identity[3]))
                                   + ((note,) if note else ())))
             except RecordError as exc:        # the rename has happened and is in `renamed`; nothing more without a record
                 done.record_problem, done.stopped = str(exc), True
@@ -401,31 +466,38 @@ def apply(changes: Sequence[Change], store, journal: Optional[Callable[[str], No
     return done
 
 
-def read_record(text: str) -> List[Tuple[str, str, Optional[int], Optional[int], Optional[int]]]:
-    """(old, new, size, time in ns, file id) from a record's "renamed" lines (None where a record written
-    before they were kept has no value). A "renaming" line with no "renamed" or "left" after it is an
+def read_record(text: str) -> List[Tuple[str, str, Optional[int], Optional[int], Optional[int], int]]:
+    """(old, new, size, time in ns, file id, time tolerance in ns) from a record's "renamed" lines (None where
+    a record written before they were kept has no value; the tolerance is 0 for a record written in
+    nanoseconds and the precision of an older record written in seconds). A "renaming" line with no "renamed" or "left" after it is an
     intent whose outcome is not known (a crash in between): it is reported as a pair too, so undo can look
     at the disk and decide."""
-    pairs: List[Tuple[str, str, Optional[int], Optional[int], Optional[int]]] = []
-    pending: Dict[Tuple[str, str], Tuple[Optional[int], Optional[int], Optional[int]]] = {}
+    pairs: List[Tuple[str, str, Optional[int], Optional[int], Optional[int], int]] = []
+    pending: Dict[Tuple[str, str], Tuple[Optional[int], Optional[int], Optional[int], int]] = {}
     for line in text.splitlines():
         parts = line.rstrip("\r\n").split("\t")
         if len(parts) >= 4 and parts[2] == "to" and parts[0] in ("renaming", "renamed"):
             size = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else None
             when: Optional[int] = None
+            tolerance = 0
             if len(parts) > 5 and _is_number(parts[5]):
-                when = int(parts[5]) if parts[5].isdigit() else int(float(parts[5]) * 1e9)   # older records: seconds
+                if parts[5].isdigit():
+                    when = int(parts[5])
+                else:                       # an older record: seconds with a few decimals; compared at that precision
+                    when = int(round(float(parts[5]) * 1e9))
+                    decimals = len(parts[5].split(".")[1]) if "." in parts[5] else 0
+                    tolerance = int(10 ** (9 - decimals)) if decimals < 9 else 0
             ident = int(parts[6]) if len(parts) > 6 and parts[6].isdigit() else None
             if parts[0] == "renaming":
-                pending[(parts[1], parts[3])] = (size, when, ident)
+                pending[(parts[1], parts[3])] = (size, when, ident, tolerance)
             else:
                 pending.pop((parts[1], parts[3]), None)
-                pairs.append((parts[1], parts[3], size, when, ident))
+                pairs.append((parts[1], parts[3], size, when, ident, tolerance))
         elif len(parts) >= 2 and parts[0] == "left":
             for key in [k for k in pending if k[0] == parts[1]]:
                 del pending[key]
-    for (old, new), (size, when, ident) in pending.items():
-        pairs.append((old, new, size, when, ident))       # intent without outcome: undo looks at the disk
+    for (old, new), (size, when, ident, tolerance) in pending.items():
+        pairs.append((old, new, size, when, ident, tolerance))    # intent without outcome: undo looks at the disk
     return pairs
 
 
@@ -450,6 +522,7 @@ def undo(pairs: Sequence[Tuple], store, journal: Optional[Callable[[str], None]]
         size = item[2] if len(item) > 2 else None
         when = item[3] if len(item) > 3 else None
         ident = item[4] if len(item) > 4 else None
+        tolerance = item[5] if len(item) > 5 else 0
         why = ""
         if any(fold(new).startswith(fold(f.rstrip("/\\")) + sep) for f in protected for sep in ("/", "\\")):
             why = "it is in a protected folder now"
@@ -459,7 +532,7 @@ def undo(pairs: Sequence[Tuple], store, journal: Optional[Callable[[str], None]]
             why = "a file with the old name is there now"
         elif size is not None:
             try:
-                if not same_identity(identity_of(new), (size, when, ident)):
+                if not same_identity(identity_of(new), (size, when, 0, ident), tolerance):
                     why = "the file at the new name is not the one that was renamed (size, time or file id differ)"
             except OSError as exc:
                 why = f"it could not be looked at ({type(exc).__name__})"

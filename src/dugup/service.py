@@ -491,6 +491,19 @@ class LocalService:
         return cleanup.report(self.store, _place(drive), [_place(p) for p in kept], self.case_insensitive,
                               [_place(p) for p in home])
 
+    def _own_journal(self, kind: str, stem: str, journal):
+        """The journal a file-changing operation records into. A caller may pass one (the window and the
+        command line open records of their own); given none, the service opens an exclusive record under the
+        data folder, so no caller can change a file without one. Returns (journal, record path or "", problem)."""
+        from . import records
+        if journal is not None:
+            return journal, "", ""
+        try:
+            path, handle = records.open_new(self.layout.root / kind, stem)
+        except OSError as exc:
+            return None, "", f"{type(exc).__name__}: {exc}"
+        return records.Journal(handle), str(path), ""
+
     def remove_duplicates(self, found, stop: Optional[StopSignal] = None, tell=None, mover=None, journal=None):
         """Move the report's "extra" copies to the trash (cleanup.remove_extras; trash.to_trash). The one thing
         in DugUp that changes a file, and it only ever moves an exact copy whose keeper is there now."""
@@ -502,7 +515,19 @@ class LocalService:
             if record is not None and record.row_id is not None:
                 self.store.set_missing(record.row_id, clock.time())
 
-        return cleanup.remove_extras(found, mover or trash.to_trash, gone, stop, tell, journal)
+        own, record, problem = self._own_journal("removed", "copies", journal)
+        if own is None:
+            done = cleanup.Removal()
+            done.record_problem, done.stopped = problem, True
+            return done
+        try:
+            done = cleanup.remove_extras(found, mover or trash.to_trash, gone, stop, tell, own)
+        finally:
+            if journal is None:
+                own.close()
+        if record:
+            done.record = record
+        return done
 
     def measure_meaning(self, pieces: int = 2000, choices: Sequence[str] = ("small", "larger"), gpu: Optional[bool] = None,
                         questions: Sequence[str] = (), progress: Optional[Callable[[Progress], None]] = None,
@@ -677,6 +702,23 @@ class LocalService:
         cleanup.Removal: moved (path, "") and skipped (path, why). `journal(line)` is told of each as it goes."""
         from . import cleanup, trash
         from .records import RecordError
+        own, record, problem = self._own_journal("removed", "trashed", journal)
+        if own is None:
+            done = cleanup.Removal()
+            done.record_problem, done.stopped = problem, True
+            return done
+        try:
+            done = self._to_trash(paths, own, mover)
+        finally:
+            if journal is None:
+                own.close()
+        if record:
+            done.record = record
+        return done
+
+    def _to_trash(self, paths: Sequence[str], journal, mover=None):
+        from . import cleanup, trash
+        from .records import RecordError
         protected = [p.strip() for p in self.settings.cleanup_protect.split(";") if p.strip()]
         done = cleanup.Removal()
         for path in paths:
@@ -726,22 +768,44 @@ class LocalService:
         the file it was, and the protections as they stand now. A set whose keeper is gone or changed is left
         whole, with the reason; an extra that changed is left, with the reason. Returns cleanup.Removal."""
         from . import cleanup
-        from .naming import identity_of, same_moment
+        own, record, problem = self._own_journal("removed", "trashed", journal)
+        if own is None:
+            done = cleanup.Removal()
+            done.record_problem, done.stopped = problem, True
+            return done
+        try:
+            done = self._trash_alike_extras(sets, own, mover)
+        finally:
+            if journal is None:
+                own.close()
+        if record:
+            done.record = record
+        return done
+
+    def _trash_alike_extras(self, sets, journal, mover=None):
+        from . import cleanup
+        from .naming import identity_of, same_file, same_moment
         from .records import RecordError
         done = cleanup.Removal()
 
-        def unchanged(record) -> str:
+        def unchanged(member) -> str:
+            """The member is the file it was when the set was made: size, exact time, device and file id as
+            seen then, or the content where the filesystem gives no id (a member made without a look at the
+            disk falls back to the index's size and time)."""
+            record = member.record
+            if member.identity is not None:
+                return same_file(record.path, member.identity)
             try:
-                size, when_ns, _ = identity_of(record.path)
+                now = identity_of(record.path)
             except OSError:
                 return "it is not there now"
-            if size != record.size or not same_moment(when_ns, record.modified):
+            if now[0] != record.size or not same_moment(now[1], record.modified):
                 return "it changed since the preview (size or time)"
             return ""
 
         for same in sets:
             keeper = same.keep.record
-            why = unchanged(keeper)
+            why = unchanged(same.keep)
             if why:
                 for m in same.extra:
                     done.skipped.append((m.record.path, f"its keeper {os.path.basename(keeper.path)}: {why}"))
@@ -753,7 +817,7 @@ class LocalService:
                 if m.closeness < same.threshold:
                     held.append((m.record.path, "it is below the threshold against the keeper"))
                 else:
-                    problem = unchanged(m.record)
+                    problem = unchanged(m)
                     (held.append((m.record.path, problem)) if problem else ready.append(m.record.path))
             for path, problem in held:
                 done.skipped.append((path, problem))
@@ -879,11 +943,41 @@ class LocalService:
         checked for every file, whatever the preview assumed."""
         from . import naming
         protected = [_place(p.strip()) for p in self.settings.cleanup_protect.split(";") if p.strip()]
-        return naming.apply(found.to_rename, self.store, journal, stop, protected=protected, fold=self._fold)
+        own, record, problem = self._own_journal("renames", "renames", journal)
+        if own is None:
+            done = naming.Applied()
+            done.record_problem, done.stopped = problem, True
+            return done
+        try:
+            if journal is None:
+                own.outcome(f"pattern\t{found.pattern}")
+            done = naming.apply(found.to_rename, self.store, own, stop, protected=protected, fold=self._fold)
+        finally:
+            if journal is None:
+                own.close()
+        if record:
+            done.record = record
+        return done
 
     def undo_names(self, record_text: str, journal=None):
+        """Put the names in a rename record back (naming.undo), with the protections as they stand now and
+        the record protocol: when no journal is given, a new record of the undo is opened under renames/
+        (its path is on the result as `record`), so an undo cut short has its own trace."""
         from . import naming
-        return naming.undo(naming.read_record(record_text), self.store, journal)
+        protected = [_place(p.strip()) for p in self.settings.cleanup_protect.split(";") if p.strip()]
+        own, record, problem = self._own_journal("renames", "undo", journal)
+        if own is None:
+            done = naming.Applied()
+            done.record_problem, done.stopped = problem, True
+            return done
+        try:
+            done = naming.undo(naming.read_record(record_text), self.store, own, protected=protected, fold=self._fold)
+        finally:
+            if journal is None:
+                own.close()
+        if record:
+            done.record = record
+        return done
 
     def measure_looks(self, pictures: int = 300, gpu: Optional[bool] = None, questions: Sequence[str] = (),
                       like: Sequence[str] = (), progress: Optional[Callable[[Progress], None]] = None,
