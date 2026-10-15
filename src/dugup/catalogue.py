@@ -217,9 +217,9 @@ def _entries() -> Tuple[Entry, ...]:
           why="\"{caption} {taken}\" gives names like \"Two dogs on snowy porch 2024-01-13.jpg\". Put {original} in to keep "
               "the old name in sight.", everyday=True),
         E("hotkey", "tray", "The search key",
-          "Written the usual way: Ctrl+Alt+Space, Win+Shift+F, Ctrl+Alt+D. Empty means no key; the box can still be "
+          "Written the usual way: Win+Shift+F, Ctrl+Alt+D, Ctrl+Shift+Space. Empty means no key; the box can still be "
           "brought up with the tray icon or the command dugup popup. Takes effect when the tray is next started.",
-          why="Ctrl+Alt+Space is free on most machines. If another program has the key, the tray says so when it starts."),
+          why="Win+Shift+F is free on a stock Windows; Ctrl+Alt+Space is often taken by dictation tools. If another program has the key, the tray says so when it starts."),
         E("caption_source", "naming", "Where captions come from",
           "\"model\": the pinned captioning model, fetched on first use. \"server\": a local model server of your own "
           "(not built yet; the seam is here for it).",

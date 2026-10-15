@@ -14,7 +14,7 @@ import sys
 import threading
 from typing import Callable, Optional, Tuple
 
-DEFAULT = "Ctrl+Alt+Space"
+DEFAULT = "Win+Shift+F"
 
 MODIFIERS = {"alt": 0x0001, "ctrl": 0x0002, "control": 0x0002, "shift": 0x0004, "win": 0x0008, "super": 0x0008}
 NAMED_KEYS = {"space": 0x20, "tab": 0x09, "enter": 0x0D, "return": 0x0D, "escape": 0x1B, "esc": 0x1B,

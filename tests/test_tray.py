@@ -106,8 +106,8 @@ def test_the_tray_takes_commands_and_the_popup_finds_files_by_name_then_by_words
     tray.desktop.open_file = lambda path: (opened.append(path), "")[1]
     tray.popup.open_file = tray.desktop.open_file
     try:
-        assert hotkeys and hotkeys[0][0] == "Ctrl+Alt+Space"
-        assert "Ctrl+Alt+Space brings up" in " ".join(tray.status_lines())
+        assert hotkeys and hotkeys[0][0] == "Win+Shift+F"
+        assert "Win+Shift+F brings up" in " ".join(tray.status_lines())
         assert summons.summon(stage.layout.root, "ping") == "pong", "another process can reach it"
         # the key fires on another thread; the tray takes it on its own thread and shows the popup
         hotkeys[0][1]()

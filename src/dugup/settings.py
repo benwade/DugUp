@@ -117,7 +117,7 @@ class Settings:
     rename_pattern: str = "{caption} {taken}"   # what a renamed picture is called; fields: {caption} {taken} {time} {camera} {folder} {original} {n} {ext}
     caption_gpu: bool = True               # write captions on a graphics card when the runtime can
     caption_source: str = "model"          # "model": the pinned captioning model; "server": a local model server (not built yet)
-    hotkey: str = "Ctrl+Alt+Space"         # the key that brings up the search box anywhere, while the tray runs; "" for none
+    hotkey: str = "Win+Shift+F"            # the key that brings up the search box anywhere, while the tray runs; "" for none
     # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
     book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
     book_folder_level: str = "names"       # what a folder with such a name starts at; "" makes no guess about books

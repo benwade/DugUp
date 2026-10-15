@@ -205,13 +205,13 @@ folder; see `src/dugup/settings.py` for the names and defaults. The ones most li
 
     dugup tray
 
-keeps DugUp running with the index open, and **Ctrl+Alt+Space** then brings up a small search box over
+keeps DugUp running with the index open, and **Win+Shift+F** then brings up a small search box over
 whatever you are doing: type a few letters, the files appear as you type, Enter opens the one at the top
 (arrows pick another), Esc closes. Names are searched first, in the folder the main window was last set to
 and then everywhere, and words in the files after that when names found too little. Ctrl+Enter hands what
 you typed to the full window for the heavier searches.
 
-The key is the setting `hotkey` (written the usual way: `Win+Shift+F`, `Ctrl+Alt+D`); the tray says at
+The key is the setting `hotkey` (written the usual way: `Ctrl+Alt+D`, `Ctrl+Shift+Space`); the tray says at
 start when another program already has it. On Windows the key is registered with the system and nothing
 is installed for it. On Linux the desktop's own keyboard settings can bind a key to `dugup popup`, which
 reaches the running tray; that command works on Windows too. With `pystray` installed there is an icon in
