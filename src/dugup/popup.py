@@ -47,8 +47,12 @@ class Popup:
         self.list.column("name", width=300, stretch=False)
         self.list.column("where", width=WIDTH - 316)
         self.list.pack(fill="both", expand=True, pady=(6, 0))
+        foot = ttk.Frame(frame)
+        foot.pack(fill="x", pady=(4, 0))
         self.note = tk.StringVar(value="Enter opens the file, Ctrl+Enter searches in the window, Esc closes.")
-        ttk.Label(frame, textvariable=self.note, foreground="#666666").pack(fill="x", pady=(4, 0))
+        ttk.Label(foot, textvariable=self.note, foreground="#666666").pack(side="left", fill="x", expand=True)
+        self.window_button = ttk.Button(foot, text="Open the full window", command=self._to_window)
+        self.window_button.pack(side="right")
         for widget in (top, self.entry, self.list):
             widget.bind("<Escape>", lambda event: self.hide())
             widget.bind("<Return>", self._enter)

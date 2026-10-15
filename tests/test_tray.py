@@ -133,7 +133,7 @@ def test_the_tray_takes_commands_and_the_popup_finds_files_by_name_then_by_words
         assert opened == [str(stage.docs / "sub" / "gamma.txt")] and not popup.shown and said == []
         # Ctrl+Enter hands the words to a full window, started as its own process
         popup.query.set("needle gamma")
-        popup._to_window()
+        popup.window_button.invoke()
         assert launched and launched[-1][1:4] == ["-m", "dugup", "window"] and "--search" in launched[-1] and "needle gamma" in launched[-1]
         assert "--data-dir" in launched[-1]
         # the other commands
