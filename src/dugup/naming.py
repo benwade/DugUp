@@ -236,13 +236,41 @@ class Applied:
     renamed: List[Tuple[str, str]] = field(default_factory=list)
     skipped: List[Tuple[str, str]] = field(default_factory=list)      # (old path, why)
     stopped: bool = False
+    index_problems: List[Tuple[str, str]] = field(default_factory=list)   # (path, note): renamed on disk, index not
+
+
+def rename_no_replace(old: str, new: str) -> None:
+    """Rename `old` to `new`, never over a file that is there. On Windows os.rename refuses an existing
+    destination; on other systems it would replace it, so the new name is claimed first with an exclusive
+    create (an empty placeholder that only this rename then replaces). Raises OSError as os.rename does."""
+    if os.name == "nt":
+        os.rename(old, new)
+        return
+    fd = os.open(new, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+    try:
+        os.replace(old, new)
+    except OSError:
+        try:
+            os.unlink(new)
+        except OSError:
+            pass
+        raise
+
+
+def _identity_line(path: str) -> Tuple[int, float]:
+    st = os.stat(path)
+    return st.st_size, st.st_mtime
 
 
 def apply(changes: Sequence[Change], store, journal: Optional[Callable[[str], None]] = None, stop=None,
-          renamer: Callable[[str, str], None] = os.rename) -> Applied:
+          renamer: Callable[[str, str], None] = rename_no_replace, protected: Sequence[str] = (),
+          fold: Callable[[str], str] = lambda p: p) -> Applied:
     """Rename each file whose plan says so, one at a time, only if it is still there, unchanged in size and
-    time since the plan, and the new name is still free. The index follows each rename in the same step.
-    `journal(line)` is told of each outcome as it happens."""
+    time since the plan, not in a folder protected now, and the new name is still free. The index follows
+    each rename in the same step. `journal(line)` is told, for each file, first what is about to happen
+    ("renaming", with the file's size and time, so a crash between the lines leaves a record of the intent
+    and of which file it was) and then what happened ("renamed" or "left")."""
     done = Applied()
     for change in changes:
         if stop is not None and stop.is_set():
@@ -251,17 +279,23 @@ def apply(changes: Sequence[Change], store, journal: Optional[Callable[[str], No
         if not change.new:
             continue
         why = ""
-        try:
-            now = os.stat(change.old)
-            if now.st_size != change.record.size or abs(now.st_mtime - change.record.modified) > 2.0:
-                why = "it changed since the preview"
-        except FileNotFoundError:
-            why = "it is not there now"
-        except OSError as exc:
-            why = f"it could not be looked at ({type(exc).__name__})"
+        size, when = change.record.size, change.record.modified
+        if any(fold(change.old).startswith(fold(f.rstrip("/\\")) + sep) for f in protected for sep in ("/", "\\")):
+            why = "it is in a protected folder now"
+        if not why:
+            try:
+                size, when = _identity_line(change.old)
+                if size != change.record.size or abs(when - change.record.modified) > 2.0:
+                    why = "it changed since the preview"
+            except FileNotFoundError:
+                why = "it is not there now"
+            except OSError as exc:
+                why = f"it could not be looked at ({type(exc).__name__})"
         if not why and os.path.lexists(change.new):
             why = "a file with the new name is there now"
         if not why:
+            if journal is not None:
+                journal("\t".join(("renaming", change.old, "to", change.new, str(size), f"{when:.3f}")))
             try:
                 renamer(change.old, change.new)
             except OSError as exc:
@@ -271,37 +305,71 @@ def apply(changes: Sequence[Change], store, journal: Optional[Callable[[str], No
             if journal is not None:
                 journal("\t".join(("left", change.old, why)))
             continue
+        note = ""
         try:
             store.move_file(change.old, change.new)
-        except Exception:
-            pass          # the next index run sees the new name; the file itself is already renamed
+        except Exception as exc:
+            note = f"index not updated ({type(exc).__name__}); the next index run sees the new name"
+            done.index_problems.append((change.new, note))
         done.renamed.append((change.old, change.new))
         if journal is not None:
-            journal("\t".join(("renamed", change.old, "to", change.new)))
+            journal("\t".join(("renamed", change.old, "to", change.new, str(size), f"{when:.3f}") + ((note,) if note else ())))
     return done
 
 
-def read_record(text: str) -> List[Tuple[str, str]]:
-    """(old, new) pairs from a record file's lines that say "renamed"."""
-    pairs = []
+def read_record(text: str) -> List[Tuple[str, str, Optional[int], Optional[float]]]:
+    """(old, new, size, time) from a record's "renamed" lines (size and time are None in records written
+    before they were kept). A "renaming" line with no "renamed" after it is an intent whose outcome is not
+    known (a crash in between): it is reported as a pair too, so undo can look and decide."""
+    pairs: List[Tuple[str, str, Optional[int], Optional[float]]] = []
+    pending: Dict[Tuple[str, str], Tuple[Optional[int], Optional[float]]] = {}
     for line in text.splitlines():
         parts = line.rstrip("\r\n").split("\t")
-        if len(parts) >= 4 and parts[0] == "renamed" and parts[2] == "to":
-            pairs.append((parts[1], parts[3]))
+        if len(parts) >= 4 and parts[2] == "to" and parts[0] in ("renaming", "renamed"):
+            size = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else None
+            when = float(parts[5]) if len(parts) > 5 and _is_number(parts[5]) else None
+            if parts[0] == "renaming":
+                pending[(parts[1], parts[3])] = (size, when)
+            else:
+                pending.pop((parts[1], parts[3]), None)
+                pairs.append((parts[1], parts[3], size, when))
+        elif len(parts) >= 2 and parts[0] == "left":
+            for key in [k for k in pending if k[0] == parts[1]]:
+                del pending[key]
+    for (old, new), (size, when) in pending.items():
+        pairs.append((old, new, size, when))       # intent without outcome: undo looks at the disk
     return pairs
 
 
-def undo(pairs: Sequence[Tuple[str, str]], store, journal: Optional[Callable[[str], None]] = None,
-         renamer: Callable[[str, str], None] = os.rename) -> Applied:
-    """Rename back, last first. A file that is not at its new name, or whose old name is taken, is left."""
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def undo(pairs: Sequence[Tuple], store, journal: Optional[Callable[[str], None]] = None,
+         renamer: Callable[[str, str], None] = rename_no_replace) -> Applied:
+    """Rename back, last first. A file that is not at its new name, whose old name is taken, or that is not
+    the file that was renamed (size or time differ from the record) is left, and said so."""
     done = Applied()
-    for old, new in reversed(list(pairs)):
+    for item in reversed(list(pairs)):
+        old, new = item[0], item[1]
+        size, when = (item[2], item[3]) if len(item) >= 4 else (None, None)
         why = ""
         if not os.path.lexists(new):
             why = "it is not at its new name now"
         elif os.path.lexists(old):
             why = "a file with the old name is there now"
-        else:
+        elif size is not None:
+            try:
+                now_size, now_when = _identity_line(new)
+                if now_size != size or (when is not None and abs(now_when - when) > 2.0):
+                    why = "the file at the new name is not the one that was renamed (size or time differ)"
+            except OSError as exc:
+                why = f"it could not be looked at ({type(exc).__name__})"
+        if not why:
             try:
                 renamer(new, old)
             except OSError as exc:
@@ -313,8 +381,8 @@ def undo(pairs: Sequence[Tuple[str, str]], store, journal: Optional[Callable[[st
             continue
         try:
             store.move_file(new, old)
-        except Exception:
-            pass
+        except Exception as exc:
+            done.index_problems.append((old, f"index not updated ({type(exc).__name__})"))
         done.renamed.append((new, old))
         if journal is not None:
             journal("\t".join(("renamed", new, "to", old)))

@@ -35,6 +35,7 @@ from .indexer import (OCR_FAILED_NOTE, OCR_WAIT, ROOM_EVERY, Progress, is_ocr_no
                       safe_rate)
 from .protocols import OcrResult, OcrTask, PageVerdict, StopSignal, Store
 from .settings import Settings
+from .store import StoreError
 from .shapes import Failure, FailureReason, FileKind, FileState
 
 log = logging.getLogger("dugup.ocr")
@@ -71,6 +72,7 @@ class OcrReport:
     left: int = 0                  # pages whose file could not be reached; they stay queued
     copied: int = 0                # pages of files that hold the same content as another: read once, used for each
     held_back: int = 0             # pages in folders whose level stops short of OCR; not looked at
+    stale: int = 0                 # results for pages that were gone by the time they came back (a policy change mid-run)
     readers: int = 1               # how many readers worked side by side
     chose_fast: int = 0            # above 0: the run went fast by itself because this many pages waited
     device: str = ""               # what the pages were read on, when the reader says ("processor", "graphics card (...)")
@@ -240,15 +242,23 @@ class OcrRunner:
             """Take in one answer. True when the run must end."""
             nonlocal in_a_row
             if isinstance(result, OcrResult):
-                with self.store.transaction():
-                    self.store.save_ocr(task.row_id, task.page, result)
-                    self.refresh_file(task.path)
-                    for other in followers.pop((task.row_id, task.page), ()):
-                        self.store.copy_page(task.row_id, other.row_id, task.page)
-                        self.refresh_file(other.path)
-                        report.read += 1
-                        report.copied += 1
-                        report.with_words += 1 if result.lines else 0
+                try:
+                    with self.store.transaction():
+                        self.store.save_ocr(task.row_id, task.page, result)
+                        self.refresh_file(task.path)
+                        for other in followers.pop((task.row_id, task.page), ()):
+                            self.store.copy_page(task.row_id, other.row_id, task.page)
+                            self.refresh_file(other.path)
+                            report.read += 1
+                            report.copied += 1
+                            report.with_words += 1 if result.lines else 0
+                except StoreError:
+                    # the page is no longer there to receive words: its folder was set to names only (or the
+                    # file read anew) while the reader was busy. A stale result is an ordinary outcome.
+                    report.stale += 1
+                    followers.pop((task.row_id, task.page), None)
+                    in_a_row = 0
+                    return False
                 report.read += 1
                 report.with_words += 1 if result.lines else 0
                 in_a_row = 0

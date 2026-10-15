@@ -39,3 +39,19 @@ def sync(handle: IO[str]) -> None:
         os.fsync(handle.fileno())
     except OSError:
         pass
+
+
+def journal_into(handle: IO[str], problems: list):
+    """A journal function for a record handle: every line flushed; an intent line ("renaming", "moving") is
+    also synced to disk, since a crash right after must still find it. A write that fails is noted in
+    `problems` rather than raised: the file change may already have happened and must still be reported."""
+    def journal(line: str) -> None:
+        try:
+            handle.write(line + "\n")
+            handle.flush()
+            if line.startswith(("renaming\t", "moving\t")):
+                sync(handle)
+        except OSError as exc:
+            problems.append(f"{type(exc).__name__}: {exc}")
+    return journal
+

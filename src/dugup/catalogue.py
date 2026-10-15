@@ -336,7 +336,8 @@ def _entries() -> Tuple[Entry, ...]:
           "The address of a model server that is already running, for example http://127.0.0.1:1234. Empty: not used."),
         E("intent_model", "words", "Model name on that server", "The model's name, when that server needs one."),
         E("intent_allow_remote", "words", "Allow a server on another machine",
-          "A server on another machine is sent what you type. Off unless you turn it on.", choices=YES_NO),
+          "A server on another machine is sent what you type and the list of your indexed folders' paths (so it can "
+          "name one), never your files. Off unless you turn it on.", choices=YES_NO),
         E("intent_server", "words", "Model server program", "A model server program for DugUp to start itself. Empty: the installed one."),
         E("intent_model_file", "words", "Model file", "The model file that server should load."),
         E("intent_gpu_layers", "words", "Model layers on the graphics card",

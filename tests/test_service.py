@@ -289,3 +289,25 @@ def test_a_crash_in_a_background_run_is_reported_not_lost(layout, docs):
         probe = RunLock(layout.root / "index.lock")
         assert probe.acquire(), "the lock is given back after a crash"
         probe.release()
+
+
+def test_saved_settings_govern_the_next_run_and_the_reading_connection(layout, docs, tmp_path):
+    """apply_settings must reach the readers (chunking) and the store (closeness): the fingerprint said one
+    thing and the readers did another."""
+    from dugup.settings import Settings
+    (docs / "long.txt").write_text(("word " * 60 + "\n") * 20, encoding="utf-8")
+    with LocalService(layout, Settings(isolate_readers=False, content_marks=False)) as service:
+        service.set_root(Root(str(docs)))
+        service.run_indexing()
+        before = service.store.text_of(service.store.get_file(str(docs / "long.txt")).row_id)
+        assert all(len(text) <= 1800 for _, _, text in before) and any(len(text) > 300 for _, _, text in before)
+        saved = service.apply_settings({"chunk_chars": 200, "chunk_overlap": 20, "near_words": 3})
+        assert not isinstance(saved, Failure)
+        assert service.store.near_words == 3, "the reading connection was reopened with the new closeness"
+        from dugup.indexer import REREAD
+        report = service.run_indexing()
+        assert "chunk_chars" in getattr(report, "settings_changed", ()), "a run first says the settings that shape the index changed"
+        report = service.run_indexing(on_settings_change=REREAD)
+        after = service.store.text_of(service.store.get_file(str(docs / "long.txt")).row_id)
+        assert after and all(len(text) <= 200 for _, _, text in after), "the readers rebuilt with the saved chunk size"
+

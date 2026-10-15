@@ -284,4 +284,4 @@ def test_the_service_moves_files_to_the_trash_but_never_from_a_protected_folder(
     assert [os.path.basename(p) for p, _ in done.moved] == ["a.txt"] and moved == [str(root / "a.txt")]
     assert sorted(why for _, why in done.skipped) == ["it is in a protected folder", "it is not there now"]
     assert (root / "Laptop" / "b.txt").exists()
-    assert lines[0].startswith("trashed\t") and sum(1 for l in lines if l.startswith("left\t")) == 2
+    assert lines[0].startswith("moving\t") and lines[1].startswith("trashed\t") and sum(1 for l in lines if l.startswith("left\t")) == 2

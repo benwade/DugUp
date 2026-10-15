@@ -213,6 +213,7 @@ def fill(store, runners: Sequence["_Runner"], wanted: Callable[[str], bool] = la
                 report.pictures += 1
         store.save_looks(name, rows)
 
+    next_room_check = 0           # before the first batch, then every ROOM_EVERY handed out
     with ThreadPoolExecutor(max_workers=max(1, len(runners))) as pool:
         idle = list(runners)
         flying = {}      # future -> (runner, records)
@@ -223,7 +224,10 @@ def fill(store, runners: Sequence["_Runner"], wanted: Callable[[str], bool] = la
             if budget_seconds is not None and timer() - started > budget_seconds:
                 report.out_of_time = True
                 break
-            if room is not None and batches_done % ROOM_EVERY == 0 and not flying:
+            if room is not None and batches_done >= next_room_check:
+                # asked before more work is handed out, however many readers are in flight: with several of
+                # them a moment with none in flight may never come
+                next_room_check = batches_done + ROOM_EVERY
                 report.paused = str(room() or "")
                 if report.paused:
                     break

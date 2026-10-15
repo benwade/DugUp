@@ -10,7 +10,6 @@ its own past the current preview and the last record it wrote.
 
 from __future__ import annotations
 
-import datetime
 import os
 import threading
 from typing import Callable, List, Optional
@@ -309,22 +308,31 @@ class RenameTab(ttk.Frame):
                                "Undo can put the names back. Nothing is deleted.")
         if not answer:
             return
-        record = self._record_path()
+        from . import records
         try:
-            handle = open(record, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n")
+            record, handle = records.open_new(self.host.service.layout.root / "renames", "renames")
         except OSError as exc:
             self.status.set(f"The record could not be written ({type(exc).__name__}), so nothing was renamed.")
             return
+        problems: list = []
         try:
             handle.write(f"pattern\t{self.plan.pattern}\n")
             from .naming import Plan
-            done = self.host.service.apply_names(Plan(self.plan.pattern, chosen), journal=lambda line: (handle.write(line + "\n"), handle.flush()))
+            done = self.host.service.apply_names(Plan(self.plan.pattern, chosen), journal=records.journal_into(handle, problems))
         finally:
-            handle.close()
-        self.last_record = record
+            try:
+                handle.close()
+            except OSError:
+                pass
+        self.last_record = str(record)
         self.undo_button.configure(state="normal")
         self.rename_button.configure(state="disabled")
         text = f"Renamed {len(done.renamed):,} picture(s); left {len(done.skipped):,} alone. The record is in {record}."
+        if problems:
+            text = (f"Renamed {len(done.renamed):,} picture(s), but the record could not be kept up ({problems[0]}). "
+                    "What was renamed:\n\n" + "\n".join(f"{os.path.basename(o)} -> {os.path.basename(n)}" for o, n in done.renamed))
+        if done.index_problems:
+            text += f"\n\n{len(done.index_problems)} renamed file(s) could not be updated in the index; the next index update sees the new names."
         if done.skipped:
             text += "\n\n" + "\n".join(f"{os.path.basename(p)}: {why}" for p, why in done.skipped[:10])
         self.status.set(text.split("\n")[0])
@@ -350,7 +358,3 @@ class RenameTab(ttk.Frame):
         self.status.set(message.split("\n")[0])
         self.host.tell("Undone", message)
 
-    def _record_path(self) -> str:
-        folder = self.host.service.layout.root / "renames"
-        folder.mkdir(parents=True, exist_ok=True)
-        return str(folder / f"renames {datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S')}.txt")

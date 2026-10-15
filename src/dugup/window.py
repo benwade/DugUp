@@ -644,6 +644,7 @@ class App:
         if filters.where in (WHERE_MEANING, WHERE_BOTH, WHERE_LOOKS):
             self._sketch_then_fetch(words, filters)
         else:
+            self.search_number += 1       # every search takes a turn: a sketch still in flight for an older one is dropped
             self._fetch(0)
 
     def like_selected(self) -> None:
@@ -658,6 +659,7 @@ class App:
             return
         self.like_of = row
         self.last = (row.name, dataclasses.replace(filters, where=WHERE_LOOKS), None)
+        self.search_number += 1
         self._fetch(0)
 
     def _sketch_then_fetch(self, words: str, filters: SearchFilters) -> None:

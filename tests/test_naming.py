@@ -87,13 +87,33 @@ def test_apply_renames_what_is_unchanged_records_each_step_and_undo_puts_the_nam
         assert sorted(why for _, why in done.skipped) == ["a file with the new name is there now", "it changed since the preview", "it is not there now"]
         assert (folder / "Picture 0.jpg").exists() and not (folder / "a.jpg").exists()
         assert store.get_file(str(folder / "Picture 0.jpg")) is not None and store.get_file(str(folder / "a.jpg")) is None, "the index followed"
-        assert lines[0].startswith("renamed\t") and sum(1 for l in lines if l.startswith("left\t")) == 3
+        assert lines[0].startswith("renaming\t") and lines[1].startswith("renamed\t"), "intent first, then the outcome"
+        assert sum(1 for l in lines if l.startswith("left\t")) == 3
         pairs = naming.read_record("pattern\t{caption}\n" + "\n".join(lines))
-        assert pairs == [(str(folder / "a.jpg"), str(folder / "Picture 0.jpg"))]
+        assert len(pairs) == 1 and pairs[0][:2] == (str(folder / "a.jpg"), str(folder / "Picture 0.jpg"))
+        assert pairs[0][2] == 1 and abs(pairs[0][3] - os.stat(folder / "Picture 0.jpg").st_mtime) < 2.0, "the file's identity is in the record"
+        # a file put in the renamed one's place is not the one that was renamed: undo leaves it alone
+        kept = (folder / "Picture 0.jpg").read_bytes()
+        (folder / "Picture 0.jpg").write_bytes(b"something else entirely")
+        assert "not the one that was renamed" in naming.undo(pairs, store).skipped[0][1]
+        (folder / "Picture 0.jpg").write_bytes(kept)
+        os.utime(folder / "Picture 0.jpg", (pairs[0][3], pairs[0][3]))
         back = naming.undo(pairs, store)
         assert back.renamed == [(str(folder / "Picture 0.jpg"), str(folder / "a.jpg"))] and (folder / "a.jpg").exists()
         assert store.get_file(str(folder / "a.jpg")) is not None
         assert naming.undo(pairs, store).skipped[0][1] == "it is not at its new name now"
+        # an intent with no outcome (a crash between the lines) is still a pair: undo looks at the disk
+        crashed = naming.read_record("renaming\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1.0")
+        assert crashed == [("/p/x.jpg", "/p/Y.jpg", 5, 1.0)]
+        assert naming.read_record("renaming\t/p/x.jpg\tto\t/p/Y.jpg\t5\t1.0\nleft\t/p/x.jpg\trefused") == []
+        # the protections as they stand at apply time, whatever the preview assumed
+        (folder / "e.jpg").write_bytes(b"x")
+        st = os.stat(folder / "e.jpg")
+        e = FileRecord(str(folder / "e.jpg"), st.st_size, st.st_mtime, kind=FileKind.IMAGE, state=FileState.DONE)
+        store.upsert_file(e)
+        plan_e = naming.plan([e], "{caption}", {e.path: "picture e"}, clock)
+        held = naming.apply(plan_e, store, protected=[str(folder)])
+        assert held.renamed == [] and held.skipped[0][1] == "it is in a protected folder now" and (folder / "e.jpg").exists()
         import threading
         stop = threading.Event()
         stop.set()
@@ -174,3 +194,20 @@ def test_the_rename_command_previews_applies_with_a_record_and_undoes(tmp_path, 
     out = io.StringIO()
     assert cli.main(["rename", str(tmp_path / "elsewhere"), "--data-dir", str(data)], stdout=out) == 1
     assert "not inside an indexed folder" in out.getvalue()
+
+
+def test_a_rename_never_replaces_a_file_that_is_there(tmp_path):
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_bytes(b"A")
+    b.write_bytes(b"B")
+    import pytest
+    with pytest.raises(OSError):
+        naming.rename_no_replace(str(a), str(b))
+    assert a.read_bytes() == b"A" and b.read_bytes() == b"B", "neither file was touched"
+    c = tmp_path / "c.txt"
+    naming.rename_no_replace(str(a), str(c))
+    assert c.read_bytes() == b"A" and not a.exists()
+    with pytest.raises(OSError):
+        naming.rename_no_replace(str(tmp_path / "missing.txt"), str(tmp_path / "d.txt"))
+    assert not (tmp_path / "d.txt").exists(), "a failed rename leaves no placeholder behind"
+

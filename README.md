@@ -27,14 +27,22 @@ written from scratch in Python; it shares no code with it. It runs on Windows 11
 
 ## Private by design
 
-Nothing you have leaves your machine. There is no account, no telemetry, no crash reporting, and no
-request to any server, with one exception: the models for meaning search, pictures and captions are
-downloaded once, on first use, from pinned addresses (each file checked against its recorded SHA-256),
-and you can fetch them yourself and drop them in the data folder instead. The plain-words reader talks
-only to a model server on this machine unless you set `intent_allow_remote` on purpose. Logs hold counts
-and reason codes, never your text or your file names. The index is a plain SQLite file in your own data
-folder, which you can delete at any time; the only other things DugUp writes are the records of what it
-moved to the trash or renamed, so you can undo them.
+Local first, with the exceptions stated here and nowhere else. There is no account, no telemetry, no
+crash reporting. Indexing, OCR, meaning, pictures and captions all run on this machine. The exceptions:
+
+- The models for meaning search, pictures and captions are downloaded once, on first use, from pinned
+  addresses (each file checked against its recorded SHA-256). That download tells the host nothing but
+  the ordinary request; you can fetch the files yourself and drop them in the data folder instead, and
+  then no request is ever made.
+- The plain-words reader talks only to a model server on this machine unless you set
+  `intent_allow_remote` on purpose. If you do, that server is sent what you typed and the list of your
+  indexed folders' paths (so it can name one), never the files themselves.
+
+What is kept, and where: the index is a plain SQLite file in your own data folder, holding the text that
+was read from your files, so it is as private as that folder and no more; it is not encrypted, and anyone
+who can read the folder can read it (your disk encryption, if any, covers it). Logs hold counts and reason
+codes, never your text or your file names. The records of what was moved to the trash or renamed hold the
+file names, since that is what undo needs. Delete the data folder and all of it is gone.
 
 ## What it touches on your disk
 
@@ -42,7 +50,9 @@ Indexing only reads. The index lives in your own data folder (`%LOCALAPPDATA%\Du
 `~/.local/share/DugUp` on Linux), never in the folders you index, and never in a folder that looks
 cloud-synced unless you say so. The two things that change files, clearing out copies and renaming
 pictures, happen only when you ask, show you first, keep a record, and move files to the trash rather
-than deleting them. Logs hold counts and reasons, never your text or file names.
+than deleting them. On Windows that is the Recycle Bin through the shell, which warns, with its own
+dialog, in the rare case where it could only delete outright (a drive with no bin); that is a warning you
+can answer, not a guarantee, so read it. Logs hold counts and reasons, never your text or file names.
 
 Files are parsed, and pictures read, in separate worker processes with a time limit, so a damaged or
 hostile file can cost one worker and never the index. That is crash isolation, not a security boundary:

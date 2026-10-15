@@ -1746,18 +1746,29 @@ def cmd_rename(args, env, out, environ, stop: Optional[threading.Event] = None, 
             if reply.strip().lower() != "yes":
                 safe_write("Nothing was renamed.", out)
                 return 0
-        try:
-            handle = open(args.record, "w", encoding="utf-8-sig", newline="\r\n" if os.name == "nt" else "\n")
+        from . import records
+        try:      # created exclusively above (save_lines), empty; filled as the renames happen
+            handle = open(args.record, "a", encoding="utf-8", newline="\r\n" if os.name == "nt" else "\n")
         except OSError as exc:
             safe_write(f"The record could not be written ({type(exc).__name__}: {exc}); nothing was renamed.", out)
             return 1
+        problems: list = []
         try:
             handle.write(f"pattern\t{found.pattern}\n")
-            done = service.apply_names(found, journal=lambda line: (handle.write(line + "\n"), handle.flush()), stop=stop)
+            done = service.apply_names(found, journal=records.journal_into(handle, problems), stop=stop)
         finally:
-            handle.close()
+            try:
+                handle.close()
+            except OSError:
+                pass
         safe_write(f"Renamed {len(done.renamed):,} picture(s); left {len(done.skipped):,} alone"
                    + (" (stopped)" if done.stopped else "") + f". The record is in {args.record}; `dugup rename --undo {args.record}` puts the names back.", out)
+        if problems:
+            safe_write(f"The record could not be kept up ({problems[0]}). What was renamed:", out)
+            for old_path, new_path in done.renamed:
+                safe_write(f"  {old_path} -> {new_path}", out)
+        if done.index_problems:
+            safe_write(f"{len(done.index_problems)} renamed file(s) could not be updated in the index; the next index update sees the new names.", out)
         for path, why in done.skipped[:20]:
             safe_write(f"  left: {path}: {why}", out)
     return 0

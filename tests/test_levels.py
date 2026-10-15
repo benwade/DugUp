@@ -203,6 +203,35 @@ def test_ocr_leaves_pages_alone_where_the_level_stops_at_words():
     assert OcrRunner(store, Reader(), Settings()).run().held_back == 0, "with no levels in play nothing is held back"
 
 
+def test_a_page_removed_while_its_ocr_is_running_is_a_stale_result_not_a_crash(tmp_path):
+    """The folder is set to names only while the reader has the page: the words come back for a page that is
+    gone. That is an ordinary outcome (report.stale), never an uncaught error that ends the run."""
+    from dugup.ocrqueue import OcrRunner
+    docs = tmp_path / "docs"
+    (docs / "Scans").mkdir(parents=True)
+    layout = DataLayout(tmp_path / "data").ensure()
+    service = LocalService(layout, Settings(content_marks=False))
+    with service:
+        service.set_root(Root(str(docs)))
+        store = service.store
+        for name in ("a.png", "b.png"):
+            row = store.upsert_file(FileRecord(path=str(docs / "Scans" / name), size=1, modified=1.0, kind=FileKind.IMAGE,
+                                               state=FileState.PARTIAL))
+            store.set_pages(row, [PageInfo(1, PageVerdict.NO_LAYER, True)])
+
+        class LoweringReader(Reader):
+            def _one(self, path):
+                if path.endswith("a.png") and not getattr(self, "lowered", False):
+                    self.lowered = True
+                    service.set_level(str(docs / "Scans"), LEVEL_NAMES)      # its pages go while the read is on
+                return super()._one(path)
+
+        runner = OcrRunner(store, LoweringReader(), Settings(ocr_failures_in_a_row=1))
+        report = runner.run()
+        assert report.stale >= 1 and report.failed == 0, "the result for the vanished page is set aside, nothing is marked failed"
+        assert not report.stopped
+
+
 # ---- the command ----------------------------------------------------------------------------------------------
 
 def test_level_command(tmp_path):

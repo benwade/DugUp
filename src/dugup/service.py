@@ -82,12 +82,11 @@ class LocalService:
         self._intent_looked = intent is not None
         self.settings = settings or Settings()
         self.source = source or DirectoryScan()
+        self._own_extractor = extractor is None    # built here from the settings, so rebuilt when they change
         if extractor is not None:
             self.extractor = extractor
-        elif self.settings.isolate_readers:      # the default: files are parsed in a worker process
-            self.extractor = SandboxedExtractor(SubprocessSandbox(), self.settings)
         else:
-            self.extractor = default_extractors(self.settings)
+            self.extractor = self._build_extractor()
         self._open_store = open_store or (lambda: SqliteStore(layout.index, near_words=self.settings.near_words,
                                                                 compress_text=self.settings.text_compression != "none",
                                                                 prefer_under=main_place(self.settings)))
@@ -686,6 +685,8 @@ class LocalService:
             elif not os.path.isfile(path):
                 why = "it is not there now"
             else:
+                if journal is not None:          # the intent first: a crash during the move still leaves a trace
+                    journal(cleanup.record_line("moving", path))
                 why = (mover or trash.to_trash)(path)
             if why:
                 done.skipped.append((path, why))
@@ -851,9 +852,11 @@ class LocalService:
         return found
 
     def apply_names(self, found, journal=None, stop: Optional[StopSignal] = None):
-        """Rename as the plan says (naming.apply); the index follows."""
+        """Rename as the plan says (naming.apply); the index follows. The protections as they stand now are
+        checked for every file, whatever the preview assumed."""
         from . import naming
-        return naming.apply(found.to_rename, self.store, journal, stop)
+        protected = [_place(p.strip()) for p in self.settings.cleanup_protect.split(";") if p.strip()]
+        return naming.apply(found.to_rename, self.store, journal, stop, protected=protected, fold=self._fold)
 
     def undo_names(self, record_text: str, journal=None):
         from . import naming
@@ -1219,6 +1222,8 @@ class LocalService:
         new = catalogue.apply(self.settings, changes)
         if isinstance(new, Failure):
             return new
+        if self.is_indexing() or self._run_guard.locked():
+            return Failure(FailureReason.BUSY, "a run is going on; stop it before changing the settings")
         catalogue.write(self.layout.config, {name: getattr(new, name) for name in changes})
         self.settings = new
         self._forget_intent()
@@ -1226,7 +1231,22 @@ class LocalService:
         if close is not None and isinstance(self._ocr_backend, SandboxOcrBackend):
             close()
             self._ocr_backend = None
+        # the readers and the reading connection were built from the old settings (chunking, isolation,
+        # closeness, compression, the main place): rebuilt, so what is saved is what is used
+        if self._own_extractor:
+            close_readers = getattr(self.extractor, "close", None)
+            if close_readers is not None:
+                close_readers()
+            self.extractor = self._build_extractor()
+        if self._store is not None and threading.get_ident() == self._store_thread:
+            self._store.close()
+            self._store = None
         return new
+
+    def _build_extractor(self):
+        if self.settings.isolate_readers:      # the default: files are parsed in a worker process
+            return SandboxedExtractor(SubprocessSandbox(), self.settings)
+        return default_extractors(self.settings)
 
     def card_readers(self) -> int:
         """How many readers share the graphics card in fast mode. Each still does its drawing and tidying on
