@@ -5,7 +5,16 @@ means, what a picture looks like. Press one key anywhere, type a few letters, an
 Everything runs on your own machine; nothing you have leaves it.
 
 DugUp was inspired by the macOS app [DigUp](https://github.com/ARahim3/DigUp) but is a separate design,
-written from scratch in Python; it shares no code with it. It runs on Windows 11 and Linux.
+written from scratch in Python; it shares no code with it. It runs on Windows 11; Linux is supported and
+tested on Ubuntu (the full test suite runs there on every push, under Python 3.10, 3.12 and 3.13; the window,
+the tray and the search key have had real daily use only on Windows so far).
+
+**Status: alpha.** The searches, the index and the file-changing paths (trash, rename, undo, near-duplicate
+cleanup) have been reviewed independently, probed, and tested on Windows and Linux; the guarantees they keep
+are stated below under *What it touches on your disk*. What makes it an alpha: one person has used the window for
+real; a whole search still runs on the window's thread (the model work does not), so a very large index can
+make it pause; the near-duplicate scan has no stated ceiling yet for collections past about 100,000 pictures;
+and the index is not encrypted. Bug reports with the `dugup doctor` output are welcome.
 
 ## What it does
 
