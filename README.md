@@ -1,35 +1,55 @@
 # DugUp
 
-Local file search for Windows and Linux: find your files by the words inside them. Everything stays on
-your machine.
+Find your files by what is in them: the words inside, the words in a photo or a scan, what a passage
+means, what a picture looks like. Press one key anywhere, type a few letters, and the file opens.
+Everything runs on your own machine; nothing you have leaves it.
 
 DugUp was inspired by the macOS app [DigUp](https://github.com/ARahim3/DigUp) but is a separate design,
-written from scratch in Python; it shares no code with it.
+written from scratch in Python; it shares no code with it. It runs on Windows 11 and Linux.
 
-Status: early. Words in files, and words in pictures and scanned pages (OCR), work and are tested on
-Windows 11 and Linux, from a search window or the command line. Search by meaning and photo search are
-planned and not built yet.
+## What it does
 
-## What works today
+- **Words.** Indexes the folders you choose and finds files by the words in them and in their names:
+  plain text and HTML, PDF text layers, docx/xlsx/pptx and odt/ods/odp. Stemmed, with phrases, closeness
+  and exact-form search, and filters by folder, kind, date and size.
+- **Words in pictures and scans.** Reads photos, screenshots and scanned pages (OCR), so a receipt can be
+  found by the shop's name on it. Document pages first, photos later, tiny graphics last.
+- **Meaning.** A question in your own words finds passages that say the same thing differently, and
+  "Words and meaning" blends the two.
+- **Pictures by likeness.** Pictures of something you name, pictures like another one, and sets of
+  near-duplicates with a keeper chosen and the extras one press from the trash.
+- **Names for pictures.** Photos called IMG_4471.jpg can be renamed from what they show, by a pattern you
+  set, always previewed first, always undoable.
+- **A key anywhere.** `dugup tray` keeps it running; Win+Shift+F brings up a small box over whatever you
+  are doing.
+- **Honest about what it knows.** Every file ends in a stated state; a file that cannot be read says why;
+  a file gone since the last scan stays findable, flagged, for 30 days.
 
-- Choose folders, index them, search by the words in files and in file names.
-- Reads plain text and HTML, PDF text layers, docx/xlsx/pptx and odt/ods/odp.
-- Suggests what to skip (downloaded requirements, tool caches, trash, build output) and never skips by itself.
-- Reads the words in pictures and scanned PDF pages (`dugup ocr`), so a photo can be found by the sign in it.
-  Document pages are read first, then scans and screenshots, then photos, and tiny graphics last.
-- A typed PDF page that holds a sizeable picture is read by OCR as well, for the words inside the figure.
-- A file or page that runs out of time is read once more, after everything else, with double the time.
-  A run of crashes or timeouts pauses the run instead of writing off the queue.
-- Disk guards: a run stops when the drive holding the index is nearly full, and you can give the index a
-  spending limit (`dugup space --limit MB`). Searching keeps working either way.
-- Every file ends in a stated state. A scan or photo is `partial` ("pages wait for OCR") until `dugup ocr`
-  has read it; a file that cannot be read says why.
-- Stop with Ctrl+C and run again to continue. Deleted files stay findable, flagged, for 30 days.
-- Files are parsed, and pictures are read, in separate worker processes with a time limit, so a damaged or
-  hostile file can cost one worker and never the index. This is crash isolation, not a security boundary:
-  the workers run with your own file permissions, and their lack of network access is a shim inside Python
-  (the socket functions are replaced), not an operating-system restriction. A parser with a real
-  vulnerability could still do what you can do.
+## What it touches on your disk
+
+Indexing only reads. The index lives in your own data folder (`%LOCALAPPDATA%\DugUp` on Windows,
+`~/.local/share/DugUp` on Linux), never in the folders you index, and never in a folder that looks
+cloud-synced unless you say so. The two things that change files, clearing out copies and renaming
+pictures, happen only when you ask, show you first, keep a record, and move files to the trash rather
+than deleting them. Logs hold counts and reasons, never your text or file names.
+
+Files are parsed, and pictures read, in separate worker processes with a time limit, so a damaged or
+hostile file can cost one worker and never the index. That is crash isolation, not a security boundary:
+the workers run with your own file permissions, and their lack of network access is a shim inside Python,
+not an operating-system restriction.
+
+## First run
+
+    dugup window
+
+opens the search window and, the first time, a short setup that asks which folders to index and what to
+do with the ones it is unsure about (downloads, caches, build output). Indexing runs while you watch, and
+can be stopped and continued at any time. Searching works on what has been indexed so far.
+
+Then, for the key:
+
+    dugup tray --startup add
+    dugup tray
 
 ## Set up
 
