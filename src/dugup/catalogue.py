@@ -383,6 +383,49 @@ _KINDS = {f.name: str(f.type) for f in fields(Settings) if f.name not in NOT_HER
 _DEFAULTS = Settings()
 
 
+# ---- what each setting costs the machine ----------------------------------------------------------------------
+
+# How much of the machine a setting commands, for the settings window: a word and a line saying what turning
+# it up costs. Settings not named here shape behaviour rather than load.
+COSTS: Dict[str, Tuple[str, str]] = {
+    "index_readers": ("heavy", "each reader is a process of its own: more of them index faster and leave less of the machine for you"),
+    "ocr_fast_readers": ("heavy", "readers side by side in fast mode; each takes about 1.5 GB of memory and two threads"),
+    "ocr_gpu_readers": ("heavy", "readers sharing the graphics card in fast mode; each takes memory on the card"),
+    "ocr_reader_threads": ("medium", "threads each OCR reader may use; more is faster per reader and busier"),
+    "ocr_reader_memory_mb": ("medium", "what one reader is counted as using when working out how many fit"),
+    "ocr_fast_pages": ("medium", "below this many waiting pages a run stays gentle (one reader)"),
+    "ocr_gpu": ("medium", "uses the graphics card and its memory while OCR runs"),
+    "ocr_memory_mb": ("light", "a ceiling on one reader's memory; 0 is no ceiling"),
+    "looks_readers": ("heavy", "picture readers side by side, each a process with the picture model loaded (about 400 MB)"),
+    "looks_gpu": ("medium", "uses the graphics card while pictures are sketched"),
+    "meaning_gpu": ("medium", "uses the graphics card while sketches of meaning are made"),
+    "meaning_model": ("medium", "the larger model (547 MB) is slower to load and run; the small one (90 MB) is less exact"),
+    "meaning_size": ("medium", "full sketches take three times the disk of compact ones"),
+    "meaning_warm_up": ("medium", "loading the question model when the window opens takes a second or two and about 700 MB of memory while the window is open"),
+    "caption_gpu": ("medium", "uses the graphics card while captions are written (1.1 GB model)"),
+    "meaning_after_index": ("medium", "updating the index goes on to make sketches of meaning, with the model loaded"),
+    "looks_after_index": ("medium", "updating the index goes on to sketch pictures"),
+    "ocr_after_index": ("medium", "updating the index goes on to OCR"),
+    "watch_every_minutes": ("light", "a scan of the folders each time; cheap unless much has changed"),
+    "watch_readers": ("medium", "readers a background update may take; 0 keeps it to a quarter of the cores"),
+    "watch_on_battery": ("medium", "background updates on battery cost battery"),
+    "intent_gpu_layers": ("medium", "layers of the plain-words model on the graphics card; 0 keeps it on the processor"),
+    "reader_memory_mb": ("light", "a ceiling on one document reader's memory"),
+    "max_index_mb": ("light", "a spending limit on disk for the index"),
+    "min_free_mb": ("light", "a run stops when the index's drive has less free than this"),
+    "text_compression": ("light", "compressed text takes less disk and a little processor to read back"),
+    "content_marks": ("light", "a hash of each file as it is read; a little processor, saves re-reading copies"),
+    "batch_files": ("light", "files fetched per step; memory goes up with it"),
+}
+
+COST_WORDS = {"heavy": "uses much of the machine", "medium": "uses some of the machine", "light": "costs little"}
+
+
+def cost(name: str) -> Tuple[str, str]:
+    """("heavy"|"medium"|"light"|"", a line on what it costs) for a setting."""
+    return COSTS.get(name, ("", ""))
+
+
 def kind(name: str) -> str:
     """"bool", "int", "float" or "str"."""
     return _KINDS[name]

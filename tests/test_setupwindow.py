@@ -317,15 +317,16 @@ def test_no_wizard_when_there_is_a_folder_already_and_settings_opens_on_request(
     try:
         assert bench.app.wizard is None, "a folder is there: this is not a first start"
         bench.app.open_setup()
-        wizard = bench.app.wizard
-        assert wizard.window.title() == "DugUp settings" and not wizard.plan.first_run and wizard.look is None
-        wizard.changed("near_words", "20")
-        wizard.at = len(wizard.sequence()) - 1
-        wizard.show()
-        wizard.next()
+        shown = bench.app.wizard
+        assert shown.window.title() == "DugUp settings" and shown.look is not None, "the settings window, with a look at the machine on offer"
+        shown.changed("near_words", "20")
+        shown.save()
         assert bench.service.settings.near_words == 20 and "Saved 1 setting(s)." in bench.app.message.get()
         bench.app.open_setup()
-        assert bench.app.wizard is not wizard and not bench.app.wizard.closed
+        assert bench.app.wizard is shown and not shown.closed, "opened again: the same window comes to the front"
+        shown.close()
+        bench.app.open_setup()
+        assert bench.app.wizard is not shown and not bench.app.wizard.closed
     finally:
         bench.app.close()
 

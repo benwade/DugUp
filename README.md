@@ -221,6 +221,18 @@ folder; see `src/dugup/settings.py` for the names and defaults. The ones most li
     min_free_mb = 200          # a run stops when the drive has less than this free
     figure_fraction = 0.1      # a picture this share of a typed page gets the page read by OCR too; 0: off
 
+## Settings
+
+There are many, on purpose: the machine this runs on may be a 32-core workstation or a laptop with 8 GB,
+and the settings are how it is made to fit. **Settings...** in the window shows every one of them, by the
+part of the program it belongs to, the everyday ones first and then the ones that command the most of the
+machine, each with a line of help and a tag (heavy, medium, light) saying what turning it up costs. A box at
+the top finds a setting by any word in its name or its help ("readers", "battery", "card"); a setting that
+differs from its default is marked, with Reset beside it. **Suggest for this machine** looks at the
+computer (cores, memory, disk, the graphics card, with a short speed test) and fills in what fits, with the
+reason under each; nothing is saved until Save. The same settings are reachable from the command line
+(`dugup config list --all`, `get`, `set`, `reset`) and live in `config.toml` in the data folder.
+
 ## From the tray: a key that searches anywhere
 
     dugup tray

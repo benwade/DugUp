@@ -1152,6 +1152,26 @@ class App:
             chosen = roots[0]
         self.start("plan", path=chosen)
 
+    def _settings_window(self):
+        """Every setting, searchable, with what each costs; drawn from the catalogue (settingswindow.py)."""
+        from . import catalogue
+        from .settingswindow import SettingsWindow
+        service = self.service
+        values = {name: getattr(service.settings, name) for name in catalogue.ENTRIES}
+
+        def save(changes) -> str:
+            result = service.apply_settings(changes)
+            if isinstance(result, Failure):
+                return f"That could not be saved: {result.detail}"
+            self.refresh_status()
+            self.say(f"Saved {len(changes)} setting(s).")
+            return ""
+
+        def look(stop):
+            return service.look_at_machine(stop)
+
+        return SettingsWindow(self.root, values, save, look)
+
     def open_setup(self, first_run: bool = False) -> None:
         """The setup wizard (first run: it looks at the computer and suggests) or the Settings window (later:
         every setting, as it stands)."""
@@ -1161,6 +1181,9 @@ class App:
             bring_to_front(self.wizard.window)
             return
         service = self.service
+        if not first_run:
+            self.wizard = self._settings_window()
+            return
         plan = SetupPlan(service.settings, first_run=first_run, advanced=not first_run)
 
         def save(done) -> str:
