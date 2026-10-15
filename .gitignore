@@ -18,3 +18,6 @@ _scratch/
 # directory summaries written by local tooling; not part of the project
 *_brainmap.md
 /index.md
+
+# outside reviews kept beside the code, never published
+DugUp-*review*.md
