@@ -155,8 +155,25 @@ def test_the_tray_takes_commands_and_the_popup_finds_files_by_name_then_by_words
         assert not watcher.running and watcher.last_outcome == "stopped"
         tray.handle("pause")
         assert watcher.paused and watcher.state() == "updates paused"
+        assert summons.summon(stage.layout.root, "state") == "updates paused", "a sentence for the remote"
         tray.handle("resume")
         assert not watcher.paused
+        # free pauses the updates and unloads; load (on a thread) reloads and resumes; "models" says which
+        loads = []
+        stage.service.load_models = lambda: (loads.append(1), ["the question model (searching by meaning)"])[1]
+        stage.service.loaded_models = lambda: ["the question model (searching by meaning)"] if loads else []
+        tray.handle("free")
+        assert watcher.paused and summons.summon(stage.layout.root, "models") == "none"
+        tray.handle("load")
+        assert summons.summon(stage.layout.root, "models") == "loading" or loads, "asked while the thread runs, or done already"
+        for _ in range(200):
+            tray._poll()
+            if not tray.loading:
+                break
+            root.after(10)
+        assert loads == [1] and not tray.loading and not watcher.paused
+        assert summons.summon(stage.layout.root, "models") == "the question model (searching by meaning)"
+        assert any("Loaded: the question model" in text for text in said)
         popup.query.set("")
         popup.search_now()
         assert popup.rows == [] and "Enter opens" in popup.note.get()
@@ -238,3 +255,76 @@ def test_the_window_is_started_with_a_console_free_python_on_windows(tmp_path, m
         root = tmp_path
     assert tray_module.dugup_command(Layout, "window")[0] == str(quiet)
 
+
+
+# -- the remote: a small window that drives the tray
+
+def test_the_remote_drives_the_tray_through_its_summons_and_starts_it_when_there_is_none(stage, tmp_path):
+    """Not running: only Start tray is live, and it starts the tray with this very installation's command.
+    Running: the state the tray reports is shown in the read-only line, each button sends its command, Full
+    window goes through the tray when there is one and starts a window on its own when there is not, and
+    the start-at-login tick writes and removes the entry. Asking happens on a thread; the answer is shown
+    when it arrives, so the test waits for it rather than assuming the asker is quick."""
+    import tkinter as tk
+    from dugup import remote as remote_module
+    root = tk.Toplevel(stage.root)
+    answers = {"state": None, "models": "none"}
+    sent, launched, entries = [], [], {}
+    home = tmp_path / "home"
+
+    def ask(folder, command):
+        sent.append(command)
+        return answers.get(command, "ok" if answers["state"] is not None else None)
+
+    def install():
+        path = tray_module.install_startup(stage.layout, "win32", home)
+        entries["path"] = path
+        return path
+
+    window = remote_module.Remote(root, stage.layout, ask=ask, launch=launched.append, install_startup=install,
+                                      remove_startup=lambda: tray_module.remove_startup("win32", home),
+                                      startup_entry=lambda: tray_module.startup_entry(home, "win32"), platform="win32")
+
+    def settle(tries=50):
+        for _ in range(tries):
+            root.update()
+            if not window.asking and not window.answers.qsize():
+                break
+            root.after(20)
+            root.update()
+        root.update()
+
+    try:
+        settle()
+        assert window.status.get() == remote_module.NOT_RUNNING
+        assert "disabled" not in window.buttons["start"].state() and "disabled" in window.buttons["quit"].state()
+        window.window()
+        assert launched[-1][2:4] == ["dugup", "window"], "no tray: the window is started on its own"
+        window.start_tray()
+        assert launched[-1][2:4] == ["dugup", "tray"] and "--data-dir" in launched[-1]
+        # the tray is up now
+        answers["state"] = "updating (ocr)"
+        window.refresh()
+        for _ in range(100):
+            root.update()
+            if window.status.get() == "updating (ocr)":
+                break
+            root.after(20)
+        assert window.status.get() == "updating (ocr)"
+        assert "disabled" in window.buttons["start"].state() and "disabled" not in window.buttons["free"].state()
+        sent.clear()
+        window.popup(); window.update(); window.free()
+        assert "unloaded" in window.note.get() and "index stays warm" in window.note.get()
+        window.window(); window.quit_tray()
+        assert [c for c in sent if c != "state"] == ["popup", "update", "free", "window", "quit"]
+        assert "unloads every model" in window.note.get()
+        # start at login
+        assert not window.at_login.get()
+        window.at_login.set(True)
+        window.toggle_startup()
+        assert entries["path"].exists() and "dugup tray" in entries["path"].read_text(encoding="utf-8")
+        window.at_login.set(False)
+        window.toggle_startup()
+        assert not entries["path"].exists() and "no longer" in window.note.get()
+    finally:
+        window.close()

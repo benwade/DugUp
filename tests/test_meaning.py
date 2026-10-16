@@ -392,9 +392,14 @@ def test_the_warm_up_is_decided_by_the_setting_and_the_sketches_and_a_sketch_mad
         page = svc.search("tomatoes", filters=SearchFilters(where=WHERE_MEANING), question=question)
         assert page.rows[0].path == "/r/garden.txt"
         # freeing the models ends the kept worker and says so; the next question starts one again
+        assert svc.loaded_models() == ["the question model (searching by meaning)"]
         ended = svc.free_models()
         assert ended == ["the question model (searching by meaning)"] and svc._asker is None
-        assert svc.free_models() == [], "nothing loaded now"
+        assert svc.free_models() == [] and svc.loaded_models() == [], "nothing loaded now"
+        # the opposite: load now (the picture model is not installed here, so it is passed over)
+        assert svc.load_models() == ["the question model (searching by meaning)"] and svc._asker is not None
+        assert svc.loaded_models() == ["the question model (searching by meaning)"]
+        svc.free_models()
         assert svc.search("tomatoes", filters=SearchFilters(where=WHERE_MEANING)).rows[0].path == "/r/garden.txt"
         assert svc._asker is not None, "loaded again on use"
     assert LocalService(layout, Settings(meaning_warm_up="never")).wants_warm_meaning() is False

@@ -72,6 +72,7 @@ class Tray:
         self.say = say or (lambda text: print(text, flush=True))
         self.events: "queue.Queue[str]" = queue.Queue()
         self.closed = False
+        self.loading = False
         from .popup import Popup
         root.withdraw()
         service.list_roots()      # the service's reading connection belongs to the thread that first uses it:
@@ -109,6 +110,32 @@ class Tray:
         ended = self.service.free_models()
         self.say(("Freed: " + ", ".join(ended) + ". " if ended else "No model was loaded. ")
                  + "Background updates are paused so they do not load the models again; resume them from the menu.")
+
+    def load_models(self) -> None:
+        """The opposite of free_models: load the models on a thread (seconds), then resume background updates."""
+        if self.loading:
+            return
+        self.loading = True
+
+        def work():
+            try:
+                loaded = self.service.load_models()
+            except Exception as exc:              # a failed load is reported, never a dead tray
+                loaded, problem = [], f"{type(exc).__name__}: {exc}"
+            else:
+                problem = ""
+            self.events.put(("loaded", loaded, problem))
+
+        threading.Thread(target=work, daemon=True, name="dugup-tray-load").start()
+
+    def _loaded(self, loaded, problem: str) -> None:
+        self.loading = False
+        self.watcher.resume()
+        if problem:
+            self.say(f"The models could not be loaded: {problem}. Background updates resume all the same.")
+        else:
+            self.say(("Loaded: " + ", ".join(loaded) + ". " if loaded else "No model is installed to load. ")
+                     + "Background updates resume.")
 
     def update_index(self) -> None:
         """Update now, in this process, through the watcher (paused or not)."""
@@ -156,6 +183,10 @@ class Tray:
             return "pong"
         if command == "status":
             return "updating" if self.watcher.running else "idle"
+        if command == "state":          # a sentence for a person (the remote); "status" stays a word for programs
+            return self.watcher.state()
+        if command == "models":         # what is loaded, for the remote's toggle; "loading" while a load runs
+            return "loading" if self.loading else (", ".join(self.service.loaded_models()) or "none")
         if command == "stop":          # answered here and now: the asker is waiting to take the lock
             self.watcher.stop()
             return "ok"
@@ -170,6 +201,10 @@ class Tray:
                 command = self.events.get_nowait()
             except queue.Empty:
                 break
+            if isinstance(command, tuple):           # an answer from a thread of our own
+                if command[0] == "loaded":
+                    self._loaded(command[1], command[2])
+                continue
             self.handle(command)
             if self.closed:
                 return
@@ -191,6 +226,8 @@ class Tray:
             self.watcher.stop()
         elif command == "free":
             self.free_models()
+        elif command == "load":
+            self.load_models()
         elif command == "about":
             self.popup.about()
         elif command == "quit":
@@ -220,6 +257,7 @@ def make_pystray_icon(tray: Tray):
         pystray.MenuItem("Stop this update", lambda: tray.events.put("stop"), visible=lambda item: tray.watcher.running),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Free the graphics card and memory", lambda: tray.events.put("free")),
+        pystray.MenuItem("Load the models", lambda: tray.events.put("load")),
         pystray.MenuItem("About DugUp", lambda: tray.events.put("about")),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit DugUp", lambda: tray.events.put("quit")),

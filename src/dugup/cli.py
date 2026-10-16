@@ -281,6 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     window = sub.add_parser("window", parents=[common], help="open the search window")
     window.add_argument("--search", metavar="WORDS", help="search for these words as soon as the window opens")
+    sub.add_parser("remote", parents=[common], help="a small window that starts the tray, brings up the search box, frees the graphics card, quits")
     tray = sub.add_parser("tray", parents=[common], help="stay in the tray, with a key that brings up a search box anywhere")
     tray.add_argument("--startup", choices=("add", "remove"), help="make the tray start when you log in, or stop that")
     tray.add_argument("--quit", action="store_true", help="end the tray that is running")
@@ -1536,6 +1537,29 @@ def cmd_tray(args, env, out, environ) -> int:
     return 0
 
 
+def cmd_remote(args, env, out, environ) -> int:
+    from . import remote as remote_module
+    layout = _layout(args, environ, create=True)
+    try:
+        import tkinter
+    except ImportError:
+        safe_write("The remote needs tkinter, which this Python does not have.", out)
+        return 1
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError as exc:
+        safe_write(f"A window cannot be opened here ({(str(exc).splitlines() or ['no reason'])[0]}).", out)
+        return 1
+    window = remote_module.Remote(root, layout, say=lambda text: safe_write(text, out))
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        window.close()
+    return 0
+
+
 def cmd_popup(args, env, out, environ) -> int:
     from . import summons
     layout = _layout(args, environ, create=False)
@@ -2106,7 +2130,7 @@ def _remove_duplicates(found, service, args, out, environ, stop, install_signals
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "rename": cmd_rename, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "tray": cmd_tray, "popup": cmd_popup, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
+            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "rename": cmd_rename, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "tray": cmd_tray, "remote": cmd_remote, "popup": cmd_popup, "models": cmd_models, "ask": cmd_ask, "config": cmd_config}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

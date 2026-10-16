@@ -282,6 +282,12 @@ all the same, and `dugup tray --quit` ends it. `dugup tray --startup add` makes 
 (a small entry in the Startup folder, or an autostart file on Linux); `--startup remove` takes that back.
 A second `dugup tray` does not start a second one: it brings up the search box of the one running.
 
+`dugup remote` is a small window that drives the tray without a console: a read-only line saying what the
+tray is doing, and buttons for Start tray, Search box, Full window, Update the index now, Quit tray, and one
+that toggles between **Free the graphics card and memory** (the models are unloaded and background updates
+pause, so the card goes to something else while the index stays warm) and **Load the models** (they come
+back and updates resume). A tick starts the tray when you log in. Close the remote and the tray goes on.
+
 While the tray runs, **the index keeps itself current**: once when the tray starts and then every
 `watch_every_minutes` (an hour by default; 0 turns it off), the folders are scanned again, what changed is
 read, and OCR, meaning and looks follow for what is new, gently (a quarter of the cores, OCR in its gentle

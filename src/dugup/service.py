@@ -251,6 +251,31 @@ class LocalService:
             self._forget_intent()
         return result
 
+    def loaded_models(self) -> List[str]:
+        """What is loaded now, in words (the same words free_models ends with); empty when nothing is."""
+        loaded: List[str] = []
+        if self._asker is not None:
+            loaded.append("the question model (searching by meaning)")
+        if self._looker is not None:
+            loaded.append("the picture model (pictures by likeness)")
+        backend = getattr(self._intent, "backend", None)
+        if backend is not None and getattr(backend, "_running", None) is not None:
+            loaded.append("the plain-words model server")
+        if self._ocr_backend is not None:
+            loaded.append("the OCR reader")
+        return loaded
+
+    def load_models(self) -> List[str]:
+        """Load the question model and the picture model now, each when its runtime and files are there,
+        so the next search does not wait: the opposite of free_models. Takes seconds; call it off the window
+        thread. Returns what was loaded, in words; a model that is not installed is passed over."""
+        loaded: List[str] = []
+        if self.meaning_ready() is True and self.warm_meaning() is True:
+            loaded.append("the question model (searching by meaning)")
+        if self.looks_ready() is True and not isinstance(self.sketch_sentence("ready"), Failure):
+            loaded.append("the picture model (pictures by likeness)")
+        return loaded
+
     def free_models(self) -> List[str]:
         """End every kept model worker (the question sketcher, the picture looker, the plain-words server, the
         OCR reader), giving back their memory and the graphics card. Nothing is lost: the next search by
