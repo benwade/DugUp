@@ -122,7 +122,7 @@ def main() -> int:
     expect("[  ok] tkinter" in report, "doctor sees the window toolkit")
     expect("[  ok] ocr: rapidocr" in report, "the OCR engine is installed")
     card_line = next((line for line in report.splitlines() if "ocr: graphics card" in line), "")
-    expect("not usable" in card_line, "no graphics card is claimed on a machine that has none")
+    expect("none found" in card_line, "no graphics card is claimed on a machine that has none")
 
     step("The data folder is beside the program")
     where = run(*dugup, "data", "where")
