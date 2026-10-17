@@ -8,6 +8,6 @@ if exist "%HERE%.venv\Scripts\pythonw.exe" (
     exit /b 0
 )
 echo DugUp could not start: there is no Python environment at "%HERE%.venv".
-echo Set it up first (see README.md, "Set up"), then try again.
+echo Set it up first (see README.md, "Set up from the source"), then try again.
 pause
 exit /b 1

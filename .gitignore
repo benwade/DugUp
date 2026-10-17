@@ -25,3 +25,6 @@ DugUp-*review*.md
 # DugUp's own index and settings, kept beside the code by dugup-data-folder.txt
 /data/
 /data.moving/
+
+# the Windows installer's build output (installer/build.py, ISCC)
+/installer/build/
