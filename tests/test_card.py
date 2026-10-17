@@ -74,3 +74,13 @@ def test_doctor_reads_only_the_answer_not_a_runtimes_banner(monkeypatch):
         done = types.SimpleNamespace(returncode=0, stdout=printed)
         monkeypatch.setattr("subprocess.run", lambda *a, _done=done, **k: _done)
         assert doctor.find_ocr_card() == card
+
+
+def test_doctor_says_none_found_when_the_card_runtime_is_already_installed():
+    from dugup.doctor import Environment, run_checks
+    yes = lambda name: True
+    with_runtime = {c.name: c for c in run_checks(Environment(can_import=yes, ocr_card=lambda: "", directml=lambda: True))}
+    assert "none found" in with_runtime["ocr: graphics card"].detail
+    assert "pip install" not in with_runtime["ocr: graphics card"].detail, "no advice to install what is there"
+    plain = {c.name: c for c in run_checks(Environment(can_import=yes, ocr_card=lambda: "", directml=lambda: False))}
+    assert "onnxruntime-directml" in plain["ocr: graphics card"].detail

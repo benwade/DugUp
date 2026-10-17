@@ -63,6 +63,16 @@ def find_ocr_card() -> str:
         return ""
 
 
+def _has_directml() -> bool:
+    """True when the installed runtime is the DirectML one (it offers a route to a card on every machine)."""
+    try:
+        from importlib.metadata import distribution
+        distribution("onnxruntime-directml")
+        return True
+    except Exception:
+        return False
+
+
 def _elevated() -> bool:
     from . import elevated
     return elevated.is_elevated()
@@ -80,6 +90,7 @@ class Environment:
     sqlite_version: str = sqlite3.sqlite_version
     has_fts5: Callable[[], bool] = lambda: _probe_fts5()
     elevated: Callable[[], bool] = lambda: _elevated()
+    directml: Callable[[], bool] = lambda: _has_directml()
 
     @property
     def is_windows(self) -> bool:
@@ -152,9 +163,14 @@ def run_checks(env: Optional[Environment] = None, data_dir: Optional[os.PathLike
     add("ocr: rapidocr", OK if rapid else WARN, "" if rapid else "not installed (pip install rapidocr onnxruntime)")
     if rapid:
         card = env.ocr_card()
-        add("ocr: graphics card", INFO, f"can be used: {card} (turn on with ocr_gpu = true, or dugup ocr --gpu)" if card else
-            "not usable with the OCR runtime installed (optional; on Windows: pip uninstall onnxruntime, "
-            "then pip install onnxruntime-directml)")
+        if card:
+            add("ocr: graphics card", INFO, f"can be used: {card} (turn on with ocr_gpu = true, or dugup ocr --gpu)")
+        elif env.directml():
+            add("ocr: graphics card", INFO, "none found: the runtime that can use one is installed, but no card "
+                "answered, so the processor is used")
+        else:
+            add("ocr: graphics card", INFO, "not usable with the OCR runtime installed (optional; on Windows: "
+                "pip uninstall onnxruntime, then pip install onnxruntime-directml)")
     add("ocr: tesseract", OK if tess else WARN, tess or "not found")
     if not rapid and not tess:
         add("ocr engine", FAIL, "no OCR engine available; scans and photos cannot be read")
