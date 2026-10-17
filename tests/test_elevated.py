@@ -1,5 +1,6 @@
 """The administrator note and the notes before the window opens."""
 
+import gc
 import io
 import types
 
@@ -58,6 +59,14 @@ def _waiting(tmp_path, monkeypatch):
 
 
 ARGS = types.SimpleNamespace(data_dir=None)
+
+
+@pytest.fixture(autouse=True)
+def windows_are_collected_on_this_thread():
+    """As in test_pickerwindow.py: whatever a test's windows leave behind is collected now, on this thread,
+    never during a later test's background run."""
+    yield
+    gc.collect()
 
 
 def test_no_notes_when_there_is_nothing_to_say(tmp_path):

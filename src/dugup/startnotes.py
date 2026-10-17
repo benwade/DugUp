@@ -44,7 +44,15 @@ def ask_move(parent, old, new) -> str:
     win.wait_variable(answer)
     choice = answer.get()
     win.destroy()
+    _let_go()
     return choice
+
+
+def _let_go() -> None:
+    """Collect a closed window's leftovers now, on the window's thread. Its tkinter variables sit in reference
+    cycles, and collected later on a background thread they abort the process (see pickerwindow.py)."""
+    import gc
+    gc.collect()
 
 
 def run_move(parent, old, new, mover: Callable = datamove.move) -> str:
@@ -75,6 +83,7 @@ def run_move(parent, old, new, mover: Callable = datamove.move) -> str:
             wait.say(f"Moving your index and settings ... {int(100 * progress['done'] / total)}%")
         parent.update()
     wait.close()
+    _let_go()
     if "why" in outcome:
         return outcome["why"]
     moved = outcome["moved"]
