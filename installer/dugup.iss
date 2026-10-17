@@ -41,6 +41,11 @@ Name: "trayatlogin"; Description: "Start DugUp in the tray when I log in (one ke
 ; The data folder is never listed here: it is never touched by installing.
 Type: filesandordirs; Name: "{app}\python"
 
+[UninstallDelete]
+; Python writes cache files beside its own while it runs, which the uninstaller did not install and would
+; leave behind. The program's own Python goes whole. The data folder is never named here.
+Type: filesandordirs; Name: "{app}\python"
+
 [Files]
 Source: "build\DugUp\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

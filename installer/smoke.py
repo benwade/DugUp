@@ -100,12 +100,13 @@ else:
 def main() -> int:
     setup = Path(sys.argv[1]).resolve()
     root = Path(tempfile.mkdtemp(prefix="dugup smoke "))      # a space in the path, on purpose
+    logs = Path(tempfile.mkdtemp(prefix="dugup logs "))       # outside the folder that gets indexed
     app = root / "Programs" / "DugUp"
     corpus = root / "My files"
     corpus.mkdir(parents=True)
 
     step("Install, silently, with no downloads")
-    install(setup, app, root / "logs" / "install.log")
+    install(setup, app, logs / "install.log")
     python, pythonw = app / "python" / "python.exe", app / "python" / "pythonw.exe"
     expect(python.is_file() and pythonw.is_file(), "the bundled Python is installed")
     expect((app / "dugup-data-folder.txt").is_file(), "the marker sits beside the program")
@@ -120,6 +121,7 @@ def main() -> int:
     expect("sqlite fts5" in report and "[FAIL] sqlite" not in report, "the index's full-text search is available")
     expect("[  ok] tkinter" in report, "doctor sees the window toolkit")
     expect("[  ok] ocr: rapidocr" in report, "the OCR engine is installed")
+    expect("can be used: graphics card" not in report, "no graphics card is claimed on a machine that has none")
 
     step("The data folder is beside the program")
     where = run(*dugup, "data", "where")
@@ -152,7 +154,7 @@ def main() -> int:
     expect("notes.txt" in found, "search by meaning works on the processor")
 
     step("Upgrade over the top: the data stays")
-    install(setup, app, root / "logs" / "upgrade.log")
+    install(setup, app, logs / "upgrade.log")
     expect((app / "data" / "index.sqlite").is_file(), "the index survives an upgrade")
     found = run(*dugup, "search", "zebrafish")
     expect("notes.txt" in found, "and still answers")
@@ -160,9 +162,18 @@ def main() -> int:
     step("Uninstall silently: the program goes, the data stays")
     uninstaller = sorted(app.glob("unins*.exe"))
     expect(bool(uninstaller), "an uninstaller is there")
-    run(uninstaller[-1], "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
-    wait_until(lambda: not (app / "python").exists(), "the program's files are removed")
+    run(uninstaller[-1], "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", f"/LOG={logs / 'uninstall.log'}")
+    try:
+        wait_until(lambda: not (app / "python").exists(), "the program's files are removed")
+    finally:
+        leftover = sorted(str(p.relative_to(app)) for p in app.rglob("*") if p.is_file() and "data" not in p.parts)
+        print("left in the program folder:", leftover[:20], "..." if len(leftover) > 20 else "")
+        try:
+            print((logs / "uninstall.log").read_text(encoding="utf-8", errors="replace")[-3000:])
+        except OSError:
+            print("(no uninstall log)")
     expect((app / "data" / "index.sqlite").is_file(), "a silent uninstall keeps the data")
+    expect(not (app / "dugup-data-folder.txt").exists(), "the marker goes with the program")
     print("\nAll smoke checks passed.")
     return 0
 
