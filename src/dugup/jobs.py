@@ -270,18 +270,56 @@ def _page_picture(path: str, page: int, dpi: int):
 GPU_NAMES = {"DmlExecutionProvider": "graphics card (DirectML)", "CUDAExecutionProvider": "graphics card (CUDA)"}
 
 
+_card_checked: Dict[str, bool] = {}
+
+
 def gpu_provider() -> str:
     """The way this machine's OCR runtime can use a graphics card, or "" when it cannot.
-    The runtime decides: the plain package has no such way, the DirectML one (Windows) and the CUDA one do."""
+    The runtime decides: the plain package has no such way, the DirectML one (Windows) and the CUDA one do.
+    Offering a way is not having a card (the DirectML runtime offers it on every Windows machine), so the
+    route is tried once on a small model, and only a route that really reached a card counts."""
     try:
         import onnxruntime
         have = set(onnxruntime.get_available_providers())
     except Exception:
         return ""
     for name in ("CUDAExecutionProvider", "DmlExecutionProvider"):
-        if name in have:
+        if name in have and card_works(name):
             return name
     return ""
+
+
+def card_works(name: str) -> bool:
+    """True when a session asked to use `name` really runs on it (checked once per process). When no small
+    model is at hand to try it with, the runtime's word is taken."""
+    if name not in _card_checked:
+        _card_checked[name] = _try_card(name)
+    return _card_checked[name]
+
+
+def _try_card(name: str) -> bool:
+    try:
+        import pathlib
+        import onnxruntime
+        import rapidocr
+        models = sorted(pathlib.Path(rapidocr.__file__).parent.rglob("*.onnx"), key=lambda p: p.stat().st_size)
+    except Exception:
+        return True
+    if not models:
+        return True
+    try:
+        onnxruntime.set_default_logger_severity(4)          # a missing card is expected here, not an error to print
+        options = onnxruntime.SessionOptions()
+        options.log_severity_level = 4
+        session = onnxruntime.InferenceSession(str(models[0]), options, providers=[name, "CPUExecutionProvider"])
+        return session.get_providers()[0] == name
+    except Exception:
+        return False
+    finally:
+        try:
+            onnxruntime.set_default_logger_severity(2)
+        except Exception:
+            pass
 
 
 def ocr_device(payload: Mapping[str, Any]) -> Dict[str, Any]:

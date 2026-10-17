@@ -35,6 +35,20 @@ SHAPES = {
 SIZES = {"compact": 256, "full": 768}     # the vector-size choice, in numbers kept (the larger model; measured: 128 lost too much)
 
 
+def device_used(session, wanted: str) -> str:
+    """The device a session really runs on, in words. A runtime that offers a card but finds none falls back
+    to the processor by itself; saying "graphics card" then would be untrue."""
+    try:
+        first = session.get_providers()[0]
+    except Exception:
+        return wanted
+    if first == "CUDAExecutionProvider":
+        return "graphics card (CUDA)"
+    if first == "DmlExecutionProvider":
+        return "graphics card (DirectML)"
+    return "processor"
+
+
 class Embedder:
     """One model, loaded once. `embed` takes texts and gives one sketch each, as float32 rows."""
 
@@ -57,6 +71,7 @@ class Embedder:
                     self.device = "graphics card (" + ("CUDA" if name.startswith("CUDA") else "DirectML") + ")"
                     break
         self.session = ort.InferenceSession(os.path.join(folder, shape.model_file), options, providers=providers)
+        self.device = device_used(self.session, self.device)
         self.inputs = {i.name for i in self.session.get_inputs()}
         self.tokenizer = Tokenizer.from_file(os.path.join(folder, shape.tokenizer_file))
         self.tokenizer.enable_truncation(shape.max_tokens)
@@ -139,6 +154,7 @@ class Looker:
                     self.device = "graphics card (" + ("CUDA" if name.startswith("CUDA") else "DirectML") + ")"
                     break
         self.pictures = ort.InferenceSession(os.path.join(folder, LOOKS_FILES["pictures"]), self.options, providers=self.providers)
+        self.device = device_used(self.pictures, self.device)
         self._words = None
         self._tokenizer = None
 
@@ -224,6 +240,7 @@ class Captioner:
                     break
         load = lambda part: ort.InferenceSession(os.path.join(folder, CAPTION_FILES[part]), options, providers=providers)
         self.vision, self.embed, self.encoder, self.decoder = load("vision"), load("embed"), load("encoder"), load("decoder")
+        self.device = device_used(self.vision, self.device)
         self.tokenizer = Tokenizer.from_file(os.path.join(folder, CAPTION_FILES["tokenizer"]))
 
     @staticmethod
