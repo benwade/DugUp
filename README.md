@@ -522,7 +522,7 @@ The same footing will carry an MCP server, so an assistant on this machine can a
 | `extractors/` | One reader per family (text, PDF, Office, image) and the set that picks between them. |
 | `indexer.py` | Scan, record changes, read what is waiting. Talks only to the three contracts above. |
 | `service.py` | LocalService: what every client talks to. Policy and the single writer live here. |
-| `cli.py` | The command line, a client of the service. |
+| `cli/` | The command line, a client of the service: one module per group of commands, with the ones that change files on disk (`changes_cmds.py`) kept apart. |
 | `window.py`, `desktop.py` | The search window (tkinter), another client of the service, and handing a file to the desktop. |
 | `launcher.py` | The one place outside programs and workers are started; ends a program with everything it started. |
 | `sandbox.py`, `worker.py`, `jobs.py` | The Sandbox: risky work in a worker process with limits, and what crosses the boundary. |
