@@ -121,7 +121,8 @@ def main() -> int:
     expect("sqlite fts5" in report and "[FAIL] sqlite" not in report, "the index's full-text search is available")
     expect("[  ok] tkinter" in report, "doctor sees the window toolkit")
     expect("[  ok] ocr: rapidocr" in report, "the OCR engine is installed")
-    expect("can be used: graphics card" not in report, "no graphics card is claimed on a machine that has none")
+    card_line = next((line for line in report.splitlines() if "ocr: graphics card" in line), "")
+    expect("not usable" in card_line, "no graphics card is claimed on a machine that has none")
 
     step("The data folder is beside the program")
     where = run(*dugup, "data", "where")
