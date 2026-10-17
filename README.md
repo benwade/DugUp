@@ -14,7 +14,7 @@ cleanup) have been reviewed independently, probed, and tested on Windows and Lin
 are stated below under *What it touches on your disk*. What makes it an alpha: one person has used the window for
 real; a whole search still runs on the window's thread (the model work does not), so a very large index can
 make it pause; the near-duplicate scan has no stated ceiling yet for collections past about 100,000 pictures;
-and the index is not encrypted yet (encryption is planned, not implemented; see *Before you install*). Bug
+and the index is not yet encrypted (encryption is planned, not implemented; see *Before you install*). Bug
 reports with the `dugup doctor` output are welcome.
 
 ## What it does
@@ -49,7 +49,7 @@ crash reporting. Indexing, OCR, meaning, pictures and captions all run on this m
   indexed folders' paths (so it can name one), never the files themselves.
 
 What is kept, and where: the index is a plain SQLite file in your own data folder, holding the text that
-was read from your files, so it is as private as that folder and no more. **It is not encrypted:
+was read from your files, so it is as private as that folder and no more. **It is not yet encrypted:
 encryption is planned, not implemented.** Anyone who can read the folder can read it; your disk encryption,
 if any, covers it (see *Before you install*). Logs hold counts and reason
 codes, never your text or your file names. The records of what was moved to the trash or renamed hold the
@@ -127,7 +127,7 @@ Then, for the key:
     dugup tray --startup add
     dugup tray
 
-## Before you install: the index is not encrypted
+## Before you install: the index is not yet encrypted
 
 **Encryption of the index is planned, not implemented.** The index holds the text DugUp read from your
 files, in a plain file in its data folder. Anyone who can read that folder can read that text: another
@@ -166,7 +166,7 @@ the answer is No unless you say otherwise, because the undo records in it cannot
 
 ## Set up from the source
 
-The index is not encrypted (planned, not implemented): read *Before you install* first. From a copy of the
+The index is not yet encrypted (planned, not implemented): read *Before you install* first. From a copy of the
 source, the data folder is `data` inside that copy, so the copy's folder needs the same care.
 
 Python 3.10 or newer. From the folder you cloned into:
