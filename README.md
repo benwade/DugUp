@@ -14,7 +14,8 @@ cleanup) have been reviewed independently, probed, and tested on Windows and Lin
 are stated below under *What it touches on your disk*. What makes it an alpha: one person has used the window for
 real; a whole search still runs on the window's thread (the model work does not), so a very large index can
 make it pause; the near-duplicate scan has no stated ceiling yet for collections past about 100,000 pictures;
-and the index is not encrypted. Bug reports with the `dugup doctor` output are welcome.
+and the index is not encrypted yet (encryption is planned, not implemented; see *Before you install*). Bug
+reports with the `dugup doctor` output are welcome.
 
 ## What it does
 
@@ -48,8 +49,9 @@ crash reporting. Indexing, OCR, meaning, pictures and captions all run on this m
   indexed folders' paths (so it can name one), never the files themselves.
 
 What is kept, and where: the index is a plain SQLite file in your own data folder, holding the text that
-was read from your files, so it is as private as that folder and no more; it is not encrypted, and anyone
-who can read the folder can read it (your disk encryption, if any, covers it). Logs hold counts and reason
+was read from your files, so it is as private as that folder and no more. **It is not encrypted:
+encryption is planned, not implemented.** Anyone who can read the folder can read it; your disk encryption,
+if any, covers it (see *Before you install*). Logs hold counts and reason
 codes, never your text or your file names. The records of what was moved to the trash or renamed hold the
 file names, since that is what undo needs. Delete the data folder and all of it is gone.
 
@@ -125,6 +127,23 @@ Then, for the key:
     dugup tray --startup add
     dugup tray
 
+## Before you install: the index is not encrypted
+
+**Encryption of the index is planned, not implemented.** The index holds the text DugUp read from your
+files, in a plain file in its data folder. Anyone who can read that folder can read that text: another
+person using your account, a backup that copies the folder, or someone who has the disk itself. Until
+encryption arrives:
+
+- **Keep the data folder on an encrypted drive.** On Windows, turn on BitLocker, or *Device encryption*
+  (Settings, Privacy & security) where BitLocker is not offered. On Linux, use an encrypted disk (LUKS).
+- **Install where only your account can read.** The installer's default folder is; a shared folder is not.
+  DugUp already refuses a cloud-synced folder unless you allow it.
+- **Leave out what should not be copied as text.** Exclude those folders, or index them by file name only
+  (`dugup roots level <folder> names`).
+
+This notice will change when encryption ships; until then, treat the data folder as being as sensitive as
+the files you index.
+
 ## Install on Windows
 
 Download `DugUp-Setup-<version>.exe` from the [Releases](https://github.com/benwade/DugUp/releases) page and run
@@ -146,6 +165,9 @@ Windows may say the installer is from an *unknown publisher*: it is not signed w
 the answer is No unless you say otherwise, because the undo records in it cannot be made again.
 
 ## Set up from the source
+
+The index is not encrypted (planned, not implemented): read *Before you install* first. From a copy of the
+source, the data folder is `data` inside that copy, so the copy's folder needs the same care.
 
 Python 3.10 or newer. From the folder you cloned into:
 
