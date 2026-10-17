@@ -17,6 +17,17 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_posix)
 
 
+@pytest.fixture(autouse=True)
+def no_marker_and_not_elevated(monkeypatch):
+    """The checkout carries a marker that puts the data folder beside the code, and a test machine may run
+    as root or administrator. Neither should change what a test sees: a test that wants a marker or an
+    elevated run says so (see test_datadir.py, test_elevated.py)."""
+    from dugup import datadir, elevated
+
+    monkeypatch.setattr(datadir, "find_program_home", lambda *args, **kwargs: None)
+    monkeypatch.setattr(elevated, "is_elevated", lambda: False)
+
+
 @pytest.fixture
 def store_path(tmp_path):
     return tmp_path / "index.sqlite"

@@ -422,7 +422,7 @@ class LocalService:
                                    f"that folder overlaps a folder that is already indexed ({other.path}). "
                                    "Choose what to index inside that one instead")
         target = known.path if known else target
-        own_data = (str(self.layout.root),)
+        own_data = self._never_indexed()
         base = target.rstrip("/\\")
         extra = tuple(f[len(base) + 1:].replace("\\", "/") for f in own_data if f.startswith(base + "/") or f.startswith(base + "\\"))
         listing = self._lister().scan(target, ScanRules((), extra), stop)
@@ -451,6 +451,9 @@ class LocalService:
                 return Failure(FailureReason.UNREACHABLE, f"not a folder that can be reached right now: {path}")
             if is_within(path, self.layout.root):
                 return Failure(FailureReason.UNSUPPORTED, "that folder is inside the program's own data folder")
+            for own in self._never_indexed()[1:]:
+                if is_within(path, own):
+                    return Failure(FailureReason.UNSUPPORTED, "that folder is inside DugUp's own program folder")
             for other in known.values():
                 if _under(path, other.path, self._fold) or _under(other.path, path, self._fold):
                     return Failure(FailureReason.UNSUPPORTED,
@@ -515,6 +518,15 @@ class LocalService:
         home = [p.strip() for p in self.settings.cleanup_prefer.split(";") if p.strip()] + [p for p in preferred if p.strip()]
         return cleanup.report(self.store, _place(drive), [_place(p) for p in kept], self.case_insensitive,
                               [_place(p) for p in home])
+
+    def _never_indexed(self) -> Tuple[str, ...]:
+        """The data folder in use first, then the program's own folders its marker names: never indexed."""
+        from . import datadir
+        folders = [str(self.layout.root)]
+        home = datadir.find_program_home()
+        if home is not None:
+            folders += [str(p) for p in home.never_indexed() if str(p) not in folders]
+        return tuple(folders)
 
     def _own_journal(self, kind: str, stem: str, journal):
         """The journal a file-changing operation records into. A caller may pass one (the window and the
@@ -1288,7 +1300,7 @@ class LocalService:
 
                     more = self._more_index_readers((readers if readers else self.index_readers()) - 1)
                     indexer = Indexer(store, self.source, self.extractor, self.settings, tell, self.clock,
-                                      extra_excludes=(str(self.layout.root),), room=self.room,
+                                      extra_excludes=self._never_indexed(), room=self.room,
                                       size_now=self.layout.index_bytes, case_insensitive=self.case_insensitive,
                                       extra_extractors=more)
                     report = indexer.run(stop, roots, on_settings_change, retry_failed)

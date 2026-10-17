@@ -60,6 +60,11 @@ def find_ocr_card() -> str:
         return ""
 
 
+def _elevated() -> bool:
+    from . import elevated
+    return elevated.is_elevated()
+
+
 @dataclass
 class Environment:
     which: Callable[[str], Optional[str]] = shutil.which
@@ -71,6 +76,7 @@ class Environment:
     program_dirs: Sequence[str] = field(default_factory=_program_dirs)
     sqlite_version: str = sqlite3.sqlite_version
     has_fts5: Callable[[], bool] = lambda: _probe_fts5()
+    elevated: Callable[[], bool] = lambda: _elevated()
 
     @property
     def is_windows(self) -> bool:
@@ -131,6 +137,12 @@ def run_checks(env: Optional[Environment] = None, data_dir: Optional[os.PathLike
             add("data folder", OK, str(data_dir))
         except DataDirError as exc:
             add("data folder", FAIL, exc.reason)
+
+    if env.elevated():
+        add("administrator rights", INFO, "running with them. Nothing is wrong; as a precaution, DugUp is best "
+            "started the ordinary way")
+    else:
+        add("administrator rights", OK, "not used (the usual way to run DugUp)")
 
     rapid = env.can_import("rapidocr")
     tess = find_tesseract(env)

@@ -24,6 +24,12 @@ def cmd_window(args, env, out, environ) -> int:
         safe_write(f"A window cannot be opened here ({first_line}). The other commands work without one.", out)
         return 1
     try:
+        root.withdraw()                          # the notes first, on their own, before anything opens the index
+        try:
+            from ..startnotes import before_window
+            before_window(root, args, environ)
+        finally:
+            root.deiconify()
         service = _service(args, environ, out, create=True)
     except BaseException:
         root.destroy()

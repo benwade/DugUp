@@ -1,0 +1,5 @@
+# DugUp keeps its index, settings, logs and records in the folder named on the "data" line, beside this file.
+# Delete this file to go back to the per-user folder (%LOCALAPPDATA%\DugUp on Windows, ~/.local/share/DugUp on Linux).
+# "skip" lines name the program's own folders that are never indexed. In a source checkout there are none:
+# your copy of the code stays searchable. The data folder is never indexed either way.
+data = data

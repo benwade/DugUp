@@ -55,9 +55,8 @@ file names, since that is what undo needs. Delete the data folder and all of it 
 
 ## What it touches on your disk
 
-Indexing only reads. The index lives in your own data folder (`%LOCALAPPDATA%\DugUp` on Windows,
-`~/.local/share/DugUp` on Linux), never in the folders you index, and never in a folder that looks
-cloud-synced unless you say so. The two things that change files, clearing out copies and renaming
+Indexing only reads. The index lives in DugUp's own data folder (see *Where DugUp keeps its data*, below),
+never in the folders you index, and never in a folder that looks cloud-synced unless you say so. The two things that change files, clearing out copies and renaming
 pictures, happen only when you ask, show you first, keep a record, and move files to the trash rather
 than deleting them. On Windows that is the Recycle Bin through the shell, which warns, with its own
 dialog, in the rare case where it could only delete outright (a drive with no bin); that is a warning you
@@ -88,6 +87,30 @@ Files are parsed, and pictures read, in separate worker processes with a time li
 hostile file can cost one worker and never the index. That is crash isolation, not a security boundary:
 the workers run with your own file permissions, and their lack of network access is a shim inside Python,
 not an operating-system restriction.
+
+## Where DugUp keeps its data
+
+Everything DugUp writes (the index, settings, logs, downloaded models, and the records that make undo
+possible) lives in one data folder. Which one, in order:
+
+1. `--data-dir FOLDER` on the command line, or the `DUGUP_DATA_DIR` setting.
+2. Beside the program, when a `dugup-data-folder.txt` file sits there: an installed DugUp and a copy of the
+   source both have one, so the program and its data are one folder (`data\` inside it). The file also
+   names the program's own folders, which are never indexed.
+3. Otherwise the per-user folder: `%LOCALAPPDATA%\DugUp` on Windows, `~/.local/share/DugUp` on Linux.
+
+If DugUp finds an index in the per-user folder and none beside the program (from an earlier version), it
+keeps using the older one and asks once: move it beside the program, or keep it where it is. The window
+asks when it opens; on the command line, `dugup data move` and `dugup data keep` answer, and
+`dugup data where` says which folder is in use and why. A move copies everything, checks the copy, and only
+then removes the old folder; it waits if the tray or an indexing run is using it. The tray's
+start-at-login entry is pointed at the new place.
+
+The undo records live in the data folder too. The index can always be rebuilt; the records cannot, so keep
+the data folder if you may want to undo a rename or bring back what was cleared out.
+
+If DugUp runs with administrator rights it says so, once, as a precaution: nothing is wrong, but a program
+that opens many kinds of files is better run with ordinary rights. It never stops anything.
 
 ## First run
 
@@ -260,9 +283,8 @@ Lowering a folder to `names` removes the text kept for it at once. To leave a fo
 `dugup roots exclude`. In the picker these are tick columns, with "Apply to everything inside" and
 "Follow the folder above" for the selected folder.
 
-`python -m dugup ...` does the same. The index lives in one per-user data folder (`%LOCALAPPDATA%\DugUp`
-on Windows, `~/.local/share/DugUp` on Linux); add `--data-dir FOLDER` to any command to keep it somewhere
-else. Deleting that folder removes everything DugUp stored. Settings go in `config.toml` in the data
+`python -m dugup ...` does the same. Add `--data-dir FOLDER` to any command to keep the index somewhere else
+(see *Where DugUp keeps its data*). Deleting the data folder removes everything DugUp stored. Settings go in `config.toml` in the data
 folder; see `src/dugup/settings.py` for the names and defaults. The ones most likely to matter:
 
     reader_seconds = 60        # time for one file, plus reader_seconds_per_mb (2) for each megabyte
@@ -552,6 +574,7 @@ The same footing will carry an MCP server, so an assistant on this machine can a
 | `intent.py`, `models.py` | Experimental: the same through a small language model, and fetching that model and its runtime. |
 | `suggest.py` | Suggestions for what to skip (a proposal for the user, never applied by itself). |
 | `settings.py`, `kinds.py`, `datadir.py`, `lockfile.py`, `doctor.py` | Settings, file kinds, the data folder, the run lock, the health report. |
+| `datamove.py`, `startnotes.py`, `elevated.py` | Moving the data folder beside the program; what the window says before it opens; the administrator note. |
 
 ## License
 

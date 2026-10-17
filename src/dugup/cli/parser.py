@@ -13,7 +13,7 @@ from ..store import SORT_COLUMNS
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--data-dir", help="the program's data folder (default: environment, then per-user folder)")
+    common.add_argument("--data-dir", help="the program's data folder (default: environment, then beside the program, then per-user folder)")
     common.add_argument("--never-write", action="append", default=[], metavar="FOLDER",
                         help="a folder the program must never write to (repeatable)")
     common.add_argument("--allow-synced", action="store_true", help="allow a data folder that looks cloud-synced")
@@ -246,6 +246,13 @@ def build_parser() -> argparse.ArgumentParser:
     rename.add_argument("--undo", metavar="RECORD", help="put the names in this record back, last first")
     rename.add_argument("--gpu", dest="gpu", action="store_true", default=None)
     rename.add_argument("--no-gpu", dest="gpu", action="store_false")
+    data = sub.add_parser("data", help="where DugUp keeps its index and settings, and moving them beside the program")
+    data_sub = data.add_subparsers(dest="data_command", required=True)
+    data_sub.add_parser("where", parents=[common], help="the data folder in use, and why that one")
+    moving = data_sub.add_parser("move", parents=[common],
+                                 help="move an index from the per-user folder into the folder beside the program")
+    moving.add_argument("--yes", action="store_true", help="do not ask")
+    data_sub.add_parser("keep", parents=[common], help="keep using the per-user folder, and stop being asked")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")
