@@ -169,7 +169,8 @@ def test_ctrl_c_during_the_checks_stops_cleanly(monkeypatch, tmp_path):
     def interrupted(*args, **kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(cli, "run_checks", interrupted)
+    from dugup.cli import setup_cmds
+    monkeypatch.setattr(setup_cmds, "run_checks", interrupted)   # cmd_doctor looks it up there
     code, text = run_cli(["doctor", "--data-dir", str(tmp_path / "d")], fake_env())
     assert code == 130 and "Interrupted" in text
 
