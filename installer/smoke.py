@@ -48,9 +48,18 @@ def wait_until(condition, what: str, limit: float = 300) -> None:
     print(f"ok: {what}")
 
 
-def install(setup: Path, folder: Path) -> None:
-    run(setup, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", f"/DIR={folder}",
-        f"/LOG={folder.parent / 'setup.log'}")
+def install(setup: Path, folder: Path, log: Path) -> None:
+    """Install silently; on failure, show the setup log, which says why."""
+    log.parent.mkdir(parents=True, exist_ok=True)       # Setup will not start if it cannot write its log
+    print("+", setup, "(silent install into", folder, ")", flush=True)
+    done = subprocess.run([str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER",
+                           f"/DIR={folder}", f"/LOG={log}"], timeout=1800)
+    if done.returncode != 0:
+        try:
+            print(log.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            print("(no setup log was written)")
+        sys.exit(f"FAILED: the installer ended with code {done.returncode}")
 
 
 PICTURE = r"""
@@ -96,7 +105,7 @@ def main() -> int:
     corpus.mkdir(parents=True)
 
     step("Install, silently, with no downloads")
-    install(setup, app)
+    install(setup, app, root / "logs" / "install.log")
     python, pythonw = app / "python" / "python.exe", app / "python" / "pythonw.exe"
     expect(python.is_file() and pythonw.is_file(), "the bundled Python is installed")
     expect((app / "dugup-data-folder.txt").is_file(), "the marker sits beside the program")
@@ -143,7 +152,7 @@ def main() -> int:
     expect("notes.txt" in found, "search by meaning works on the processor")
 
     step("Upgrade over the top: the data stays")
-    install(setup, app)
+    install(setup, app, root / "logs" / "upgrade.log")
     expect((app / "data" / "index.sqlite").is_file(), "the index survives an upgrade")
     found = run(*dugup, "search", "zebrafish")
     expect("notes.txt" in found, "and still answers")
