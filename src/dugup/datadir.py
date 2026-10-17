@@ -2,9 +2,16 @@
 
 Everything the program writes lives under one folder, so deleting the program's
 data is deleting that folder. The folder is chosen, in order, by the command
-line, the environment, then the per-user default. It is never inside a folder
-the user said the program must not write to, and by default never inside a
-folder that looks cloud-synced.
+line, the environment, a marker file beside the program, then the per-user
+default. It is never inside a folder the user said the program must not write
+to, and by default never inside a folder that looks cloud-synced.
+
+The marker (`dugup-data-folder.txt`) is how one folder holds both the program
+and its data: the installer writes one, and a source checkout carries one. It
+names the data folder beside it and the program's own folders that are never
+indexed. An index already in the per-user folder is never left behind
+silently: until it is moved in, or the user chooses to keep it where it is,
+that older folder stays the one in use.
 """
 
 from __future__ import annotations
@@ -14,7 +21,7 @@ import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Optional
+from typing import Callable, Iterable, List, Mapping, Optional, Tuple
 
 import platformdirs
 
@@ -39,6 +46,109 @@ class DataDirError(Exception):
 
 def default_data_dir() -> Path:
     return Path(platformdirs.user_data_dir(APP_NAME, appauthor=False))
+
+
+# ---- the folder beside the program -------------------------------------------------------------------------
+
+MARKER_NAME = "dugup-data-folder.txt"
+KEPT_ELSEWHERE = "use-folder.txt"   # in the folder beside the program: the user kept an older data folder in use
+MARKER_SEARCH_DEPTH = 5             # src/dugup -> checkout is 2 up; <app>/python/Lib/site-packages/dugup is 4
+
+
+@dataclass(frozen=True)
+class ProgramHome:
+    """The program's own folder, found by its marker: where its data lives and what is never indexed."""
+
+    folder: Path                  # the folder holding the marker
+    data: Path                    # the data folder the marker names (beside it)
+    skip: Tuple[Path, ...] = ()   # the program's own folders, never indexed (the data folder always is)
+
+    def never_indexed(self) -> Tuple[Path, ...]:
+        return (self.data,) + tuple(self.skip)
+
+
+def read_marker(path: os.PathLike | str) -> ProgramHome:
+    """Read a marker file: `data = <folder>` (default `data`) and any number of `skip = <folder>` lines, each
+    relative to the marker's own folder. Blank lines and lines starting with # are notes. Unknown names are
+    ignored, so a newer marker still works with an older DugUp."""
+    path = Path(path)
+    folder = Path(os.path.abspath(path.parent))
+    data = "data"
+    skip: List[str] = []
+    for raw in path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name, value = name.strip().lower(), value.strip().strip('"')
+        if name == "data" and value:
+            data = value
+        elif name == "skip" and value:
+            skip.append(value)
+    return ProgramHome(folder, Path(os.path.abspath(folder / data)),
+                       tuple(Path(os.path.abspath(folder / s)) for s in skip))
+
+
+def find_program_home(start: Optional[os.PathLike | str] = None, depth: int = MARKER_SEARCH_DEPTH) -> Optional[ProgramHome]:
+    """The marker beside the program, looked for from this package's folder upwards, or None."""
+    here = Path(os.path.abspath(start if start is not None else Path(__file__).parent))
+    for folder in [here, *here.parents][:depth + 1]:
+        marker = folder / MARKER_NAME
+        if marker.is_file():
+            try:
+                return read_marker(marker)
+            except (OSError, UnicodeDecodeError):
+                return None   # an unreadable marker is no marker: the per-user default stays in use
+    return None
+
+
+def has_index(folder: os.PathLike | str) -> bool:
+    return (Path(folder) / "index.sqlite").is_file()
+
+
+def kept_elsewhere(data: os.PathLike | str) -> Optional[Path]:
+    """The older data folder the user chose to keep using, when that choice is recorded beside the program."""
+    note = Path(data) / KEPT_ELSEWHERE
+    try:
+        lines = note.read_text(encoding="utf-8-sig").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return Path(line)
+    return None
+
+
+@dataclass(frozen=True)
+class BesideChoice:
+    """What the folder beside the program means right now."""
+
+    path: Path                            # the data folder to use
+    home: ProgramHome
+    move_from: Optional[Path] = None      # an index in the older per-user folder, not yet moved in or kept
+
+
+def choose_beside(home: ProgramHome, per_user: Path) -> BesideChoice:
+    """The data folder beside the program, unless the user kept an older one, or an older index is waiting
+    for the user to say what to do with it: until then that older folder stays in use, so nothing looks lost."""
+    kept = kept_elsewhere(home.data)
+    if kept is not None and kept.is_dir():
+        return BesideChoice(kept, home)
+    if not has_index(home.data) and has_index(per_user) and not is_within(per_user, home.data):
+        return BesideChoice(per_user, home, move_from=per_user)
+    return BesideChoice(home.data, home)
+
+
+def beside_program(cli_value: Optional[str] = None, environ: Optional[Mapping[str, str]] = None,
+                   home: Optional[Callable[[], Optional[ProgramHome]]] = None,
+                   default: Optional[Callable[[], Path]] = None) -> Optional[BesideChoice]:
+    """The choice the marker makes, or None when the command line, the environment or a missing marker decides."""
+    environ = os.environ if environ is None else environ
+    if cli_value or environ.get(ENV_DATA_DIR):
+        return None
+    found = (home or find_program_home)()
+    return choose_beside(found, Path(os.path.abspath((default or default_data_dir)()))) if found is not None else None
 
 
 def is_within(path: os.PathLike | str, root: os.PathLike | str) -> bool:
@@ -79,14 +189,21 @@ def never_write_from_env(environ: Optional[Mapping[str, str]] = None) -> list:
 def resolve_data_dir(
     cli_value: Optional[str] = None,
     environ: Optional[Mapping[str, str]] = None,
-    default: Callable[[], Path] = default_data_dir,
+    default: Optional[Callable[[], Path]] = None,
     never_write: Iterable[os.PathLike | str] = (),
     allow_synced: bool = False,
+    home: Optional[Callable[[], Optional[ProgramHome]]] = None,
 ) -> Path:
-    """Pick the data folder: command line, then environment, then the default."""
+    """Pick the data folder: command line, then environment, then the marker beside the program, then the
+    default."""
     environ = os.environ if environ is None else environ
     chosen = cli_value or environ.get(ENV_DATA_DIR) or None
-    path = Path(chosen).expanduser() if chosen else Path(default())
+    if chosen:
+        path = Path(chosen).expanduser()
+    else:
+        default = default or default_data_dir
+        beside = beside_program(None, environ, home, default)
+        path = beside.path if beside is not None else Path(default())
     path = Path(os.path.abspath(path))
     check_allowed(path, never_write, allow_synced)
     return path

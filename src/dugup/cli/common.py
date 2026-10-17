@@ -24,8 +24,20 @@ def _layout(args, environ, create: bool) -> DataLayout:
     return DataLayout(data_dir)
 
 
+def _notes(args, environ, out: TextIO) -> None:
+    """Notes every command shows when they apply: an older index waiting to be moved, administrator rights."""
+    from .. import elevated
+    from .data_cmds import pending_move_note
+    note = pending_move_note(args, environ)
+    if note:
+        safe_write(note, out)
+    if elevated.is_elevated():
+        safe_write(elevated.LINE, out)
+
+
 def _service(args, environ, out: TextIO, create: bool) -> Optional[LocalService]:
     layout = _layout(args, environ, create)
+    _notes(args, environ, out)
     if not create and not layout.index.exists():
         safe_write(f"There is no index yet in {layout.root}. Start with: dugup roots add <folder>", out)
         return None

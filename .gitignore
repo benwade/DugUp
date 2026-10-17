@@ -21,3 +21,7 @@ _scratch/
 
 # outside reviews kept beside the code, never published
 DugUp-*review*.md
+
+# DugUp's own index and settings, kept beside the code by dugup-data-folder.txt
+/data/
+/data.moving/
