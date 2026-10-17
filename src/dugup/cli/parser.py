@@ -246,6 +246,15 @@ def build_parser() -> argparse.ArgumentParser:
     rename.add_argument("--undo", metavar="RECORD", help="put the names in this record back, last first")
     rename.add_argument("--gpu", dest="gpu", action="store_true", default=None)
     rename.add_argument("--no-gpu", dest="gpu", action="store_false")
+    download = sub.add_parser("download", parents=[common],
+                              help="fetch the optional models now, all at once (sizes and free space shown first)")
+    download.add_argument("--list", action="store_true", help="only show what would be downloaded")
+    download.add_argument("--yes", action="store_true", help="do not ask")
+    download.add_argument("--plain-words", action="store_true",
+                          help="include the experimental plain-words language model (off by default)")
+    download.add_argument("--only", nargs="+", choices=("meaning", "looks", "captions", "words"), metavar="NAME",
+                          help="just these: meaning, looks, captions, words")
+    download.add_argument("--window", action="store_true", help="show the downloads in a small window")
     data = sub.add_parser("data", help="where DugUp keeps its index and settings, and moving them beside the program")
     data_sub = data.add_subparsers(dest="data_command", required=True)
     data_sub.add_parser("where", parents=[common], help="the data folder in use, and why that one")
