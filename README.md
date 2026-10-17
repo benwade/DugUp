@@ -63,6 +63,27 @@ than deleting them. On Windows that is the Recycle Bin through the shell, which 
 dialog, in the rare case where it could only delete outright (a drive with no bin); that is a warning you
 can answer, not a guarantee, so read it. Logs hold counts and reasons, never your text or file names.
 
+What the record promises, for every file it changes (trash, rename, undo, clearing out copies):
+
+- **The record comes first.** Before a file is touched, a line saying what is about to happen is written to
+  the record and confirmed by the disk. If that line cannot be written, the file is left alone and nothing
+  after it happens either.
+- **A change is never hidden.** If a file was changed but the line saying so cannot be written, DugUp
+  reports the change, stops there, and changes nothing more; the line written beforehand is already on disk.
+- **It must still be the same file.** A file is changed only if it is still the one you were shown: the same
+  size, time and, where the disk keeps one, file ID as when it was indexed and previewed. That holds when you
+  pick a different copy to keep, and for undo. A file edited or replaced since then is marked as changed and
+  left alone.
+- **Rules you set apply when it happens.** Protected folders are checked again at the moment of the change,
+  not only at preview, and again for undo.
+- **Renames never overwrite.** A new name that is already taken is refused, in one step, on Windows and on
+  Linux's common filesystems. On a disk that offers neither of the safe ways, a last resort is used that has
+  a brief window another program writing the same name at the same instant could slip into.
+- **Old records still undo.** Records written by earlier versions can still be undone, with the same checks.
+
+These checks catch the changes they were tested against; they are not a proof against every way a file's
+contents could change, and a power cut mid-change has not been tested.
+
 Files are parsed, and pictures read, in separate worker processes with a time limit, so a damaged or
 hostile file can cost one worker and never the index. That is crash isolation, not a security boundary:
 the workers run with your own file permissions, and their lack of network access is a shim inside Python,
