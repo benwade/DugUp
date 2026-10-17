@@ -129,6 +129,18 @@ def test_the_meaning_model_fits_the_machine_with_its_reason():
     assert value == "larger" and "could not be read" in why, "a machine that could not be looked at keeps the default"
 
 
+def test_the_models_use_the_card_only_when_it_was_measured_to_help():
+    for name in ("meaning_gpu", "looks_gpu", "caption_gpu"):
+        pick = lambda **facts: catalogue.suggestions(Machine(**facts))[name]
+        assert pick(cores=8, free_memory_bytes=8 * GB, card="graphics card (DirectML)", card_speedup=6.0)[0] is True
+        value, why = pick(cores=8, free_memory_bytes=8 * GB, card="graphics card (DirectML)", card_speedup=0.3)
+        assert value is False, "a card slower than the processor (a software fallback, say) is never chosen"
+        value, why = pick(cores=8, free_memory_bytes=8 * GB, card="graphics card (DirectML)")
+        assert value is False and "not tried" in why
+        value, why = pick()
+        assert value is True and "could not be looked at" in why, "an unknown computer keeps the default"
+
+
 def test_the_spending_limit_and_reader_count_come_from_the_machine_with_their_reasons():
     found = catalogue.suggestions(Machine(cores=32, free_memory_bytes=35 * GB, free_disk_bytes=550 * GB))
     assert found["max_index_mb"] == (56320, "a tenth of the 550 GB that is free now")

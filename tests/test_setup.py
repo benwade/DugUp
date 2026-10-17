@@ -43,7 +43,8 @@ def test_values_are_checked_as_they_are_given():
     assert plan.hint("max_index_mb").startswith("DugUp would suggest"), "the computer's reason no longer applies"
     assert plan.set("ocr_gpu", "yes") == "" and plan.set("book_folder_level", "words") == ""
     assert plan.changes() == {"max_index_mb": 2000, "ocr_gpu": True, "book_folder_level": "words",
-                              "meaning_model": "small"}, "4 cores and no card that helps: the small meaning model"
+                              "meaning_model": "small", "meaning_gpu": False, "looks_gpu": False,
+                              "caption_gpu": False}, "4 cores and no card measured to help: the small model, the processor"
     advanced = SetupPlan(Settings(), PLAIN, advanced=True)
     assert advanced.set("chunk_chars", "100") != "" and "chunk_overlap" in advanced.set("chunk_chars", "100"), \
         "a value that clashes with another setting is refused with the reason"
