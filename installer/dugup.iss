@@ -30,7 +30,7 @@ RestartApplications=no
 SetupLogging=yes
 
 [Messages]
-WelcomeLabel2=This installs DugUp {#AppVersion}: find your files by what is in them.%n%nEverything goes into one folder for your user account, with no administrator rights needed. Nothing you have leaves this computer.
+WelcomeLabel2=This installs DugUp {#AppVersion}: find your files by what is in them.%n%nEverything goes into one folder for your user account, with no administrator rights needed. Nothing you have leaves this computer.%n%nPlease note: DugUp's index is not yet encrypted (encryption is planned, not implemented). It holds the text of the files you index, so keep it on an encrypted drive (BitLocker or Device encryption). The README explains more.
 
 [Tasks]
 Name: "desktopicon"; Description: "Put DugUp on the desktop"; Flags: unchecked
