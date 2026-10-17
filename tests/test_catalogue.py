@@ -113,6 +113,22 @@ def test_the_card_is_suggested_only_when_a_test_showed_it_clearly_faster():
     assert value is False and "no graphics card" in why
 
 
+def test_the_meaning_model_fits_the_machine_with_its_reason():
+    pick = lambda **facts: catalogue.suggestions(Machine(**facts))["meaning_model"]
+    value, why = pick(cores=4, free_memory_bytes=1 * GB, card="graphics card (DirectML)", card_speedup=10.0)
+    assert value == "larger" and "graphics card" in why, "a card that helps runs the better model, whatever else"
+    value, why = pick(cores=16, free_memory_bytes=1 * GB)
+    assert value == "small" and "1.0 GB of memory" in why
+    value, why = pick(cores=4, free_memory_bytes=8 * GB)
+    assert value == "small" and "4 processor cores" in why and "seven times faster" in why
+    value, why = pick(cores=4, free_memory_bytes=8 * GB, card="graphics card (DirectML)", card_speedup=1.1)
+    assert value == "small", "a card that was not clearly faster does not count"
+    value, why = pick(cores=12, free_memory_bytes=16 * GB)
+    assert value == "larger" and "12 cores" in why
+    value, why = pick(cores=1)
+    assert value == "larger" and "could not be read" in why, "a machine that could not be looked at keeps the default"
+
+
 def test_the_spending_limit_and_reader_count_come_from_the_machine_with_their_reasons():
     found = catalogue.suggestions(Machine(cores=32, free_memory_bytes=35 * GB, free_disk_bytes=550 * GB))
     assert found["max_index_mb"] == (56320, "a tenth of the 550 GB that is free now")

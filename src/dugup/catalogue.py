@@ -116,6 +116,26 @@ def _card(machine: Machine) -> Tuple[object, str]:
                    "processor's speed), so the processor is used")
 
 
+SMALL_MODEL_BELOW_MEMORY = 2 * 1024 ** 3   # free memory under which the small meaning model is suggested
+SMALL_MODEL_UP_TO_CORES = 4                # with no usable card, this few cores makes the larger model slow going
+
+
+def _meaning_model(machine: Machine) -> Tuple[object, str]:
+    card_helps = bool(machine.card) and machine.card_speedup is not None and machine.card_speedup >= CARD_WORTH_IT
+    if card_helps:
+        return "larger", "the graphics card can run the larger, better model quickly"
+    free = machine.free_memory_bytes
+    if free is None:            # the machine could not be looked at: the usual default stands
+        return "larger", "the free memory could not be read, so the default, better model is kept"
+    if free < SMALL_MODEL_BELOW_MEMORY:
+        return "small", (f"only {free / 1024 ** 3:.1f} GB of memory is free; the small model (90 MB) needs far less "
+                         "of it than the larger one (547 MB)")
+    if machine.cores <= SMALL_MODEL_UP_TO_CORES:
+        return "small", (f"{machine.cores} processor cores and no graphics card that helps: the small model is about "
+                         "seven times faster to run, so sketching a whole index takes far less time")
+    return "larger", f"{machine.cores} cores and {free / 1024 ** 3:.0f} GB free: enough for the larger, better model"
+
+
 def _limit(machine: Machine) -> Tuple[object, str]:
     if machine.free_disk_bytes is None:
         return 0, "the free space on the disk could not be read, so no limit is set"
@@ -170,7 +190,7 @@ def _entries() -> Tuple[Entry, ...]:
           "The model that makes the sketches. Changing it means sketching everything again.",
           why="The larger one (547 MB) finds the right passage noticeably more often; the small one (90 MB) is "
               "about seven times faster to run.",
-          everyday=True, choices=(("larger", "larger (better)"), ("small", "small (faster)"))),
+          everyday=True, choices=(("larger", "larger (better)"), ("small", "small (faster)")), suggest=_meaning_model),
         E("meaning_size", "meaning", "Size of each sketch",
           "How much of each sketch is kept. Changing it means sketching everything again.",
           why="Full keeps every number: about 170 MB for 200,000 passages. Compact keeps a third of the disk "
