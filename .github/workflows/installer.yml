@@ -1,0 +1,49 @@
+name: installer
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write        # only used on a version tag, to attach the installer to its release
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build the contents (standalone Python, packages, DugUp, marker)
+        run: python installer/build.py
+      - name: Make the installer
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc installer\dugup.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install it silently and use it
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem installer\build\out\DugUp-Setup-*.exe | Select-Object -First 1
+          python installer\smoke.py $setup.FullName
+      - name: Keep the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: DugUp-Setup
+          path: installer/build/out/DugUp-Setup-*.exe
+          if-no-files-found: error
+      - name: Attach it to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" (Get-ChildItem installer\build\out\DugUp-Setup-*.exe).FullName --clobber

@@ -125,7 +125,27 @@ Then, for the key:
     dugup tray --startup add
     dugup tray
 
-## Set up
+## Install on Windows
+
+Download `DugUp-Setup-<version>.exe` from the [Releases](https://github.com/benwade/DugUp/releases) page and run
+it. It installs for your user account only, with no administrator rights, into one folder
+(`%LOCALAPPDATA%\Programs\DugUp` unless you choose another): the program, its own copy of Python, and,
+once DugUp runs, its data. Nothing else on the computer is changed. It asks:
+
+- **Where to install.** A drive with room matters: the index and the downloads live there too.
+- **Optional downloads**, each with its size against the drive's free space: search by meaning, pictures by
+  likeness, and naming pictures, about 2 GB together. *Download everything now* is ticked, so setting up is
+  done in one go; untick it and each part is fetched the first time it is used instead.
+- Whether to put DugUp on the desktop, and whether to start it in the tray when you log in.
+
+The installer includes a runtime that can use NVIDIA, AMD and Intel graphics cards. When DugUp first opens it
+measures whether the card is actually faster than the processor, and uses it only if so.
+
+Windows may say the installer is from an *unknown publisher*: it is not signed with a paid certificate. Choose
+**More info**, then **Run anyway**. Uninstalling (Settings, Apps) asks whether to delete DugUp's data as well;
+the answer is No unless you say otherwise, because the undo records in it cannot be made again.
+
+## Set up from the source
 
 Python 3.10 or newer. From the folder you cloned into:
 
