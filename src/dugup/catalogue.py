@@ -116,6 +116,36 @@ def _card(machine: Machine) -> Tuple[object, str]:
                    "processor's speed), so the processor is used")
 
 
+def _card_for_models(machine: Machine) -> Tuple[object, str]:
+    """The models' graphics-card settings: on only when the card was measured clearly faster. A computer that
+    could not be looked at keeps the default (on), as the setup wizard promises; a runtime that has no way to
+    a card then simply uses the processor."""
+    if not machine.card and machine.card_speedup is None and machine.free_memory_bytes is None:
+        return True, "the computer could not be looked at, so the default is kept"
+    value, reason = _card(machine)
+    return value, reason
+
+
+SMALL_MODEL_BELOW_MEMORY = 2 * 1024 ** 3   # free memory under which the small meaning model is suggested
+SMALL_MODEL_UP_TO_CORES = 4                # with no usable card, this few cores makes the larger model slow going
+
+
+def _meaning_model(machine: Machine) -> Tuple[object, str]:
+    card_helps = bool(machine.card) and machine.card_speedup is not None and machine.card_speedup >= CARD_WORTH_IT
+    if card_helps:
+        return "larger", "the graphics card can run the larger, better model quickly"
+    free = machine.free_memory_bytes
+    if free is None:            # the machine could not be looked at: the usual default stands
+        return "larger", "the free memory could not be read, so the default, better model is kept"
+    if free < SMALL_MODEL_BELOW_MEMORY:
+        return "small", (f"only {free / 1024 ** 3:.1f} GB of memory is free; the small model (90 MB) needs far less "
+                         "of it than the larger one (547 MB)")
+    if machine.cores <= SMALL_MODEL_UP_TO_CORES:
+        return "small", (f"{machine.cores} processor cores and no graphics card that helps: the small model is about "
+                         "seven times faster to run, so sketching a whole index takes far less time")
+    return "larger", f"{machine.cores} cores and {free / 1024 ** 3:.0f} GB free: enough for the larger, better model"
+
+
 def _limit(machine: Machine) -> Tuple[object, str]:
     if machine.free_disk_bytes is None:
         return 0, "the free space on the disk could not be read, so no limit is set"
@@ -170,7 +200,7 @@ def _entries() -> Tuple[Entry, ...]:
           "The model that makes the sketches. Changing it means sketching everything again.",
           why="The larger one (547 MB) finds the right passage noticeably more often; the small one (90 MB) is "
               "about seven times faster to run.",
-          everyday=True, choices=(("larger", "larger (better)"), ("small", "small (faster)"))),
+          everyday=True, choices=(("larger", "larger (better)"), ("small", "small (faster)")), suggest=_meaning_model),
         E("meaning_size", "meaning", "Size of each sketch",
           "How much of each sketch is kept. Changing it means sketching everything again.",
           why="Full keeps every number: about 170 MB for 200,000 passages. Compact keeps a third of the disk "
@@ -178,8 +208,9 @@ def _entries() -> Tuple[Entry, ...]:
           choices=(("full", "full"), ("compact", "compact"))),
         E("meaning_gpu", "meaning", "Sketch on the graphics card",
           "Use the graphics card for making sketches when the runtime can use one. Where it cannot, the processor is used.",
-          why="On a graphics card the larger model is about ten times faster than on the processor.",
-          everyday=True, choices=YES_NO),
+          why="On a graphics card the larger model is about ten times faster than on the processor. A card measured "
+              "slower than the processor is not used.",
+          everyday=True, choices=YES_NO, suggest=_card_for_models),
         E("meaning_word_weight", "meaning", "Words and meaning: weight of the words",
           "In a \"Words and meaning\" search, the most that a word match can add to a file's closeness in meaning "
           "(closeness runs from 0 to 1). The best word match adds this much; weaker ones add less in proportion.",
@@ -203,8 +234,8 @@ def _entries() -> Tuple[Entry, ...]:
           everyday=False, choices=(("auto", "when the index has sketches"), ("yes", "always"), ("never", "never"))),
         E("looks_gpu", "looks", "Look at pictures on the graphics card",
           "Use the graphics card for the picture model when the runtime can use one.",
-          why="Opening and scaling the pictures costs more than the model, so the card helps less here than for text; "
-              "it does no harm.", choices=YES_NO),
+          why="Opening and scaling the pictures costs more than the model, so the card helps less here than for text. "
+              "A card measured slower than the processor is not used.", choices=YES_NO, suggest=_card_for_models),
         E("looks_readers", "looks", "Readers side by side",
           "How many pictures are opened and sketched at once. 0 works it out from the cores, at most 8.",
           why="Opening and scaling pictures is the slow part, and several readers share it.", low=0, high=32, zero="work it out"),
@@ -238,7 +269,8 @@ def _entries() -> Tuple[Entry, ...]:
           choices=(("model", "the pinned model"), ("server", "a local model server (not built yet)"))),
         E("caption_gpu", "naming", "Write captions on the graphics card",
           "Use the graphics card for the captioning model when the runtime can use one.",
-          why="It is the slowest model here: seconds a picture on a processor, much less on a card.", choices=YES_NO),
+          why="It is the slowest model here: seconds a picture on a processor, much less on a card.", choices=YES_NO,
+          suggest=_card_for_models),
         E("meaning_after_index", "meaning", "Sketch as part of updating",
           "Updating the index goes on to sketch what is new, after reading pictures.",
           why="One button does it all. Turn it off to sketch at a time of your choosing with `dugup meaning fill`.",
