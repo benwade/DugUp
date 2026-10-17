@@ -51,11 +51,14 @@ def find_ocr_card() -> str:
     its own, so looking does not load the runtime into this one; any trouble counts as "none"."""
     import subprocess
     import sys
-    code = "from dugup.jobs import GPU_NAMES, gpu_provider; print(GPU_NAMES.get(gpu_provider(), ''))"
+    code = "from dugup.jobs import GPU_NAMES, gpu_provider; print('CARD:' + GPU_NAMES.get(gpu_provider(), ''))"
     try:
         done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
                               creationflags=0x08000000 if os.name == "nt" else 0)      # CREATE_NO_WINDOW
-        return done.stdout.strip().splitlines()[-1] if done.returncode == 0 and done.stdout.strip() else ""
+        if done.returncode != 0:
+            return ""
+        answers = [line[5:].strip() for line in done.stdout.splitlines() if line.startswith("CARD:")]
+        return answers[-1] if answers else ""        # only the answer line: a runtime may print banners of its own
     except Exception:
         return ""
 

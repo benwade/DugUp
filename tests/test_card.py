@@ -62,3 +62,15 @@ def test_the_plain_runtime_has_no_way_to_a_card(monkeypatch, tmp_path):
 def test_a_report_names_the_device_really_used(first, said):
     session = types.SimpleNamespace(get_providers=lambda: [first, "CPUExecutionProvider"])
     assert embedding.device_used(session, "graphics card (DirectML)") == said
+
+
+def test_doctor_reads_only_the_answer_not_a_runtimes_banner(monkeypatch):
+    """Seen on a machine without a card: the runtime printed a banner of asterisks after falling back, and
+    doctor took the banner for the card's name."""
+    from dugup import doctor
+    banner = "*************** EP Error ***************\nNo devices detected\n****************************************\n"
+    for printed, card in ((banner + "CARD:\n", ""), ("CARD:graphics card (DirectML)\n" + banner, "graphics card (DirectML)"),
+                          (banner, "")):
+        done = types.SimpleNamespace(returncode=0, stdout=printed)
+        monkeypatch.setattr("subprocess.run", lambda *a, _done=done, **k: _done)
+        assert doctor.find_ocr_card() == card

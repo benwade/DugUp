@@ -307,11 +307,14 @@ def _try_card(name: str) -> bool:
         return True
     if not models:
         return True
+    import contextlib
+    import io
     try:
         onnxruntime.set_default_logger_severity(4)          # a missing card is expected here, not an error to print
         options = onnxruntime.SessionOptions()
         options.log_severity_level = 4
-        session = onnxruntime.InferenceSession(str(models[0]), options, providers=[name, "CPUExecutionProvider"])
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            session = onnxruntime.InferenceSession(str(models[0]), options, providers=[name, "CPUExecutionProvider"])
         return session.get_providers()[0] == name
     except Exception:
         return False
