@@ -37,7 +37,7 @@ PYTHON_SHA256 = "e1f9233e780fbe951e531b0eb207d794e1c3fb39d523a6f481f4fc01ef2b6ca
 # onnxruntime: the same runtime, plus a way to NVIDIA, AMD and Intel cards; DugUp uses a card only when
 # a speed test on that computer shows it clearly faster.
 PACKAGES = ["platformdirs", "pypdfium2>=4.30", "rapidocr", "onnxruntime-directml", "pillow", "numpy",
-            "tokenizers", "pystray"]
+            "tokenizers", "pystray", "mcp>=2.3,<3"]
 
 PRUNE = ("Lib/test", "Lib/idlelib/idle_test", "Lib/tkinter/test", "include", "libs")
 
@@ -110,7 +110,7 @@ print(json.dumps({"version": __version__,
 """
 
 CHECK = """
-import onnxruntime, tkinter, dugup, rapidocr, PIL, numpy, tokenizers, pystray, pypdfium2
+import onnxruntime, tkinter, dugup, rapidocr, PIL, numpy, tokenizers, pystray, pypdfium2, mcp
 print("runtime providers:", onnxruntime.get_available_providers())
 print("dugup", dugup.__version__, "from", dugup.__file__)
 """

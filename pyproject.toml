@@ -11,6 +11,7 @@ dependencies = ["platformdirs", "pypdfium2>=4.30", "tomli; python_version < '3.1
 ocr = ["rapidocr", "onnxruntime", "pillow"]
 meaning = ["onnxruntime", "numpy", "tokenizers"]
 tray = ["pystray", "pillow"]
+assistant = ["mcp>=2.3,<3"]
 
 [project.scripts]
 dugup = "dugup.cli:main"

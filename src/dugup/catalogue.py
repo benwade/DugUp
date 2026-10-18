@@ -94,6 +94,11 @@ GROUPS: Tuple[Group, ...] = (
           "in. Built-in rules do this at once. A language model is an optional alternative."),
     Group("files", "Reading files",
           "How text is taken out of documents. The defaults suit almost everyone; change them for unusual files."),
+    Group("assistants", "Assistants (Claude and others)",
+          "DugUp can offer read-only search to an AI assistant on this computer, such as the Claude desktop app "
+          "(dugup mcp). It is off unless you turn it on. What the assistant is shown (file names, paths and the "
+          "passages that match) is sent to the assistant's service, as a file you attach to a conversation would be. "
+          "It can never change, move or delete anything."),
     Group("safety", "Staying safe with difficult files",
           "Each file is read in a separate, limited process, so one bad file cannot harm the index or hang the "
           "program. These are the limits."),
@@ -259,6 +264,17 @@ def _entries() -> Tuple[Entry, ...]:
         E("watch_readers", "tray", "Readers a background update may use",
           "How many files (or pictures) a background update reads side by side. 0 works it out: a quarter of the "
           "cores, at least one, never all of them. A run you start yourself is not limited by this.", low=0, high=64),
+        E("mcp_enabled", "assistants", "Let assistants search",
+          "On: an assistant connected with dugup mcp can search the index, read-only. What it is shown (names, paths, "
+          "matching passages) is sent to the assistant's service. Takes effect at once, even while one is connected.",
+          choices=YES_NO),
+        E("mcp_folders", "assistants", "Folders assistants may see",
+          "Folders separated by semicolons. Results, passages and other copies outside them are never shown to an "
+          "assistant. Empty: every indexed folder.",
+          why="Leave out folders you would not attach to a conversation, such as medical or money records."),
+        E("mcp_idle_minutes", "assistants", "Let models go after (minutes)",
+          "A model loaded for an assistant's search by meaning or by looks is let go after this long without one, "
+          "giving back the memory and the graphics card. 0 keeps it loaded.", low=0, high=1440, zero="kept loaded"),
         E("hotkey", "tray", "The search key",
           "Written the usual way: Win+Shift+F, Ctrl+Alt+D, Ctrl+Shift+Space. Empty means no key; the box can still be "
           "brought up with the tray icon or the command dugup popup. Takes effect when the tray is next started.",

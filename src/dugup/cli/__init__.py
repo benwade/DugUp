@@ -21,6 +21,7 @@ from .alike_cmds import cmd_alike, print_looks_measurement, print_looks_report, 
 from .changes_cmds import cmd_alike_duplicates, cmd_duplicates, cmd_rename, print_name_plan
 from .common import save_file_list, save_lines
 from .data_cmds import cmd_data
+from .mcp_cmds import cmd_mcp
 from .download_cmds import cmd_download
 from .desktop_cmds import cmd_popup, cmd_remote, cmd_tray, cmd_window
 from .index_cmds import cmd_index, cmd_ocr, cmd_status, print_ocr_report, print_report
@@ -35,7 +36,7 @@ from .setup_cmds import cmd_config, cmd_doctor, cmd_init, cmd_models, cmd_space,
 
 __all__ = [
     "ALSO_AT_SHOWN", "COMMANDS", "MISSING_NOTE", "UNAVAILABLE_NOTE", "WARNING_TEXT", "ProgressPrinter",
-    "build_parser", "cmd_alike", "cmd_alike_duplicates", "cmd_ask", "cmd_config", "cmd_data", "cmd_download", "cmd_doctor", "cmd_duplicates",
+    "build_parser", "cmd_alike", "cmd_alike_duplicates", "cmd_ask", "cmd_config", "cmd_data", "cmd_mcp", "cmd_download", "cmd_doctor", "cmd_duplicates",
     "cmd_index", "cmd_init", "cmd_meaning", "cmd_models", "cmd_ocr", "cmd_popup", "cmd_remote", "cmd_rename",
     "cmd_roots", "cmd_search", "cmd_space", "cmd_status", "cmd_tray", "cmd_window", "format_bytes", "format_date",
     "format_seconds", "main", "megabytes", "one_line", "print_compacted", "print_looks_measurement",
@@ -47,7 +48,7 @@ __all__ = [
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "rename": cmd_rename, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "tray": cmd_tray, "remote": cmd_remote, "popup": cmd_popup, "models": cmd_models, "ask": cmd_ask, "config": cmd_config, "data": cmd_data, "download": cmd_download}
+            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "rename": cmd_rename, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "tray": cmd_tray, "remote": cmd_remote, "popup": cmd_popup, "models": cmd_models, "ask": cmd_ask, "config": cmd_config, "data": cmd_data, "download": cmd_download, "mcp": cmd_mcp}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

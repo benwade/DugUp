@@ -121,6 +121,10 @@ class Settings:
     watch_on_battery: bool = False         # run those background updates on battery power too; off: they wait for mains power
     watch_readers: int = 0                 # readers a background update may use; 0: a quarter of the cores, at least one, never all
     hotkey: str = "Win+Shift+F"            # the key that brings up the search box anywhere, while the tray runs; "" for none
+    # -- assistants (assistant.py, `dugup mcp`): read-only search tools for Claude and other assistants here
+    mcp_enabled: bool = False              # off by default: what the tools return (names, paths, passages) goes to the assistant's service
+    mcp_folders: str = ""                  # only these folders, separated by ";", are visible to assistants; "" means every indexed folder
+    mcp_idle_minutes: float = 5.0          # a model loaded for an assistant's search is let go after this long without one; 0: kept
     # The folder picker's first guesses (picker.py). A person can change every one of them in the picker.
     book_folders: str = "calibre; calibre library; books; ebooks; e-books; kindle; my kindle content"   # names, any case
     book_folder_level: str = "names"       # what a folder with such a name starts at; "" makes no guess about books
@@ -219,6 +223,8 @@ def validate(s: Settings) -> List[str]:
             problems.append(f"hotkey: {problem}")
     if s.ocr_fast_readers < 0 or s.ocr_reader_threads < 1 or s.ocr_reader_memory_mb < 0:
         problems.append("ocr_fast_readers and ocr_reader_memory_mb must not be negative, and ocr_reader_threads must be at least 1")
+    if s.mcp_idle_minutes < 0:
+        problems.append("mcp_idle_minutes must be 0 (kept) or more")
     if s.missing_retention_days < 0:
         problems.append("missing_retention_days must not be negative")
     return problems

@@ -55,6 +55,10 @@ crash reporting. Indexing, OCR, meaning, pictures and captions all run on this m
 - The plain-words reader talks only to a model server on this machine unless you set
   `intent_allow_remote` on purpose. If you do, that server is sent what you typed and the list of your
   indexed folders' paths (so it can name one), never the files themselves.
+- Assistant search (`dugup mcp`, off unless you turn it on): an AI assistant on this machine, such as the
+  Claude desktop app, can search the index. What it is shown, file names, paths and the passages that
+  match, is sent to the assistant's service, as a file you attach to a conversation would be. See
+  *Letting an assistant search*.
 
 What is kept, and where: the index is a plain SQLite file in your own data folder, holding the text that
 was read from your files, so it is as private as that folder and no more. **It is not yet encrypted:
@@ -653,7 +657,38 @@ of your own can do the same in a few lines:
         for row in dugup.search("nursing license", limit=5).rows:
             print(row.path, row.rank)
 
-The same footing will carry an MCP server, so an assistant on this machine can ask the index questions.
+## Letting an assistant search (Claude and others)
+
+DugUp can offer its search to an AI assistant on this computer through MCP, the standard way assistants
+reach local tools. The Claude desktop app is the usual one; Claude conversations linked to this computer
+can then use it too. **It is off unless you turn it on.**
+
+    dugup mcp enable                     says what it means, asks, then turns it on
+    dugup mcp enable --folders "C:\Users\me\Documents;D:\Notes"     only these folders
+    dugup mcp connect --write            adds DugUp to the Claude desktop app (restart the app after)
+    dugup mcp status                     on or off, which folders, whether the app is connected
+    dugup mcp disable                    off, at once, even while an assistant is connected
+
+From the installer, the commands are run with the bundled Python, in PowerShell:
+
+    & "$env:LOCALAPPDATA\Programs\DugUp\python\python.exe" -m dugup mcp enable
+
+What the assistant can do, and what it cannot:
+
+- **Search, read-only**: by words, by meaning, by both, or pictures by what they show, with the usual filters
+  (folder, kind of file, dates). It gets each result's path, kind, size, date and the passage that matched.
+- **More passages from one file**: the places where some words are found, a few hundred characters each, at
+  most ten at a time. Never the whole file.
+- **Status**: the folders it may see, and how far the sketches for meaning and looks have got.
+- **Nothing that changes anything**: no trash, no rename, no clean-up, no settings.
+- **Only the folders you allow** (`mcp_folders`; empty means every indexed folder). A result, a passage or
+  another copy's path outside them is never returned, and asking for such a folder is refused.
+
+What it is shown goes to the assistant's service, as a file you attach to a conversation would. Leave out
+folders you would not attach. A model loaded for an assistant's search by meaning or by looks is let go after
+`mcp_idle_minutes` (5) without one, giving back the memory and the graphics card.
+
+From a copy of the source, `pip install mcp` first (the installer includes it).
 
 ## Tests
 
