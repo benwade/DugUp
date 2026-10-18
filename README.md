@@ -12,8 +12,7 @@ the tray and the search key have had real daily use only on Windows so far).
 **Status: alpha.** The searches, the index and the file-changing paths (trash, rename, undo, near-duplicate
 cleanup) have been reviewed independently, probed, and tested on Windows and Linux; the guarantees they keep
 are stated below under *What it touches on your disk*. What makes it an alpha: one person has used the window for
-real; a whole search still runs on the window's thread (the model work does not), so a very large index can
-make it pause; the near-duplicate scan has no stated ceiling yet for collections past about 100,000 pictures;
+real; the near-duplicate scan has no stated ceiling yet for collections past about 100,000 pictures;
 and the index is not yet encrypted (encryption is planned, not implemented; see *Before you install*). Bug
 reports with the `dugup doctor` output are welcome.
 
@@ -210,6 +209,12 @@ they are far apart. Click a column header to sort; click up to three and the ear
 ones become the second and third sort keys. Double-click a result to open it; the buttons under the list
 open it for editing, show it in its folder, or copy its path. The Index tab adds folders, brings the index
 up to date and reads pictures and scans, with progress and a Stop button.
+
+The window never waits for a search. Each search runs on a thread of its own while the window stays free to
+type in, scroll or press Stop, and the newest search always wins: start another before the first is done
+(or sort, or press "Like this") and the older answer is dropped when it arrives, so the list only ever shows
+the search you asked for last. Pressing "More" twice while it runs adds the rows once. (See *Recent
+changes*.)
 
 ### Search in plain words
 
@@ -576,6 +581,17 @@ it, not the only one, and every step is a command you can run again.
 
 Copies on another drive are never duplicates to this report: a file on your own drive and its backup on a
 cloud drive are a file and its backup. Run it per drive, and only on the drive you mean to clean.
+
+## Recent changes
+
+**Searches no longer freeze the window (October 2026).** Until now the window searched the index on its own
+thread, the same thread that draws the window and takes your clicks and keys. On a small index that was too
+quick to notice. On a large one it was not: a search by meaning over about a million files takes two to
+three seconds, and for that long the window could not be typed in, moved or stopped. Now every search goes
+to one search thread. Only the newest request waits there, and each search carries a turn number, so an
+answer for a search you have since replaced is thrown away rather than shown. The search thread reads the
+index through a connection of its own, because SQLite connections stay with the thread that opened them.
+The searches themselves are no faster; the window simply no longer waits for them.
 
 ## Built as a service, with clients
 
