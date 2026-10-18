@@ -272,8 +272,11 @@ def test_the_wizard_opens_by_itself_on_a_first_start_and_finishing_saves_and_ask
         saved, notes = settings_module.load(bench.layout.config)
         assert saved.ocr_gpu is True and saved.max_index_mb == 56320 and notes == []
         assert bench.app.place_queue == [str(bench.docs), str(tmp_path / "nowhere")], "the folder inside another is covered by it"
-        started(bench)                             # finishing queued a look through the first folder
-        bench.finish_run()
+        # finishing queued a look through the first folder; on a fast machine it may begin and end within one
+        # turn of the window, so wait for either sign of it, never assume it is still running
+        started(bench, until=lambda: bench.app.worker is not None or bench.app.picker is not None)
+        if bench.app.worker is not None:
+            bench.finish_run()
         picker = bench.app.picker
         assert picker is not None and picker.where.get() == str(bench.docs), "no bare file box: the picker, for the folder chosen"
         assert "1 more folder(s) after this one" in bench.app.message.get()
