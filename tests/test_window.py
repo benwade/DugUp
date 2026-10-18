@@ -1411,7 +1411,7 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     file_menu = bench.root.nametowidget(bar.entrycget(0, "menu"))
     labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) == "command"]
     assert labels == ["Add folder...", "Choose what to index...", "Settings...", "Disk space...",
-                      "Free the graphics card and memory...", "Quit"]
+                      "Free the graphics card and memory...", "Folders Claude may search...", "Quit"]
     help_menu = bench.root.nametowidget(bar.entrycget(3, "menu"))
     help_menu.invoke(0)
     assert bench.told and bench.told[-1][0] == "About DugUp" and "0.2.1" in bench.told[-1][1]
