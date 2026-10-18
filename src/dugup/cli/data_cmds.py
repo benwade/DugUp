@@ -28,6 +28,7 @@ def _where(args, environ, beside: Optional[BesideChoice], out) -> int:
     synced = syncfolders.survey().synced_by(folder)
     if synced is not None:
         safe_write(f"Warning: it is inside {synced.path}, which {synced.by} syncs to the cloud.", out)
+    safe_write(syncfolders.CAVEAT, out)
     note = syncfolders.unread_note(folder)
     if note:
         safe_write(note, out)

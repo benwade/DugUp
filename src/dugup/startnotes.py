@@ -1,10 +1,12 @@
 """What the window says before it opens, when there is something to say.
 
-Two notes, each shown only when it applies:
+Three notes, each shown only when it applies:
 
 - An index found in the older per-user folder, with the folder beside the program still empty: DugUp offers
   to move it in. "Keep it where it is" is remembered and never asked again; closing the question asks again
   next time. Either way nothing is lost: until it is moved, the older folder stays in use.
+- The folder beside the program is inside a folder a sync app uploads, so DugUp keeps the index in the
+  per-user folder instead: said once, so it is never a silent surprise.
 - Administrator rights: a short note that nothing is wrong, and that starting DugUp the ordinary way is the
   safer habit. It never stops anything.
 """
@@ -17,6 +19,36 @@ from typing import Callable, Optional
 from . import datamove, elevated
 
 MOVE, KEEP, LATER = "move", "keep", "later"
+SYNCED_TOLD = "synced-note-shown.txt"   # in the folder in use: the synced folder already told about
+
+
+def synced_text(beside) -> str:
+    from .syncfolders import CAVEAT
+    return (f"DugUp is installed in {beside.home.folder}, which is inside {beside.synced.path}. {beside.synced.by} "
+            "syncs that folder to the cloud, and DugUp's index holds the text of your files, so DugUp keeps the index "
+            f"out of it, in {beside.path} instead.\n\nNothing is wrong, and nothing needs doing.\n\n"
+            "To keep the index in a folder of your own choosing instead: uninstall DugUp (answer No when asked about "
+            "deleting its data), install it again, and choose that folder on the page \"Where DugUp keeps its "
+            "index\". DugUp then offers to move your index there.\n\n" + CAVEAT)
+
+
+def tell_synced_once(parent, beside, tell: Callable) -> bool:
+    """The synced-folder note, unless it was already shown for this folder. True when it was shown now."""
+    import os
+    record = beside.path / SYNCED_TOLD
+    said = str(beside.home.data)
+    try:
+        if record.read_text(encoding="utf-8").strip() == said:
+            return False
+    except (OSError, UnicodeDecodeError):
+        pass
+    tell(parent, "DugUp: where your index is kept", synced_text(beside))
+    try:
+        os.makedirs(beside.path, exist_ok=True)
+        record.write_text(said + "\n", encoding="utf-8")
+    except OSError:
+        pass                                  # shown again next time: better than never
+    return True
 
 
 def ask_move(parent, old, new) -> str:
@@ -120,6 +152,8 @@ def before_window(parent, args, environ, asker: Callable = ask_move, mover: Call
     if (is_elevated or elevated.is_elevated)():
         tell(parent, elevated.TITLE, elevated.TEXT)
     beside = beside_program(getattr(args, "data_dir", None), environ)
+    if beside is not None and beside.synced is not None:
+        tell_synced_once(parent, beside, tell)
     if beside is None or beside.move_from is None:
         return None
     old, new = beside.move_from, beside.home.data

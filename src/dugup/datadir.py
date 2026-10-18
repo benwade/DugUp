@@ -187,8 +187,14 @@ def check_allowed(path: os.PathLike | str, never_write: Iterable[os.PathLike | s
         if synced is not None:
             raise DataDirError(
                 f"inside {synced.path}, which {synced.by} syncs to the cloud: the index (the text of your files) "
-                "would be uploaded with it. Choose another folder, or allow it explicitly if you are sure"
+                "would be uploaded with it. Choose another folder, or allow it explicitly if you are sure. "
+                + syncfolders_caveat()
             )
+
+
+def syncfolders_caveat() -> str:
+    from . import syncfolders
+    return syncfolders.CAVEAT
 
 
 def synced_folder(path: os.PathLike | str):

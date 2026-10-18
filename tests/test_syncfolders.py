@@ -211,3 +211,38 @@ def test_the_tray_asks_when_it_would_open_the_older_index(tmp_path, monkeypatch)
     assert move_waits_for(types.SimpleNamespace(data_dir=None), {})
     assert move_waits_for(types.SimpleNamespace(data_dir=str(per_user)), {}), "as its login entry starts it"
     assert not move_waits_for(types.SimpleNamespace(data_dir=str(tmp_path / "other")), {})
+
+
+def test_keeping_the_index_out_of_a_synced_install_is_said_once(tmp_path, synced, monkeypatch):
+    """Not a silent surprise: the first time, a note says where the index went and how to choose another folder."""
+    import types
+    from dugup import datadir, startnotes
+    program = tmp_path / "Backed" / "app"
+    program.mkdir(parents=True)
+    (program / MARKER_NAME).write_text("data = data\n", encoding="utf-8")
+    per_user = tmp_path / "per-user"
+    monkeypatch.setattr(datadir, "find_program_home", lambda *a, **k: read_marker(program / MARKER_NAME))
+    monkeypatch.setattr(datadir, "default_data_dir", lambda: per_user)
+    told = []
+    tell = lambda parent, title, text: told.append(text)
+    args = types.SimpleNamespace(data_dir=None)
+    assert startnotes.before_window(None, args, {}, tell=tell, is_elevated=lambda: False) is None
+    assert len(told) == 1 and str(per_user) in told[0] and "Google Drive for desktop" in told[0]
+    assert "Where DugUp keeps its index" in told[0] and syncfolders.CAVEAT in told[0]
+    startnotes.before_window(None, args, {}, tell=tell, is_elevated=lambda: False)
+    assert len(told) == 1, "said once, not every time DugUp opens"
+
+
+def test_a_data_folder_in_the_survey_still_comes_with_the_caveat(tmp_path, synced):
+    with pytest.raises(DataDirError) as caught:
+        check_allowed(tmp_path / "Backed" / "data")
+    assert "not a guarantee" in caught.value.reason
+
+
+def test_a_marker_may_name_a_full_path_for_the_data(tmp_path):
+    """The installer writes the folder chosen for the index as a full path when it is not the usual one."""
+    elsewhere = tmp_path / "Index here"
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / MARKER_NAME).write_text(f"﻿# note\ndata = {elsewhere}\nskip = python\n", encoding="utf-8")
+    home = read_marker(tmp_path / "app" / MARKER_NAME)
+    assert home.data == elsewhere and home.skip == (tmp_path / "app" / "python",)

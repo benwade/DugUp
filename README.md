@@ -96,12 +96,19 @@ possible) lives in one data folder. Which one, in order:
 
 1. `--data-dir FOLDER` on the command line, or the `DUGUP_DATA_DIR` setting.
 2. Beside the program, when a `dugup-data-folder.txt` file sits there: an installed DugUp and a copy of the
-   source both have one, so the program and its data are one folder (`data\` inside it). The file also
-   names the program's own folders, which are never indexed.
+   source both have one, so the program and its data are one folder (`data\` inside it). The installer can
+   name another folder instead (its page *Where DugUp keeps its index*), so the index can live apart from the
+   program. The file also names the program's own folders, which are never indexed.
 3. Otherwise the per-user folder: `%LOCALAPPDATA%\DugUp` on Windows, `~/.local/share/DugUp` on Linux.
 
 If the folder beside the program is itself synced to the cloud (a copy of the source inside a folder Google
-Drive backs up, say), the index stays in the per-user folder and DugUp does not offer to move it there.
+Drive backs up, say), the index stays in the per-user folder, DugUp says so once when it opens, and it does not
+offer to move the index there. To keep the index somewhere of your own choosing instead, uninstall (keeping the
+data), install again and choose that folder for the index; DugUp then offers to move the index there.
+
+**The sync check is not a guarantee.** DugUp knows the records of OneDrive, Google Drive for desktop, Dropbox,
+and the folders Windows itself lists as synced. It may not catch a synced folder every time, and it does not
+detect other sync or backup apps at all. If you use one, choose a folder for the index that it does not upload.
 
 If DugUp finds an index in the per-user folder and none beside the program (from an earlier version), it
 keeps using the older one and asks once: move it beside the program, or keep it where it is. The window
@@ -155,8 +162,11 @@ it. It installs for your user account only, with no administrator rights, into o
 (`%LOCALAPPDATA%\Programs\DugUp` unless you choose another): the program, its own copy of Python, and,
 once DugUp runs, its data. Nothing else on the computer is changed. It asks:
 
-- **Where to install.** A drive with room matters: the index and the downloads live there too.
-- **Optional downloads**, each with its size against the drive's free space: search by meaning, pictures by
+- **Where to install.** Anywhere you like, including a folder a backup app uploads.
+- **Where DugUp keeps its index.** The data folder inside the DugUp folder unless you choose another. The index
+  holds the text of your files and is not yet encrypted, so keep it out of any folder a cloud-sync or backup app
+  uploads. A drive with room matters: the downloads live there too. An upgrade keeps the folder already chosen.
+- **Optional downloads**, each with its size against the free space where the index goes: search by meaning, pictures by
   likeness, and naming pictures, about 2 GB together. *Download everything now* is ticked, so setting up is
   done in one go; untick it and each part is fetched the first time it is used instead.
 - Whether to put DugUp on the desktop, and whether to start it in the tray when you log in.
@@ -587,8 +597,8 @@ cloud drive are a file and its backup. Run it per drive, and only on the drive y
 
 ## Recent changes
 
-**0.2.0 beta (October 2026).** A Windows installer; DugUp and its index in one folder (an older index is
-offered a move, and kept where it is if you say no); clear offers and sizes for the optional downloads; a
+**0.2.0 beta (October 2026).** A Windows installer, which asks where to keep the index; DugUp and its index in one
+folder by default (an older index is offered a move, and kept where it is if you say no); clear offers and sizes for the optional downloads; a
 warning when the data folder is inside a folder a sync app uploads; DugUp Remote in the Start menu; and the
 two changes below.
 
