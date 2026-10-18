@@ -203,8 +203,8 @@ begin
     'The index, your settings, the downloaded parts and DugUp''s records all live in one folder.',
     'The index holds the text of the files you index, and it is not yet encrypted. Keep it out of any folder that a ' +
     'cloud-sync or backup app uploads (OneDrive, Google Drive, Dropbox and the like). The usual place is the data ' +
-    'folder inside the DugUp folder; if you installed DugUp itself in a synced folder, choose another folder here.' +
-    #13#10#13#10 + SyncCaveat, False, 'DugUp data');
+    'folder inside the DugUp folder; if you installed DugUp itself in a synced folder, choose another folder here.' + #13#10#13#10 +
+    SyncCaveat, False, 'DugUp data');
   IndexPage.Add('');
   IndexPage.Values[0] := '';
   IndexAuto := True;
