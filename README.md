@@ -9,12 +9,12 @@ written from scratch in Python; it shares no code with it. It runs on Windows 11
 tested on Ubuntu (the full test suite runs there on every push, under Python 3.10, 3.12 and 3.13; the window,
 the tray and the search key have had real daily use only on Windows so far).
 
-**Status: alpha.** The searches, the index and the file-changing paths (trash, rename, undo, near-duplicate
-cleanup) have been reviewed independently, probed, and tested on Windows and Linux; the guarantees they keep
-are stated below under *What it touches on your disk*. What makes it an alpha: one person has used the window for
-real; the near-duplicate scan has no stated ceiling yet for collections past about 100,000 pictures;
-and the index is not yet encrypted (encryption is planned, not implemented; see *Before you install*). Bug
-reports with the `dugup doctor` output are welcome.
+**Status: beta (0.2.0).** The searches, the index and the file-changing paths (trash, rename, undo,
+near-duplicate cleanup) have been reviewed independently, probed, and tested on Windows and Linux; the
+guarantees they keep are stated below under *What it touches on your disk*. There is now a Windows installer.
+Known limits: the index is not yet encrypted (encryption is planned, not implemented; see *Before you
+install*); the near-duplicate scan has no stated ceiling yet for collections past about 100,000 pictures; and
+few people have used it for real so far. Bug reports with the `dugup doctor` output are welcome.
 
 ## What it does
 
@@ -160,6 +160,9 @@ once DugUp runs, its data. Nothing else on the computer is changed. It asks:
   likeness, and naming pictures, about 2 GB together. *Download everything now* is ticked, so setting up is
   done in one go; untick it and each part is fetched the first time it is used instead.
 - Whether to put DugUp on the desktop, and whether to start it in the tray when you log in.
+
+The Start menu gets two entries: **DugUp**, the full window, and **DugUp Remote**, a small window that starts
+or quits DugUp in the tray, brings up the search box, and frees the graphics card (see *From the tray*).
 
 The installer includes a runtime that can use NVIDIA, AMD and Intel graphics cards. When DugUp first opens it
 measures whether the card is actually faster than the processor, and uses it only if so.
@@ -583,6 +586,18 @@ Copies on another drive are never duplicates to this report: a file on your own 
 cloud drive are a file and its backup. Run it per drive, and only on the drive you mean to clean.
 
 ## Recent changes
+
+**0.2.0 beta (October 2026).** A Windows installer; DugUp and its index in one folder (an older index is
+offered a move, and kept where it is if you say no); clear offers and sizes for the optional downloads; a
+warning when the data folder is inside a folder a sync app uploads; DugUp Remote in the Start menu; and the
+two changes below.
+
+**A faster search by meaning (October 2026).** The first stage of a search by meaning compares the question
+with a short fingerprint of every piece of text. It now does that arithmetic in small blocks with the fast
+routines, instead of making a full temporary copy (hundreds of megabytes on a large index) with slow ones.
+On a test index of a million pieces the first search went from 1.35 s to 0.12 s and later ones from 0.25 s to
+0.06 s; the results are exactly the same. Searching pictures by likeness uses the same stage and gains the
+same way.
 
 **Searches no longer freeze the window (October 2026).** Until now the window searched the index on its own
 thread, the same thread that draws the window and takes your clicks and keys. On a small index that was too

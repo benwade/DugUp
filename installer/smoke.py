@@ -116,6 +116,12 @@ def main() -> int:
     step("The window toolkit works in the bundled Python")
     run(python, "-c", "import tkinter; r = tkinter.Tk(); r.withdraw(); r.update(); r.destroy(); print('tk', tkinter.TkVersion)")
 
+    step("The Start menu entries")
+    programs = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    expect((programs / "DugUp.lnk").is_file(), "DugUp (the window) is in the Start menu")
+    expect((programs / "DugUp Remote.lnk").is_file(), "DugUp Remote is in the Start menu")
+    run(*dugup, "remote", "--help")
+
     step("dugup doctor")
     report = run(*dugup, "doctor", check=False)
     expect("sqlite fts5" in report and "[FAIL] sqlite" not in report, "the index's full-text search is available")

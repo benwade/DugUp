@@ -51,6 +51,7 @@ Source: "build\DugUp\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 
 [Icons]
 Name: "{autoprograms}\DugUp"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; Comment: "Find your files by what is in them"
+Name: "{autoprograms}\DugUp Remote"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup remote"; WorkingDir: "{app}"; Comment: "Start or quit DugUp in the tray, bring up search, free the graphics card"
 Name: "{autodesktop}\DugUp"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; Comment: "Find your files by what is in them"; Tasks: desktopicon
 
 [Run]
