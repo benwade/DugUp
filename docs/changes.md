@@ -6,6 +6,8 @@ Release notes and performance improvements for DugUp.
 
 ## Since 0.2.2
 
+**Report a problem, even when DugUp is stuck.** A new report window gathers the versions, health check, recent log and any freeze notes, hides folder and file names behind numbered stand-ins, shows you everything, and lets you open a GitHub issue, copy, or save it. It runs as a program of its own and is one step away in the Start menu, the search box, the tray menu, DugUp Remote and the main window. A freeze recorder in each window notes where a window got stuck. See [Report a problem](user-guide.md#report-a-problem).
+
 **Changing a file type now updates the index.** When you change the `[extensions]` table in `config.toml`, the next index update reads again just the files whose type changed. See [File types](technical.md#file-types).
 
 ## 0.2.2 beta — October 2026

@@ -148,7 +148,13 @@ def main() -> int:
     programs = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
     expect((programs / "DugUp.lnk").is_file(), "DugUp (the window) is in the Start menu")
     expect((programs / "DugUp Remote.lnk").is_file(), "DugUp Remote is in the Start menu")
+    expect((programs / "Report a problem with DugUp.lnk").is_file(), "Report a problem is in the Start menu")
     run(*dugup, "remote", "--help")
+
+    step("Report a problem gathers its report (printed here; the window does the same)")
+    reported = run(*dugup, "report", "--print", timeout=120)
+    expect("## DugUp" in reported and "the Windows installer" in reported and "## Health check" in reported,
+           "the report names the version, how it was installed, and the health check")
 
     step("dugup doctor")
     report = run(*dugup, "doctor", check=False)

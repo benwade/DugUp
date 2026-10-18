@@ -443,3 +443,29 @@ def test_the_search_box_and_the_tray_menu_carry_the_cloud_switch_too(stage, tmp_
     finally:
         tray.quit()
         root.destroy()
+
+
+def test_report_a_problem_is_one_step_from_the_tray_the_search_box_and_the_remote(stage, tmp_path):
+    import tkinter as tk
+    from dugup import remote as remote_module
+    root = tk.Toplevel(stage.root)
+    launched = []
+    from test_watcher import Service as FakeRuns, settings as watch_settings
+    watcher = tray_module.Watcher(FakeRuns(), watch_settings(watch_every_minutes=0), cores=4)
+    tray = tray_module.Tray(root, stage.service, stage.service.settings, launch=launched.append, make_icon=lambda t: None,
+                            start_hotkey=lambda text, fire: hotkey.Hotkey(""), say=lambda text: None, watcher=watcher)
+    try:
+        tray.handle("report")                      # the tray menu's Report a problem...
+        tray.popup.report()                        # the search box's button
+        assert len(launched) == 2 and all(c[1:4] == ["-m", "dugup", "report"] for c in launched)
+    finally:
+        tray.quit()
+        root.destroy()
+    top = tk.Toplevel(stage.root)
+    window = remote_module.Remote(top, stage.layout, ask=lambda f, c: None, launch=launched.append,
+                                  startup_entry=lambda: tmp_path / "none", claude_config=tmp_path / "c.json")
+    try:
+        window.report_button.invoke()
+        assert launched[-1][1:4] == ["-m", "dugup", "report"] and "own" in window.note.get()
+    finally:
+        window.close()

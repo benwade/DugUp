@@ -167,6 +167,8 @@ class Bench:
                          pick=pick, setup=setup, tell=lambda title, text: self.told.append((title, text)))
         self.copied = []
         self.app.copy_text = self.copied.append     # the tests leave the real clipboard alone
+        self.reports = []
+        self.app.launch_report = self.reports.append   # Report a problem is never really started by a test
 
     def _ask(self, title, text):
         self.asked.append(text)
@@ -1413,7 +1415,8 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     assert labels == ["Add folder...", "Choose what to index...", "Settings...", "Disk space...",
                       "Free the graphics card and memory...", "Folders Claude may search...", "Quit"]
     help_menu = bench.root.nametowidget(bar.entrycget(3, "menu"))
-    help_menu.invoke(0)
+    assert help_menu.entrycget(0, "label") == "Report a problem..." and help_menu.entrycget(1, "label") == "About DugUp"
+    help_menu.invoke(1)
     assert bench.told and bench.told[-1][0] == "About DugUp" and "0.2.2" in bench.told[-1][1]
     assert "PolyForm Noncommercial" in bench.told[-1][1] and "Ben Wade" in bench.told[-1][1], "the license is in the About box"
     assert "without warranty" in bench.told[-1][1] and "your own risk" in bench.told[-1][1], "and that it comes as is"
@@ -1487,5 +1490,19 @@ def test_the_file_menu_carries_the_cloud_switch(tmp_path):
         assert asked and setup.load(bench.layout).mcp_enabled is True and switch.on.get() is True
         file_menu.invoke(at)                       # unticked: off at once
         assert setup.load(bench.layout).mcp_enabled is False and len(asked) == 2   # Allow, then "Not now" to connecting
+    finally:
+        bench.close()
+
+
+def test_report_a_problem_is_beside_the_message_line_and_in_the_help_menu(tmp_path):
+    bench = Bench(tmp_path)
+    try:
+        started = bench.reports
+        bench.app.report_button.invoke()
+        assert started[-1][1:4] == ["-m", "dugup", "report"] and "own" in bench.app.message.get()
+        menu = bench.root.nametowidget(bench.root["menu"])
+        labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)]
+        help_menu = bench.root.nametowidget(menu.entrycget(labels.index("Help"), "menu"))
+        assert help_menu.entrycget(0, "label") == "Report a problem..."
     finally:
         bench.close()

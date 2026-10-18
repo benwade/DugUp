@@ -147,6 +147,41 @@ Claude runs in the cloud. When it searches, what it is shown, file names, full p
 
 Untick the switch to turn cloud search off. It takes effect immediately, even in a conversation already under way.
 
+## Report a problem
+
+Tell us when something goes wrong, even if DugUp has stopped responding.
+
+Choose **Report a problem** from whichever is handiest:
+
+- **Report a problem with DugUp** in the Windows Start menu, which works whatever state DugUp is in;
+- the button in the **Win+Shift+F** search box;
+- the tray icon's menu;
+- the large button in **DugUp Remote**;
+- the button beside the message line in the main window, or **Help → Report a problem...**.
+
+The report opens in a window of its own, so it works even when another DugUp window is frozen. Describe what happened, read the report, change or remove anything you like, then choose:
+
+- **Open GitHub to report** to open a new issue with the report filled in, ready for you to check and submit. This needs a free GitHub account. **GitHub issues are public**, so read the report first.
+- **Copy** to put the report on your clipboard.
+- **Save to file...** to keep it, or to send it another way.
+
+### What the report contains, and why
+
+| Part | Why it helps |
+|---|---|
+| DugUp and Windows versions | Many problems belong to one version. |
+| The health check (`dugup doctor`) | Shows what is installed and working. |
+| The end of DugUp's log | Counts and reasons from recent work; never your documents' text or file names. |
+| Freeze notes, if any | Where the program was stuck, as program locations only. |
+
+**Folder and file names are hidden.** Each one becomes a numbered stand-in, such as `folder-01` or `file-01.pdf`, and the same name always gets the same stand-in. What helps find a problem is kept: the drive and its type (fixed, removable, network), folders Windows itself makes, file endings, which indexed folder a path is in, and each path's length, depth and any unusual characters. DugUp's own data and program folders are named for what they are. **Hide folder and file names** is on by default; untick it only if you are happy to share the real names.
+
+**What it leaves out:** your files, their text, your search words, and folder and file names. Your Windows user name and home folder are replaced with `%USERNAME%` and `%USERPROFILE%`. Your own description is sent as you write it, so leave names out of it. Nothing leaves your computer until you choose.
+
+### Freeze notes
+
+Each DugUp window has a small freeze recorder. If a window stops responding for 15 seconds, it writes down where the program was stuck, in the `logs` folder of [the data folder](technical.md#data-storage). It keeps the last ten notes, and a report includes those from the past week.
+
 ## Settings
 
 Adjust DugUp to your computer, or review its suggested settings before saving.
@@ -225,6 +260,15 @@ dugup tray --quit
 ```
 
 Starting the tray a second time opens the existing tray's search box. Source installations need the optional tray dependencies for the tray icon; the popup command still works without that icon.
+
+### Report a problem
+
+```powershell
+dugup report
+dugup report --print
+```
+
+`report` opens the report window; `--print` writes the report to the terminal instead.
 
 ### Cloud search
 

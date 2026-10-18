@@ -84,8 +84,14 @@ class Remote:
                                         claude_config=self.claude_config)
         self.cloud_switch.frame.grid(row=at + 1, column=0, columnspan=3, sticky="ew")
         self.cloud, self.cloud_folders = self.cloud_switch.on, self.cloud_switch.folders_text
+        ttk.Separator(frame).grid(row=at + 2, column=0, columnspan=3, sticky="ew", pady=(10, 6))
+        report_style = ttk.Style(root)
+        report_style.configure("Report.TButton", padding=(10, 8))
+        self.report_button = ttk.Button(frame, text="Report a problem with DugUp", style="Report.TButton",
+                                        command=self.report)
+        self.report_button.grid(row=at + 3, column=0, columnspan=3, sticky="ew")
         self.note = tk.StringVar(value="")
-        ttk.Entry(frame, textvariable=self.note, state="readonly", width=48).grid(row=at + 2, column=0, columnspan=3,
+        ttk.Entry(frame, textvariable=self.note, state="readonly", width=48).grid(row=at + 4, column=0, columnspan=3,
                                                                                   sticky="ew", pady=(8, 0))
         self._sync_cloud()
         frame.columnconfigure(1, weight=1)
@@ -93,6 +99,8 @@ class Remote:
         self._show(None, None)
         self._ask_id = root.after(0, self._ask)
         self._poll_id = root.after(POLL_MS, self._poll)
+        from .watchdog import Watchdog
+        self.watchdog = Watchdog(root, layout.logs, "remote")
 
     # -- what the tray is doing
 
@@ -209,6 +217,12 @@ class Remote:
     def choose_folders(self):
         return self.cloud_switch.choose_folders()
 
+    def report(self) -> None:
+        """Report a problem, as a program of its own: it works even when the tray or the window is stuck."""
+        from . import report
+        report.launch(self.layout, self.launch)
+        self.note.set("Report a problem is opening in a window of its own.")
+
     def toggle_startup(self) -> None:
         try:
             if self.at_login.get():
@@ -225,6 +239,7 @@ class Remote:
         if self.closed:
             return
         self.closed = True
+        self.watchdog.stop()
         for job in (self._ask_id, self._poll_id):
             try:
                 self.root.after_cancel(job)
