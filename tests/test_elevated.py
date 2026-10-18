@@ -169,3 +169,18 @@ def test_the_move_runs_behind_a_wait_window_and_reports(tmp_path):
         assert startnotes.run_move(root, tmp_path / "old", tmp_path / "new", mover=refusing) == "DugUp is running in the tray"
     finally:
         root.destroy()
+
+
+def test_a_note_window_is_shown_and_closes_with_ok(tmp_path):
+    tkinter = pytest.importorskip("tkinter")
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError:
+        pytest.skip("no display")
+    root.withdraw()
+    try:
+        _click_when_shown(root, "OK")
+        startnotes.show(root, "DugUp", "Your index was not moved: a test reason.")
+        assert not [w for w in root.winfo_children() if isinstance(w, tkinter.Toplevel)], "the note is gone after OK"
+    finally:
+        root.destroy()

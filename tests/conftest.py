@@ -22,10 +22,12 @@ def no_marker_and_not_elevated(monkeypatch):
     """The checkout carries a marker that puts the data folder beside the code, and a test machine may run
     as root or administrator. Neither should change what a test sees: a test that wants a marker or an
     elevated run says so (see test_datadir.py, test_elevated.py)."""
-    from dugup import datadir, elevated
+    from dugup import datadir, elevated, syncfolders
 
     monkeypatch.setattr(datadir, "find_program_home", lambda *args, **kwargs: None)
     monkeypatch.setattr(elevated, "is_elevated", lambda: False)
+    # nor the test machine's own sync apps: a test that wants synced folders brings its own (test_syncfolders.py)
+    monkeypatch.setattr(syncfolders, "survey", lambda *a, **k: syncfolders.Survey())
 
 
 @pytest.fixture

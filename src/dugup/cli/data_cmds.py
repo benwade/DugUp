@@ -22,14 +22,24 @@ def pending_move_note(args, environ) -> str:
 
 
 def _where(args, environ, beside: Optional[BesideChoice], out) -> int:
+    from .. import syncfolders
     folder = resolve_data_dir(args.data_dir, environ=environ, allow_synced=True)
     safe_write(f"Data folder in use: {folder}", out)
+    synced = syncfolders.survey().synced_by(folder)
+    if synced is not None:
+        safe_write(f"Warning: it is inside {synced.path}, which {synced.by} syncs to the cloud.", out)
+    note = syncfolders.unread_note(folder)
+    if note:
+        safe_write(note, out)
     if args.data_dir:
         safe_write("Chosen by --data-dir.", out)
     elif environ.get(ENV_DATA_DIR):
         safe_write(f"Chosen by the {ENV_DATA_DIR} setting.", out)
     elif beside is None:
         safe_write("The per-user folder: there is no marker beside the program saying otherwise.", out)
+    elif beside.synced is not None:
+        safe_write(f"The per-user folder: the folder beside the program ({beside.home.data}) is inside "
+                   f"{beside.synced.path}, which {beside.synced.by} syncs to the cloud, so the index stays out of it.", out)
     elif beside.move_from is not None:
         safe_write(f"Your index is here, in the per-user folder; the folder beside the program ({beside.home.data}) "
                    "has none yet. To move it there: dugup data move. To keep it here: dugup data keep.", out)
@@ -57,6 +67,10 @@ def _move(args, beside: Optional[BesideChoice], out, ask: Callable[[str], str]) 
         safe_write(f"Nothing to move: DugUp already keeps its data beside the program, in {beside.home.data}.", out)
         return 0
     new = beside.home.data
+    from .. import syncfolders
+    note = syncfolders.unread_note(new)
+    if note:
+        safe_write(note, out)
     if not args.yes:
         answer = ask(f"Move DugUp's data from {old} to {new}? The old folder is removed once the copy is checked. [y/N] ")
         if answer.strip().lower() not in ("y", "yes"):
@@ -80,6 +94,8 @@ def _move(args, beside: Optional[BesideChoice], out, ask: Callable[[str], str]) 
         safe_write("The tray's start-at-login entry now points there too.", out)
     if moved.left_behind:
         safe_write(f"The old folder could not be removed: {moved.left_behind}.", out)
+    for note in moved.notes:
+        safe_write(f"Note: {note}.", out)
     return 0
 
 

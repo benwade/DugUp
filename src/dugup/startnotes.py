@@ -87,12 +87,27 @@ def run_move(parent, old, new, mover: Callable = datamove.move) -> str:
     if "why" in outcome:
         return outcome["why"]
     moved = outcome["moved"]
-    return f"left:{moved.left_behind}" if moved.left_behind else ""
+    said = [moved.left_behind] if moved.left_behind else []
+    said += list(getattr(moved, "notes", []))
+    return ("left:" + ". ".join(said)) if said else ""
 
 
 def show(parent, title: str, text: str) -> None:
-    from tkinter import messagebox
-    messagebox.showinfo(title, text, parent=parent)
+    """A note in a small window of its own, brought to the front and kept there until OK. (A standard message
+    box over the hidden main window can open behind other windows, and a failed move then looks silent.)"""
+    import tkinter as tk
+    from tkinter import ttk
+    from .waitwindow import bring_to_front
+
+    win = tk.Toplevel(parent)
+    win.title(title)
+    win.resizable(False, False)
+    ttk.Label(win, text=text, wraplength=520, justify="left").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 10))
+    ttk.Button(win, text="OK", command=win.destroy).grid(row=1, column=0, sticky="e", padx=16, pady=(4, 14))
+    win.protocol("WM_DELETE_WINDOW", win.destroy)
+    bring_to_front(win, stay=True)
+    parent.wait_window(win)
+    _let_go()
 
 
 def before_window(parent, args, environ, asker: Callable = ask_move, mover: Callable = run_move,
@@ -116,7 +131,7 @@ def before_window(parent, args, environ, asker: Callable = ask_move, mover: Call
         return LATER
     why = mover(parent, old, new)
     if why.startswith("left:"):
-        tell(parent, "DugUp", f"Moved. The old folder could not be removed: {why[5:]}.")
+        tell(parent, "DugUp", f"Moved, with a note: {why[5:]}.")
         return MOVE
     if why:
         tell(parent, "DugUp", f"Your index was not moved: {why}.\n\nNothing was lost; DugUp keeps using it where "
