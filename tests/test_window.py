@@ -1416,6 +1416,7 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     help_menu.invoke(0)
     assert bench.told and bench.told[-1][0] == "About DugUp" and "0.2.0" in bench.told[-1][1]
     assert "PolyForm Noncommercial" in bench.told[-1][1] and "Ben Wade" in bench.told[-1][1], "the license is in the About box"
+    assert "without warranty" in bench.told[-1][1] and "your own risk" in bench.told[-1][1], "and that it comes as is"
     # disk space: the index, the models, the records, and what is free
     app.show_disk_space()
     assert bench.told[-1][0] == "Disk space" and "the index:" in bench.told[-1][1] and "Free on that drive" in bench.told[-1][1]

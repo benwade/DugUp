@@ -11,6 +11,9 @@ AUTHOR = "Ben Wade"
 HOME = "https://github.com/benwade/DugUp"
 LICENSE = "PolyForm Noncommercial License 1.0.0"
 LICENSE_URL = "https://polyformproject.org/licenses/noncommercial/1.0.0"
+NO_WARRANTY = ("DugUp is provided as is, without warranty of any kind. You use it at your own risk, and the author "
+               "is not liable for any damage or loss arising from its use, including lost or changed files. "
+               "(See 'No Liability' in the license.)")
 
 
 def about_text(data_folder: Optional[Path | str] = None) -> str:
@@ -22,6 +25,8 @@ def about_text(data_folder: Optional[Path | str] = None) -> str:
              f"Copyright (c) 2026 {AUTHOR}. {LICENSE}: use it, copy it, change it and share it for any noncommercial "
              f"purpose, with this notice kept; selling it, or using it in something sold, needs a separate agreement "
              f"with the author. {LICENSE_URL}",
+             "",
+             NO_WARRANTY,
              "",
              HOME]
     if data_folder:

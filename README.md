@@ -4,6 +4,10 @@ Find your files by what is in them: the words inside, the words in a photo or a 
 means, what a picture looks like. Press one key anywhere, type a few letters, and the file opens.
 Everything runs on your own machine; nothing you have leaves it.
 
+**No warranty.** DugUp is provided as is, without warranty of any kind. You use it at your own risk, and the author is not liable for any damage or loss arising from its use, including lost or changed files. Keep backups of anything that matters to
+you, especially before using the parts that change files (trash, rename, near-duplicate cleanup). This is
+stated in the [license](LICENSE) under *No Liability*.
+
 DugUp was inspired by the macOS app [DigUp](https://github.com/ARahim3/DigUp) but is a separate design,
 written from scratch in Python; it shares no code with it. It runs on Windows 11; Linux is supported and
 tested on Ubuntu (the full test suite runs there on every push, under Python 3.10, 3.12 and 3.13; the window,
@@ -204,6 +208,11 @@ Linux:
     pip install -r requirements-dev.txt
     pip install -e .
     pip install -r requirements-ocr.txt     (optional: to read pictures and scanned pages)
+
+On Windows, two files in the copy open DugUp without a console: double-click `DugUp.cmd` for the window and
+`DugUp Remote.cmd` for the remote (start or quit the tray, bring up the search box, free the graphics card).
+For a Start menu or desktop entry, right-click either one and choose *Send to*, *Desktop (create shortcut)*,
+or pin the shortcut to Start. A `git pull` brings the copy up to date; nothing needs installing again.
 
 The OCR engine is RapidOCR. Its models come inside the package, so nothing is downloaded when it runs.
 It reads printed words well. Drawn or handwritten lettering and blurred photos are often missed.
