@@ -408,3 +408,20 @@ def test_the_warm_up_is_decided_by_the_setting_and_the_sketches_and_a_sketch_mad
         monkeypatch.setattr(LocalService, "meaning_ready", lambda self: "the larger model is not fetched yet")
         warm = svc.warm_meaning()
         assert isinstance(warm, Failure) and "not fetched" in warm.detail
+
+
+def test_the_fingerprint_scan_scores_exactly_as_integer_arithmetic_would(monkeypatch):
+    """The scan scores in float32 blocks for speed; every score must still be the exact integer one, across
+    block edges too, so the candidates chosen never change."""
+    import numpy as np
+    from dugup import sketches
+    rng = np.random.default_rng(7)
+    prints = rng.integers(-127, 128, size=(1000, sketches.FINGERPRINT), dtype=np.int8)
+    prints[0] = 127                                          # the largest score there can be
+    asked = np.full(sketches.FINGERPRINT, 127, dtype=np.int32)
+    asked[1::2] = rng.integers(-127, 128, size=sketches.FINGERPRINT // 2)
+    monkeypatch.setattr(sketches, "SCAN_BLOCK", 64)          # many blocks, and a short last one
+    got = sketches.fingerprint_scores(prints, asked)
+    assert np.array_equal(got.astype(np.int64), prints.astype(np.int64) @ asked.astype(np.int64))
+    asked[:] = 127
+    assert sketches.fingerprint_scores(prints[:1], asked)[0] == 127 * 127 * sketches.FINGERPRINT

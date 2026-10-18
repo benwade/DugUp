@@ -14,6 +14,7 @@ from typing import Sequence, Tuple
 
 FINGERPRINT = 96            # numbers in the thin fingerprint (the first ones; the larger model's can be cut short)
 CANDIDATES = 800            # how many the fingerprint scan hands on to be re-scored in full
+SCAN_BLOCK = 65536          # fingerprints scored at a time (a block is 24 MB as float32)
 
 
 def quantize(vectors) -> Tuple[bytes, "list[float]"]:
@@ -47,6 +48,19 @@ def fingerprint_of(vector) -> bytes:
 PIECES_EACH = 3             # how many of one file's pieces the scan hands on, at most
 
 
+def fingerprint_scores(fingerprints, asked):
+    """Each fingerprint's score against the question's, as float32: exact (every sum of 96 products of
+    numbers up to 127 fits a float32's 24 bits), done in blocks so no copy of the whole matrix is ever
+    made, and through the fast float routines instead of numpy's slow integer ones."""
+    import numpy as np
+    rows = fingerprints.shape[0]
+    want = np.asarray(asked, dtype=np.float32)
+    scores = np.empty(rows, dtype=np.float32)
+    for at in range(0, rows, SCAN_BLOCK):
+        scores[at:at + SCAN_BLOCK] = fingerprints[at:at + SCAN_BLOCK].astype(np.float32) @ want
+    return scores
+
+
 def scan_files(fingerprints, file_ids, question, keep: int = CANDIDATES, each: int = PIECES_EACH):
     """The row numbers of the fingerprints to re-score, chosen so that `keep` different FILES are covered:
     each file's best `each` rows by the fingerprint, best file first. A file with many pages near the
@@ -57,7 +71,7 @@ def scan_files(fingerprints, file_ids, question, keep: int = CANDIDATES, each: i
         return np.zeros(0, dtype=np.int64)
     head = np.asarray(question, dtype=np.float32)[:FINGERPRINT]
     asked = np.clip(np.rint(head / max(float(np.abs(head).max()), 1e-9) * 127.0), -127, 127).astype(np.int32)
-    scores = fingerprints @ asked
+    scores = fingerprint_scores(fingerprints, asked)
     files = np.asarray(file_ids, dtype=np.int64)
     take = min(rows, keep * 4)
     while True:      # widen until enough different files are in, or every row is
@@ -87,7 +101,7 @@ def scan(fingerprints, question, keep: int = CANDIDATES):
     import numpy as np
     head = np.asarray(question, dtype=np.float32)[:FINGERPRINT]
     asked = np.clip(np.rint(head / max(float(np.abs(head).max()), 1e-9) * 127.0), -127, 127).astype(np.int32)
-    scores = fingerprints @ asked                         # int8 rows against an int32 question: no copy made
+    scores = fingerprint_scores(fingerprints, asked)
     keep = min(max(0, keep), scores.shape[0])
     if keep == 0:
         return np.zeros(0, dtype=np.int64)
