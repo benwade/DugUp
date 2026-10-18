@@ -4,7 +4,7 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
-## Since 0.2.2
+## 0.2.3 beta — October 2026
 
 **Report a problem, even when DugUp is stuck.** A new report window gathers the versions, health check, recent log and any freeze notes, hides folder and file names behind numbered stand-ins, shows you everything, and lets you open a GitHub issue, copy, or save it. It runs as a program of its own and is one step away in the Start menu, the search box, the tray menu, DugUp Remote and the main window. A freeze recorder in each window notes where a window got stuck. See [Report a problem](user-guide.md#report-a-problem).
 
