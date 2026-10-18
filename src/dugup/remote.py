@@ -36,7 +36,8 @@ class Remote:
     def __init__(self, root, layout, *, ask: Callable = summons.summon, launch: Callable = tray_module._detached,
                  install_startup: Optional[Callable] = None, remove_startup: Optional[Callable] = None,
                  startup_entry: Optional[Callable] = None, platform: Optional[str] = None,
-                 say: Optional[Callable[[str], None]] = None) -> None:
+                 say: Optional[Callable[[str], None]] = None, confirm: Optional[Callable[[str, str, str, str], bool]] = None,
+                 choose_folder: Optional[Callable[..., str]] = None, claude_config=None) -> None:
         import tkinter as tk
         from tkinter import ttk
         self.root, self.layout = root, layout
@@ -46,6 +47,11 @@ class Remote:
         self.startup_entry = startup_entry or tray_module.startup_entry
         self.platform = platform or sys.platform
         self.say = say or (lambda text: None)
+        from . import assistantsetup
+        from .assistantwindow import CloudSwitch, ask_allow
+        self.confirm = confirm or (lambda title, text, allow, cancel: ask_allow(root, title, text, allow, cancel))
+        self.choose_folder = choose_folder
+        self.claude_config = claude_config if claude_config is not None else assistantsetup.claude_config_path()
         self.closed = False
         self.answers: "queue.Queue[Optional[str]]" = queue.Queue()
         self.state: Optional[str] = None          # the tray's last answer; None: not running
@@ -70,9 +76,18 @@ class Remote:
         self.at_login = tk.BooleanVar(value=self.startup_entry().exists())
         ttk.Checkbutton(frame, text=startup_label(self.platform), variable=self.at_login,
                         command=self.toggle_startup).grid(row=len(rows) + 1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        # -- cloud search (assistantwindow.CloudSwitch): off unless allowed, and plain about what it costs
+        at = len(rows) + 2
+        ttk.Separator(frame).grid(row=at, column=0, columnspan=3, sticky="ew", pady=(10, 6))
+        self.cloud_switch = CloudSwitch(frame, layout, tell=lambda text: self.note.set(text),
+                                        confirm=lambda *a: self.confirm(*a), choose_folder=choose_folder,
+                                        claude_config=self.claude_config)
+        self.cloud_switch.frame.grid(row=at + 1, column=0, columnspan=3, sticky="ew")
+        self.cloud, self.cloud_folders = self.cloud_switch.on, self.cloud_switch.folders_text
         self.note = tk.StringVar(value="")
-        ttk.Entry(frame, textvariable=self.note, state="readonly", width=48).grid(row=len(rows) + 2, column=0, columnspan=3,
+        ttk.Entry(frame, textvariable=self.note, state="readonly", width=48).grid(row=at + 2, column=0, columnspan=3,
                                                                                   sticky="ew", pady=(8, 0))
+        self._sync_cloud()
         frame.columnconfigure(1, weight=1)
         root.protocol("WM_DELETE_WINDOW", self.close)
         self._show(None, None)
@@ -110,6 +125,7 @@ class Remote:
         self._poll_id = self.root.after(POLL_MS, self._poll)
 
     def _show(self, answer: Optional[str], models: Optional[str] = None) -> None:
+        self._sync_cloud()                     # changed elsewhere (dugup mcp ...)? shown as it is now
         self.state = answer
         self.models = models or "none"
         running = answer is not None
@@ -178,6 +194,20 @@ class Remote:
         self.note.set(done if answer else NOT_RUNNING)
         self.say(self.note.get())
         self.refresh()
+
+    # -- cloud search (the switch itself is assistantwindow.CloudSwitch)
+
+    def _sync_cloud(self) -> None:
+        self.cloud_switch.sync()
+
+    def _click_cloud(self) -> None:
+        self.cloud_switch.click()
+
+    def toggle_cloud(self) -> None:
+        self.cloud_switch.toggle()
+
+    def choose_folders(self):
+        return self.cloud_switch.choose_folders()
 
     def toggle_startup(self) -> None:
         try:

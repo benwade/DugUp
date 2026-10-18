@@ -1466,3 +1466,26 @@ def test_an_evicted_thumbnail_is_made_again_when_asked_for(tmp_path, monkeypatch
     assert thumbs.made.get(gone) is not None, "asked again after eviction, it is made again"
     assert thumbs.pending() == 0
 
+
+
+def test_the_file_menu_carries_the_cloud_switch(tmp_path):
+    from dugup import assistantsetup as setup
+    bench = Bench(tmp_path)
+    try:
+        asked = []
+        switch = bench.app.cloud_switch
+        switch.confirm = lambda title, text, allow, cancel: asked.append(title) or allow == "Allow"
+        switch.claude_config = tmp_path / "claude.json"
+        labels = [bench.app.root.nametowidget(bench.app.root["menu"]).entrycget(0, "label")]
+        file_menu = bench.app.root.nametowidget(bench.app.root.nametowidget(bench.app.root["menu"]).entrycget(0, "menu"))
+        names = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) != "separator"]
+        assert labels == ["File"] and any(n.startswith("Allow cloud search access") for n in names)
+        assert "Folders Claude may search..." in names
+        at = next(i for i in range(file_menu.index("end") + 1)
+                  if file_menu.type(i) == "checkbutton")
+        file_menu.invoke(at)                       # ticked: asks, then on
+        assert asked and setup.load(bench.layout).mcp_enabled is True and switch.on.get() is True
+        file_menu.invoke(at)                       # unticked: off at once
+        assert setup.load(bench.layout).mcp_enabled is False and len(asked) == 2   # Allow, then "Not now" to connecting
+    finally:
+        bench.close()

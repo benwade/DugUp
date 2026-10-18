@@ -64,7 +64,8 @@ class Tray:
                  launch: Callable[[Sequence[str]], None] = _detached, desktop: Optional[Desktop] = None,
                  make_icon: Optional[Callable[["Tray"], object]] = None,
                  start_hotkey: Callable[[str, Callable[[], None]], hotkeys.Hotkey] = hotkeys.start,
-                 say: Optional[Callable[[str], None]] = None, watcher: Optional[Watcher] = None) -> None:
+                 say: Optional[Callable[[str], None]] = None, watcher: Optional[Watcher] = None,
+                 cloud_options: Optional[dict] = None) -> None:
         self.root, self.service, self.settings = root, service, settings
         self.layout = service.layout
         self.launch = launch
@@ -81,7 +82,8 @@ class Tray:
         self.popup = Popup(root, service, self.folder_first, self.desktop.open_file, self.open_window, self.say,
                            present_only=lambda: bool(remember.read(self.layout.root).get("present_only", False)),
                            size=tuple(kept) if isinstance(kept, list) and len(kept) == 2 else None,
-                           on_resize=lambda size: remember.write(self.layout.root, popup_size=list(size)))
+                           on_resize=lambda size: remember.write(self.layout.root, popup_size=list(size)),
+                           cloud_options=cloud_options)
         self.hotkey = start_hotkey(settings.hotkey, lambda: self.events.put("popup")) if settings.hotkey else hotkeys.Hotkey("no hotkey set")
         self.watcher = watcher if watcher is not None else Watcher(service, settings, say=self.say)
         self.listener = summons.Listener(self.layout.root, self._summoned)
@@ -230,6 +232,9 @@ class Tray:
             self.load_models()
         elif command == "about":
             self.popup.about()
+        elif command == "cloud":
+            self.popup.show()                  # the switch asks first when turning on: the question needs a window
+            self.popup.cloud_switch.click()
         elif command == "quit":
             self.quit()
 
@@ -247,6 +252,13 @@ def make_pystray_icon(tray: Tray):
     def toggle_pause():
         tray.events.put("resume" if tray.watcher.paused else "pause")
 
+    def cloud_on() -> bool:
+        from .assistantsetup import load
+        try:
+            return bool(load(tray.layout).mcp_enabled)
+        except Exception:
+            return False
+
     menu = pystray.Menu(
         pystray.MenuItem(f"Search ({key})" if key else "Search", lambda: tray.events.put("popup"), default=True),
         pystray.MenuItem("Open the window", lambda: tray.events.put("window")),
@@ -258,6 +270,7 @@ def make_pystray_icon(tray: Tray):
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Free the graphics card and memory", lambda: tray.events.put("free")),
         pystray.MenuItem("Load the models", lambda: tray.events.put("load")),
+        pystray.MenuItem("Allow cloud search access", lambda: tray.events.put("cloud"), checked=lambda item: cloud_on()),
         pystray.MenuItem("About DugUp", lambda: tray.events.put("about")),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit DugUp", lambda: tray.events.put("quit")),

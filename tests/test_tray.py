@@ -328,3 +328,118 @@ def test_the_remote_drives_the_tray_through_its_summons_and_starts_it_when_there
         assert not entries["path"].exists() and "no longer" in window.note.get()
     finally:
         window.close()
+
+
+# -- cloud search in the remote: off unless allowed, plain about the cost, folders chosen in a window
+
+def _remote(stage, tmp_path, confirm, chosen=None):
+    import tkinter as tk
+    from dugup import remote as remote_module
+    root = tk.Toplevel(stage.root)
+    asked = []
+
+    def answer(title, text, allow, cancel):
+        asked.append((title, text, allow))
+        return confirm.pop(0) if confirm else False
+
+    picks = []
+
+    def choose_folder(**kw):
+        picks.append(kw.get("initialdir"))
+        return chosen.pop(0) if chosen else ""
+
+    window = remote_module.Remote(root, stage.layout, ask=lambda folder, command: None, launch=lambda args: None,
+                                  startup_entry=lambda: tmp_path / "no entry", platform="win32", confirm=answer,
+                                  choose_folder=choose_folder, claude_config=tmp_path / "claude.json")
+    return window, asked, picks
+
+
+def test_cloud_search_is_allowed_only_after_the_cost_is_read_and_turned_off_at_once(stage, tmp_path):
+    from dugup import assistantsetup as setup
+    window, asked, _ = _remote(stage, tmp_path, confirm=[False])
+    try:
+        assert window.cloud.get() is False, "off until allowed"
+        window.cloud.set(True)
+        window.toggle_cloud()                                  # Cancel
+        assert window.cloud.get() is False and setup.load(stage.layout).mcp_enabled is False
+        title, text, allow = asked[0]
+        assert allow == "Allow" and "leaves this computer" in text and "file names and full paths" in text
+        assert "does not cover what Claude is shown" in text
+        window.confirm = lambda *a: asked.append(a) or (a[2] == "Allow")    # Allow, then "Not now" to connecting
+        window._click_cloud()                                  # the words beside the box work too
+        assert window.cloud.get() is True and setup.load(stage.layout).mcp_enabled is True
+        assert not (tmp_path / "claude.json").exists() and "connect --write" in window.note.get()
+        window._click_cloud()                                  # off: no question
+        before = len(asked)
+        assert setup.load(stage.layout).mcp_enabled is False and len(asked) == before
+        window.confirm = lambda *a: True                       # Allow, and Connect
+        window._click_cloud()
+        assert setup.is_connected(tmp_path / "claude.json") and "restart the Claude app" in window.note.get()
+    finally:
+        window.close()
+
+
+def test_folders_are_chosen_in_a_window_that_remembers_where_it_was(stage, tmp_path):
+    from dugup import assistantsetup as setup
+    first, second = tmp_path / "Shared" / "Travel", tmp_path / "Shared" / "Recipes"
+    first.mkdir(parents=True)
+    second.mkdir()
+    window, _, picks = _remote(stage, tmp_path, confirm=[], chosen=[str(first), str(second)])
+    try:
+        assert window.cloud_folders.get() == "Every indexed folder"
+        chooser = window.choose_folders()
+        chooser.add()
+        chooser.add()
+        assert picks[1] == str(tmp_path / "Shared"), "the dialog opens where the last folder was chosen"
+        assert chooser.folders() == [str(first), str(second)] and chooser.mode.get() == "these"
+        chooser.list.selection_set(1)
+        chooser.remove()
+        chooser.save()
+        assert setup.folders_of(setup.load(stage.layout)) == [str(first)]
+        assert str(first) in window.cloud_folders.get() and "Saved" in window.note.get()
+        again = window.choose_folders()
+        assert again.folders() == [str(first)], "the window opens with the saved list"
+        again.list.delete(0, "end")
+        again.save()
+        assert "at least one folder" in again.message.get(), "an empty list is not taken for every folder"
+        again.mode.set("all")
+        again.save()
+        assert setup.folders_of(setup.load(stage.layout)) is None and window.cloud_folders.get() == "Every indexed folder"
+        setup.change(stage.layout, folders=[str(second)])      # changed elsewhere (dugup mcp enable --folders)
+        window._show(None, None)
+        assert str(second) in window.cloud_folders.get()
+    finally:
+        window.close()
+
+
+def test_the_search_box_and_the_tray_menu_carry_the_cloud_switch_too(stage, tmp_path):
+    """Win+Shift+F is what people see most, so the switch is there as well: one line, asking first."""
+    import tkinter as tk
+    from dugup import assistantsetup as setup
+    root = tk.Toplevel(stage.root)
+    asked = []
+
+    def confirm(title, text, allow, cancel):
+        asked.append(title)
+        return allow == "Allow"                    # Allow cloud access; "Not now" to connecting the app
+
+    from test_watcher import Service as FakeRuns, settings as watch_settings
+    watcher = tray_module.Watcher(FakeRuns(), watch_settings(watch_every_minutes=0), cores=4)
+    tray = tray_module.Tray(root, stage.service, stage.service.settings, launch=lambda a: None, make_icon=lambda t: None,
+                            start_hotkey=lambda text, fire: hotkey.Hotkey(""), say=lambda text: None, watcher=watcher,
+                            cloud_options={"confirm": confirm, "claude_config": tmp_path / "claude.json"})
+    try:
+        switch = tray.popup.cloud_switch
+        assert switch.on.get() is False
+        tray.handle("cloud")                       # the tray menu's "Allow cloud search access"
+        assert tray.popup.shown and asked[0] == setup.CONFIRM_TITLE and switch.on.get() is True
+        assert setup.load(stage.layout).mcp_enabled is True and "connect" in tray.popup.note.get()
+        tray.handle("cloud")
+        assert switch.on.get() is False and setup.load(stage.layout).mcp_enabled is False and len(asked) == 2
+        setup.change(stage.layout, enabled=True)   # turned on elsewhere: the box shows it when next brought up
+        tray.popup.hide()
+        tray.popup.show()
+        assert switch.on.get() is True
+    finally:
+        tray.quit()
+        root.destroy()

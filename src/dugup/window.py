@@ -225,7 +225,8 @@ class App:
     """`root` is a tkinter root (or Toplevel). `service` is a LocalService. The rest can be replaced in tests."""
 
     def __init__(self, root, service, desktop: Optional[Desktop] = None, ask=None, choose_folder=None,
-                 pick: bool = True, setup: bool = True, tell=None) -> None:
+                 pick: bool = True, setup: bool = True, tell=None, cloud_options: Optional[dict] = None) -> None:
+        self.cloud_options = cloud_options or {}
         self.waiting = None           # the small window shown while a folder is looked through
         self.pick = pick              # show the folder picker when a folder is added (False: add it whole, at once)
         self.setup_on_first_start = setup    # open the setup wizard by itself when there is no folder yet
@@ -499,6 +500,15 @@ class App:
         file.add_command(label="Settings...", command=self.open_setup)
         file.add_command(label="Disk space...", command=self.show_disk_space)
         file.add_command(label="Free the graphics card and memory...", command=self.free_models)
+        file.add_separator()
+        # cloud search: the same switch as in the search box and DugUp Remote (assistantwindow.CloudSwitch); its own
+        # widgets are not shown here, the menu's tick and the folder window are
+        from .assistantwindow import CloudSwitch
+        self.cloud_switch = CloudSwitch(self.root, self.service.layout, tell=self.say, **self.cloud_options)
+        file.add_checkbutton(label="Allow cloud search access (what Claude is shown leaves this computer)",
+                             variable=self.cloud_switch.on, command=self.cloud_switch.toggle)
+        file.add_command(label="Folders Claude may search...", command=self.cloud_switch.choose_folders)
+        file.configure(postcommand=self.cloud_switch.sync)
         file.add_separator()
         file.add_command(label="Quit", command=self.close)
         bar.add_cascade(label="File", menu=file)
