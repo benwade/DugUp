@@ -1,2 +1,3 @@
 -r requirements.txt
 pytest
+mcp>=2.3,<3          # dugup mcp (assistant search); tested on every push

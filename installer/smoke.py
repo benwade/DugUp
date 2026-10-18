@@ -9,6 +9,7 @@ runtime are printed as information: the CI machine has no graphics card, so they
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -68,6 +69,25 @@ def install(setup: Path, folder: Path, log: Path, *extra: str) -> None:
             print("(no setup log was written)")
         sys.exit(f"FAILED: the installer ended with code {done.returncode}")
 
+
+ASSISTANT = r"""
+import anyio, json, sys
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
+
+async def main():
+    params = StdioServerParameters(command=sys.argv[1], args=json.loads(sys.argv[2]))
+    with anyio.fail_after(240):
+        async with stdio_client(params) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                await session.initialize()
+                listed = await session.list_tools()
+                print("TOOLS", ",".join(sorted(t.name for t in listed.tools)))
+                found = await session.call_tool("search", {"query": "zebrafish"})
+                print("ERROR" if found.is_error else "OK", found.content[0].text[:600])
+
+anyio.run(main)
+"""
 
 PICTURE = r"""
 import sys
@@ -167,6 +187,17 @@ def main() -> int:
     run(*dugup, "meaning", "fill", "--no-gpu", timeout=1800)
     found = run(*dugup, "search", "--meaning", "fish with stripes")
     expect("notes.txt" in found, "search by meaning works on the processor")
+
+    step("An assistant searches over MCP (dugup mcp), read-only, once it is turned on")
+    expect("is off" in run(*dugup, "mcp", "status"), "off until turned on")
+    claude = logs / "claude_desktop_config.json"
+    run(*dugup, "mcp", "enable", "--yes")
+    run(*dugup, "mcp", "connect", "--write", "--config", claude)
+    entry = json.loads(claude.read_text(encoding="utf-8"))["mcpServers"]["dugup"]
+    expect(entry["command"].lower().endswith("python.exe"), "the entry starts the console Python, which has standard input and output")
+    answer = run(python, "-c", ASSISTANT, entry["command"], json.dumps(entry["args"]), timeout=300)
+    expect("TOOLS search,passages,status" in answer and "notes.txt" in answer, "the tools answer a real MCP client")
+    run(*dugup, "mcp", "disable")
 
     step("Upgrade over the top: the data stays")
     install(setup, app, logs / "upgrade.log")

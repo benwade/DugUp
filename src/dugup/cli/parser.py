@@ -262,6 +262,18 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="move an index from the per-user folder into the folder beside the program")
     moving.add_argument("--yes", action="store_true", help="do not ask")
     data_sub.add_parser("keep", parents=[common], help="keep using the per-user folder, and stop being asked")
+    assistant = sub.add_parser("mcp", help="read-only search for an AI assistant such as Claude (off unless you turn it on)")
+    assistant_sub = assistant.add_subparsers(dest="mcp_command", required=True)
+    enable = assistant_sub.add_parser("enable", parents=[common], help="let assistants search (says what that sends first)")
+    enable.add_argument("--folders", metavar="FOLDERS",
+                        help='only these folders, separated by ";" (an empty string means every indexed folder)')
+    enable.add_argument("--yes", action="store_true", help="do not ask")
+    assistant_sub.add_parser("disable", parents=[common], help="stop assistants searching (at once)")
+    assistant_sub.add_parser("status", parents=[common], help="on or off, which folders, whether the Claude app is connected")
+    connect = assistant_sub.add_parser("connect", parents=[common], help="the entry for the Claude desktop app's settings")
+    connect.add_argument("--write", action="store_true", help="add it to the app's settings file (a copy of the old one is kept)")
+    connect.add_argument("--config", metavar="FILE", help="a different settings file to write to")
+    assistant_sub.add_parser("serve", parents=[common], help="run the server (the assistant app starts this itself)")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")

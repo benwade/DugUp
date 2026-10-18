@@ -334,3 +334,18 @@ def test_another_thread_reads_through_a_connection_of_its_own(service, docs):
     assert seen["store"] is not mine and seen["again"] is seen["store"], "one connection per thread, kept for it"
     assert seen["found"] == service.search("needle", 10, 0).total > 0
     assert service.store is mine
+
+
+def test_the_thread_that_read_first_can_close_the_connection_it_opened(layout):
+    """An assistant's server reads only from a thread of its own; when it ends, it closes what it opened, and
+    the service then closes cleanly from the thread that made it."""
+    import threading
+
+    service = LocalService(layout)
+    worker = threading.Thread(target=lambda: (service.store.file_count(), service.release_thread_store()))
+    worker.start()
+    worker.join(10)
+    assert service._store is None
+    service.close()                              # would raise if the worker's connection were still open
+    assert service.store.file_count() == 0, "and the next thread to read opens one of its own"
+    service.close()

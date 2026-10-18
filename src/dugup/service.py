@@ -127,11 +127,17 @@ class LocalService:
         return mine
 
     def release_thread_store(self) -> None:
-        """Close the calling thread's own reading connection, if it has one (the service's own is left)."""
+        """Close the calling thread's own reading connection, if it has one. When the calling thread is the one
+        that opened the service's own connection (it read first), that one is closed too, and the next thread
+        to read takes its place: a connection can only be closed by the thread that opened it."""
         mine = getattr(self._readers, "store", None)
         if mine is not None:
             mine.close()
             self._readers.store = None
+        if self._store is not None and self._store_thread == threading.get_ident():
+            self._store.close()
+            self._store = None
+            self._store_thread = None
 
     @property
     def ocr_backend(self):
