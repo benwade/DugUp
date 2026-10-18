@@ -159,14 +159,15 @@ def run_checks(env: Optional[Environment] = None, data_dir: Optional[os.PathLike
             add("data folder", FAIL, exc.reason)
     found = env.sync()
     apps = sorted({f.by for f in found.folders})
+    caveat = ". Not a guarantee: a synced folder can be missed, and other sync or backup apps are not detected"
     if found.unread:
         add("cloud sync", WARN, f"could not read which folders {' and '.join(found.unread)} syncs; DugUp cannot tell "
-            "whether its data folder is uploaded")
+            "whether its data folder is uploaded" + caveat)
     elif apps:
         add("cloud sync", OK, "synced folders known from " + ", ".join(apps) +
-            ("; the data folder is not in one" if data_dir is not None else ""))
+            ("; the data folder is not in one" if data_dir is not None else "") + caveat)
     else:
-        add("cloud sync", INFO, "no sync app's folders found")
+        add("cloud sync", INFO, "no sync app's folders found" + caveat)
 
     if env.elevated():
         add("administrator rights", INFO, "running with them. Nothing is wrong; as a precaution, DugUp is best "

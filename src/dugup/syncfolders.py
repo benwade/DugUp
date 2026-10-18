@@ -193,6 +193,11 @@ def dropbox(places: Optional[Sequence[Path]] = None) -> Tuple[List[SyncedFolder]
 
 DEFAULT_SOURCES: Tuple[Source, ...] = (windows_sync_roots, onedrive_accounts, google_drive, dropbox)
 
+# Said wherever DugUp reports on synced folders, so nobody takes the check for more than it is.
+CAVEAT = ("DugUp checks the sync apps it knows (OneDrive, Google Drive, Dropbox, and the folders Windows lists as "
+          "synced). That check is not a guarantee: it may not catch a synced folder every time, and it does not "
+          "detect other sync or backup apps at all.")
+
 _cached: Optional[Survey] = None
 
 
@@ -221,4 +226,4 @@ def unread_note(path: os.PathLike | str, found: Optional[Survey] = None) -> str:
         return ""
     return (f"Note from DugUp: it could not read which folders {' and '.join(found.unread)} syncs, so it cannot "
             f"tell whether {path} is synced to the cloud. If it is, the index (the text of your files) is uploaded "
-            "with it; dugup data where shows the folder in use.")
+            "with it; dugup data where shows the folder in use. " + CAVEAT)

@@ -48,12 +48,19 @@ def wait_until(condition, what: str, limit: float = 300) -> None:
     print(f"ok: {what}")
 
 
-def install(setup: Path, folder: Path, log: Path) -> None:
+def marker_text(app: Path) -> str:
+    try:
+        return (app / "dugup-data-folder.txt").read_text(encoding="utf-8-sig")
+    except OSError:
+        return ""
+
+
+def install(setup: Path, folder: Path, log: Path, *extra: str) -> None:
     """Install silently; on failure, show the setup log, which says why."""
     log.parent.mkdir(parents=True, exist_ok=True)       # Setup will not start if it cannot write its log
     print("+", setup, "(silent install into", folder, ")", flush=True)
     done = subprocess.run([str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER",
-                           f"/DIR={folder}", f"/LOG={log}"], timeout=1800)
+                           f"/DIR={folder}", f"/LOG={log}", *extra], timeout=1800)
     if done.returncode != 0:
         try:
             print(log.read_text(encoding="utf-8", errors="replace"))
@@ -110,6 +117,7 @@ def main() -> int:
     python, pythonw = app / "python" / "python.exe", app / "python" / "pythonw.exe"
     expect(python.is_file() and pythonw.is_file(), "the bundled Python is installed")
     expect((app / "dugup-data-folder.txt").is_file(), "the marker sits beside the program")
+    expect("data = data" in marker_text(app), "by default the index goes in the data folder inside the program's")
     expect(not (app / "data").exists(), "no data folder until DugUp first runs")
     dugup = [python, "-m", "dugup"]
 
@@ -181,6 +189,24 @@ def main() -> int:
             print("(no uninstall log)")
     expect((app / "data" / "index.sqlite").is_file(), "a silent uninstall keeps the data")
     expect(not (app / "dugup-data-folder.txt").exists(), "the marker goes with the program")
+
+    step("Install with the index in a folder of its own (/INDEXDIR, the page 'Where DugUp keeps its index')")
+    other = root / "Programs" / "DugUp elsewhere"
+    index = root / "Index kept apart"
+    install(setup, other, logs / "install-indexdir.log", f"/INDEXDIR={index}")
+    expect(f"data = {index}" in marker_text(other), "the marker names the chosen folder")
+    python2 = other / "python" / "python.exe"
+    where = run(python2, "-m", "dugup", "data", "where")
+    expect(str(index) in where and "not a guarantee" in where, "data where names it, with the sync caveat")
+    run(python2, "-m", "dugup", "init")
+    expect((index / "index.sqlite").is_file(), "the index is made there")
+    expect(not (other / "data").exists(), "and not inside the program's folder")
+    install(setup, other, logs / "upgrade-indexdir.log")
+    expect(f"data = {index}" in marker_text(other), "an upgrade keeps the chosen folder")
+    uninstaller = sorted(other.glob("unins*.exe"))
+    run(uninstaller[-1], "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", f"/LOG={logs / 'uninstall2.log'}")
+    wait_until(lambda: not (other / "python").exists(), "the program's files are removed")
+    expect((index / "index.sqlite").is_file(), "a silent uninstall keeps the index in its own folder")
     print("\nAll smoke checks passed.")
     return 0
 
