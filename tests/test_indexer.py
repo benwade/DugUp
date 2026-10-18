@@ -607,3 +607,24 @@ def test_an_editing_lock_file_is_listed_by_name_and_never_read(w):
     w.run()
     assert w.found("alpha") == ["Report.txt"] and w.get("~$Report.txt").state is FileState.SKIPPED
     assert all("~$" not in path for path in w.reader.calls)
+
+
+# ---- a file's type changed in the settings ([extensions]) --------------------------------------------------
+
+def test_files_whose_type_the_settings_change_are_read_again_once(w):
+    """Changing [extensions] changes no file on disk, so nothing else would notice: the next update does."""
+    from dugup.kinds import DEFAULT_EXTENSIONS
+    from dugup.shapes import FileKind
+    w.put("notes.nfo", "alpha in a release note")
+    w.put("a.txt", "beta untouched")
+    w.run()
+    assert w.get("notes.nfo").kind is FileKind.OTHER      # (the test reader reads every kind; real ones do not)
+    as_text = Settings(extensions={**DEFAULT_EXTENSIONS, "nfo": FileKind.TEXT})
+    report = w.run(settings=as_text)
+    assert w.reader.calls == [w.h.full_path(w.root, "notes.nfo")], "only the retyped file is read again"
+    assert report.roots[0].retyped == 1 and w.get("notes.nfo").kind is FileKind.TEXT and w.found("alpha") == ["notes.nfo"]
+    report = w.run(settings=as_text)
+    assert w.reader.calls == [] and report.roots[0].retyped == 0, "once"
+    report = w.run()                                           # back to the default: back to names only
+    assert report.roots[0].retyped == 1 and w.get("notes.nfo").kind is FileKind.OTHER
+    assert w.reader.calls == [w.h.full_path(w.root, "notes.nfo")]
