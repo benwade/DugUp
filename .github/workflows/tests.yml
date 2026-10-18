@@ -24,7 +24,7 @@ jobs:
           python -m pip install -q --upgrade pip
           # every dependency as a ready-made wheel: a package that would need a compiler fails here, not on a laptop
           python -m pip install -q tomli
-          python -c "import tomli; p = tomli.load(open('pyproject.toml', 'rb'))['project']; print('\n'.join(p['dependencies'] + p['optional-dependencies']['meaning'] + p['optional-dependencies']['tray']))" > deps.txt
+          python -c "import tomli; p = tomli.load(open('pyproject.toml', 'rb'))['project']; print('\n'.join(p['dependencies'] + p['optional-dependencies']['meaning'] + p['optional-dependencies']['tray'] + p['optional-dependencies']['assistant']))" > deps.txt
           python -m pip install -q --only-binary=":all:" -r deps.txt pytest
           python -m pip install -q --no-deps -e .
       - name: Test
@@ -42,7 +42,7 @@ jobs:
           python -m pip install -q --upgrade pip
           # every dependency as a ready-made wheel: a package that would need a compiler fails here, not on a laptop
           python -m pip install -q tomli
-          python -c "import tomli; p = tomli.load(open('pyproject.toml', 'rb'))['project']; print('\n'.join(p['dependencies'] + p['optional-dependencies']['meaning'] + p['optional-dependencies']['tray']))" > deps.txt
+          python -c "import tomli; p = tomli.load(open('pyproject.toml', 'rb'))['project']; print('\n'.join(p['dependencies'] + p['optional-dependencies']['meaning'] + p['optional-dependencies']['tray'] + p['optional-dependencies']['assistant']))" > deps.txt
           python -m pip install -q --only-binary=":all:" -r deps.txt pytest
           python -m pip install -q --no-deps -e .
       - name: Test
