@@ -83,7 +83,7 @@ class Tray:
                            present_only=lambda: bool(remember.read(self.layout.root).get("present_only", False)),
                            size=tuple(kept) if isinstance(kept, list) and len(kept) == 2 else None,
                            on_resize=lambda size: remember.write(self.layout.root, popup_size=list(size)),
-                           cloud_options=cloud_options)
+                           cloud_options=cloud_options, report=self.report)
         self.hotkey = start_hotkey(settings.hotkey, lambda: self.events.put("popup")) if settings.hotkey else hotkeys.Hotkey("no hotkey set")
         self.watcher = watcher if watcher is not None else Watcher(service, settings, say=self.say)
         self.listener = summons.Listener(self.layout.root, self._summoned)
@@ -96,6 +96,8 @@ class Tray:
         except Exception as exc:         # no pystray, or no tray on this desktop: carry on without the icon
             self.icon_problem = f"{type(exc).__name__}: {exc}"
         self._poll_id = root.after(POLL_MS, self._poll)
+        from .watchdog import Watchdog
+        self.watchdog = Watchdog(root, self.layout.logs, "tray")
 
     # -- what the tray can be asked to do
 
@@ -153,6 +155,7 @@ class Tray:
             pass
         self.hotkey.stop()
         self.watcher.stop()
+        self.watchdog.stop()
         self.listener.close()
         if self.icon is not None:
             try:
@@ -213,6 +216,11 @@ class Tray:
         self.watcher.tick()
         self._poll_id = self.root.after(POLL_MS, self._poll)
 
+    def report(self) -> None:
+        """Report a problem, as a program of its own (it works even if this one is stuck later)."""
+        from . import report
+        report.launch(self.layout, self.launch)
+
     def handle(self, command: str) -> None:
         if command == "popup":
             self.popup.show()
@@ -232,6 +240,8 @@ class Tray:
             self.load_models()
         elif command == "about":
             self.popup.about()
+        elif command == "report":
+            self.report()
         elif command == "cloud":
             self.popup.show()                  # the switch asks first when turning on: the question needs a window
             self.popup.cloud_switch.click()
@@ -271,6 +281,7 @@ def make_pystray_icon(tray: Tray):
         pystray.MenuItem("Free the graphics card and memory", lambda: tray.events.put("free")),
         pystray.MenuItem("Load the models", lambda: tray.events.put("load")),
         pystray.MenuItem("Allow cloud search access", lambda: tray.events.put("cloud"), checked=lambda item: cloud_on()),
+        pystray.MenuItem("Report a problem...", lambda: tray.events.put("report")),
         pystray.MenuItem("About DugUp", lambda: tray.events.put("about")),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit DugUp", lambda: tray.events.put("quit")),

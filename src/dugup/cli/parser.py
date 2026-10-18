@@ -107,6 +107,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     window = sub.add_parser("window", parents=[common], help="open the search window")
     window.add_argument("--search", metavar="WORDS", help="search for these words as soon as the window opens")
+    reporting = sub.add_parser("report", parents=[common],
+                               help="report a problem: gathers what helps, shows it, and you choose how to send it")
+    reporting.add_argument("--print", action="store_true", help="print the report instead of opening a window")
     sub.add_parser("remote", parents=[common], help="a small window that starts the tray, brings up the search box, frees the graphics card, quits")
     tray = sub.add_parser("tray", parents=[common], help="stay in the tray, with a key that brings up a search box anywhere")
     tray.add_argument("--startup", choices=("add", "remove"), help="make the tray start when you log in, or stop that")

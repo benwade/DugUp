@@ -23,7 +23,7 @@ from .common import save_file_list, save_lines
 from .data_cmds import cmd_data
 from .mcp_cmds import cmd_mcp
 from .download_cmds import cmd_download
-from .desktop_cmds import cmd_popup, cmd_remote, cmd_tray, cmd_window
+from .desktop_cmds import cmd_popup, cmd_remote, cmd_report, cmd_tray, cmd_window
 from .index_cmds import cmd_index, cmd_ocr, cmd_status, print_ocr_report, print_report
 from .meaning_cmds import cmd_meaning, print_meaning_report, print_meaning_status, print_measurement
 from .output import (MISSING_NOTE, UNAVAILABLE_NOTE, WARNING_TEXT, ProgressPrinter,
@@ -48,7 +48,7 @@ __all__ = [
 
 
 COMMANDS = {"doctor": cmd_doctor, "init": cmd_init, "roots": cmd_roots, "index": cmd_index, "search": cmd_search,
-            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "rename": cmd_rename, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "tray": cmd_tray, "remote": cmd_remote, "popup": cmd_popup, "models": cmd_models, "ask": cmd_ask, "config": cmd_config, "data": cmd_data, "download": cmd_download, "mcp": cmd_mcp}
+            "status": cmd_status, "duplicates": cmd_duplicates, "meaning": cmd_meaning, "alike": cmd_alike, "rename": cmd_rename, "ocr": cmd_ocr, "space": cmd_space, "window": cmd_window, "tray": cmd_tray, "remote": cmd_remote, "report": cmd_report, "popup": cmd_popup, "models": cmd_models, "ask": cmd_ask, "config": cmd_config, "data": cmd_data, "download": cmd_download, "mcp": cmd_mcp}
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Environment] = None,

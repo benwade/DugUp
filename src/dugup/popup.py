@@ -27,7 +27,7 @@ class Popup:
                  hand_to_window: Callable[[str], None], say: Optional[Callable[[str], None]] = None,
                  present_only: Callable[[], bool] = lambda: False, size: Optional[Tuple[int, int]] = None,
                  on_resize: Optional[Callable[[Tuple[int, int]], None]] = None,
-                 cloud_options: Optional[dict] = None) -> None:
+                 cloud_options: Optional[dict] = None, report: Optional[Callable[[], None]] = None) -> None:
         self.service, self.folder_first, self.open_file, self.hand_to_window = service, folder_first, open_file, hand_to_window
         self.present_only, self.on_resize = present_only, on_resize
         self.say = say or (lambda text: None)
@@ -60,6 +60,9 @@ class Popup:
         self.window_button = ttk.Button(foot, text="Open the full window", command=self._to_window)
         self.window_button.pack(side="right")
         ttk.Button(foot, text="About", command=self.about).pack(side="right", padx=(0, 6))
+        self.report = report
+        if report is not None:
+            ttk.Button(foot, text="Report a problem", command=report).pack(side="right", padx=(0, 6))
         # cloud search: where people look most, so it is here as well as in DugUp Remote (assistantwindow.py)
         from .assistantwindow import CloudSwitch
         self.cloud_switch = CloudSwitch(frame, service.layout, tell=self.note.set, compact=True, dialog_parent=top,

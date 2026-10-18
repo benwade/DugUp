@@ -57,6 +57,7 @@ Source: "build\DugUp\dugup-data-folder.txt"; DestDir: "{app}"; Flags: ignorevers
 [Icons]
 Name: "{autoprograms}\DugUp"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; Comment: "Find your files by what is in them"
 Name: "{autoprograms}\DugUp Remote"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup remote"; WorkingDir: "{app}"; Comment: "Start or quit DugUp in the tray, bring up search, free the graphics card"
+Name: "{autoprograms}\Report a problem with DugUp"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup report"; WorkingDir: "{app}"; Comment: "Gather what helps find a problem, read it, and choose how to send it (works even when DugUp is stuck)"
 Name: "{autodesktop}\DugUp"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; Comment: "Find your files by what is in them"; Tasks: desktopicon
 
 [Run]

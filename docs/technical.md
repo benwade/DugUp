@@ -40,7 +40,7 @@ python -m dugup window
 
 For development and tests, also install `requirements-dev.txt` using that environment's Python.
 
-On Windows, `DugUp.cmd` and `DugUp Remote.cmd` open the window and remote without a console. You can create desktop shortcuts to them. Update a source checkout with `git pull`; if dependencies have changed, rerun the relevant installation commands.
+On Windows, `DugUp.cmd`, `DugUp Remote.cmd` and `DugUp Report.cmd` open the window, the remote and the problem report without a console. You can create desktop shortcuts to them. Update a source checkout with `git pull`; if dependencies have changed, rerun the relevant installation commands.
 
 By default, a source checkout stores its data in `data` inside the checkout. **Keep that folder out of cloud uploads**, just as you would the installed program's index. See [data storage](#data-storage).
 
@@ -93,7 +93,7 @@ Cloud search access is off by default. When you turn it on, an assistant such as
 
 The index is a SQLite database containing text extracted from your files. **It is not encrypted yet.** Like other unencrypted files, it is readable by anyone with access and permission to read its folder. It may retain text from files moved or removed after indexing. Use an encrypted drive, exclude sensitive folders, or index only their names if this matters for your use.
 
-Ordinary logs contain counts and reason codes rather than document text or file names. Rename and removal records include file names because identifying the changed files is necessary for undo.
+Ordinary logs contain counts and reason codes rather than document text or file names. Freeze notes, written when a window stops responding, hold program locations only. A [problem report](user-guide.md#report-a-problem) is assembled on your computer and sent only if you choose to. Rename and removal records include file names because identifying the changed files is necessary for undo.
 
 ### Worker isolation
 
@@ -340,4 +340,5 @@ Modules separate storage, indexing, worker processes and user interfaces.
 | `datamove.py`, `startnotes.py`, `elevated.py` | Data moves, startup notices and administrator detection. |
 | `tray.py`, `popup.py`, `remote.py` | The tray, the Win+Shift+F search box and DugUp Remote. |
 | `assistant.py`, `mcpserver.py` | Cloud search rules and the MCP server that presents them. |
+| `report.py`, `reportwindow.py`, `watchdog.py` | Problem reports, their window, and the freeze recorder. |
 | `assistantsetup.py`, `assistantwindow.py`, `cli/mcp_cmds.py` | Turning cloud search on and off, choosing folders, connecting the Claude app. |

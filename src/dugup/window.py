@@ -227,6 +227,7 @@ class App:
     def __init__(self, root, service, desktop: Optional[Desktop] = None, ask=None, choose_folder=None,
                  pick: bool = True, setup: bool = True, tell=None, cloud_options: Optional[dict] = None) -> None:
         self.cloud_options = cloud_options or {}
+        self.launch_report = None          # how Report a problem is started (None: as its own process); a seam for tests
         self.waiting = None           # the small window shown while a folder is looked through
         self.pick = pick              # show the folder picker when a folder is added (False: add it whole, at once)
         self.setup_on_first_start = setup    # open the setup wizard by itself when there is no folder yet
@@ -271,6 +272,8 @@ class App:
         self.refresh_status()
         root.protocol("WM_DELETE_WINDOW", self.close)
         self._poll_id = root.after(POLL_MS, self._poll)
+        from .watchdog import Watchdog
+        self.watchdog = Watchdog(root, service.layout.logs, "window")
         self.warm_up_meaning()
         if self.setup_on_first_start and not self.service.list_roots():
             self.open_setup(first_run=True)
@@ -291,7 +294,7 @@ class App:
         root.rowconfigure(1, weight=1)
 
         form = ttk.Frame(root, padding=6)
-        form.grid(row=0, column=0, sticky="ew")
+        form.grid(row=0, column=0, columnspan=2, sticky="ew")
         form.columnconfigure(1, weight=1)
         self.words = tk.StringVar()
         self.folder = tk.StringVar(value=ALL_FOLDERS)
@@ -352,7 +355,7 @@ class App:
         ttk.Button(narrow, text="Clear filters", command=self.clear_filters).pack(side="left", padx=10)
 
         panes = ttk.PanedWindow(root, orient="horizontal")
-        panes.grid(row=1, column=0, sticky="nsew", padx=6)
+        panes.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=6)
 
         left = ttk.Frame(panes)
         left.columnconfigure(0, weight=1)
@@ -487,6 +490,9 @@ class App:
 
         self.message = tk.StringVar(value='Type words and press Enter. Put "a phrase" in double quotes to find it as typed.')
         self._readonly(root, self.message, row=2, column=0, sticky="ew", padx=6, pady=4)
+        # always in sight, beside the message line; it opens a program of its own (report.py)
+        self.report_button = ttk.Button(root, text="Report a problem", command=self.report_problem)
+        self.report_button.grid(row=2, column=1, sticky="e", padx=(0, 6), pady=4)
         self.words_entry.focus_set()
 
     def _menu_bar(self) -> None:
@@ -525,6 +531,7 @@ class App:
         pictures.add_command(label="Find near-duplicates", command=self.find_alike)
         bar.add_cascade(label="Pictures", menu=pictures)
         help_menu = tk.Menu(bar, tearoff=False)
+        help_menu.add_command(label="Report a problem...", command=self.report_problem)
         help_menu.add_command(label="About DugUp", command=self._about)
         bar.add_cascade(label="Help", menu=help_menu)
         self.root.config(menu=bar)
@@ -559,6 +566,12 @@ class App:
         ended = self.service.free_models()
         self.warm = None
         self.say("Freed: " + ", ".join(ended) + "." if ended else "No model was loaded; nothing to free.")
+
+    def report_problem(self) -> None:
+        """Report a problem, in a program of its own (works even if this window is stuck later)."""
+        from . import report
+        report.launch(self.service.layout, self.launch_report)
+        self.say("Report a problem is opening in a window of its own.")
 
     def _about(self) -> None:
         from .about import about_text
@@ -1804,6 +1817,7 @@ class App:
         if self.closed:
             return
         self.closed = True
+        self.watchdog.stop()
         try:
             self.bar.stop()
         except Exception:

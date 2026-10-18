@@ -118,6 +118,31 @@ def cmd_tray(args, env, out, environ) -> int:
     return 0
 
 
+def cmd_report(args, env, out, environ) -> int:
+    """Report a problem: a window of its own (or the text, with --print), working while other windows are frozen."""
+    from .. import report
+    from ..datadir import DataDirError
+    try:
+        data_dir: "str | None" = str(_layout(args, environ, create=False).root)
+    except DataDirError:
+        data_dir = None
+    if args.print:
+        safe_write(report.gather(data_dir), out)
+        return 0
+    try:
+        import tkinter
+        root = tkinter.Tk()
+    except Exception:
+        safe_write("A window cannot be opened here; the report follows. Copy it into a new issue at "
+                   + report.ISSUES, out)
+        safe_write(report.gather(data_dir), out)
+        return 0
+    from ..reportwindow import ReportWindow
+    ReportWindow(root, data_dir)
+    root.mainloop()
+    return 0
+
+
 def cmd_remote(args, env, out, environ) -> int:
     from .. import remote as remote_module
     layout = _layout(args, environ, create=True)

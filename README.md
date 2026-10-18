@@ -63,7 +63,7 @@ Search, OCR and image processing run locally. Optional models are downloaded dur
 
 DugUp is a beta with limited real-world use. Windows has had the most desktop use; automated tests also run on Ubuntu with Python 3.10, 3.12 and 3.13. OCR works best on clear printed text; handwriting and blurred photos are often missed. The practical limit for near-duplicate scans above about 100,000 pictures has not been established.
 
-[Report a bug](https://github.com/benwade/DugUp/issues), including the output of `dugup doctor` when possible. See [recent changes](docs/changes.md) for release notes and performance work.
+**Something wrong? Choose Report a problem.** It is in the Start menu, the search box, the tray menu, DugUp Remote and the main window, and it works even when DugUp is stuck. It gathers what helps find the problem, shows you all of it, and lets you choose how to send it. [How reporting works](docs/user-guide.md#report-a-problem). See [recent changes](docs/changes.md) for release notes and performance work.
 
 ## Technical information
 
