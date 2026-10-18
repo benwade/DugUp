@@ -274,6 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
     connect.add_argument("--write", action="store_true", help="add it to the app's settings file (a copy of the old one is kept)")
     connect.add_argument("--config", metavar="FILE", help="a different settings file to write to")
     assistant_sub.add_parser("serve", parents=[common], help="run the server (the assistant app starts this itself)")
+    assistant_sub.add_parser("folders", parents=[common], help="choose, in a window, the folders assistants may see")
     status = sub.add_parser("status", parents=[common], help="what is indexed, what is waiting, what needs attention")
     status.add_argument("--unreadable", action="store_true",
                         help="list every file that cannot be read (damaged, or needs a password)")
