@@ -196,7 +196,7 @@ def main() -> int:
     entry = json.loads(claude.read_text(encoding="utf-8"))["mcpServers"]["dugup"]
     expect(entry["command"].lower().endswith("python.exe"), "the entry starts the console Python, which has standard input and output")
     answer = run(python, "-c", ASSISTANT, entry["command"], json.dumps(entry["args"]), timeout=300)
-    expect("TOOLS search,passages,status" in answer and "notes.txt" in answer, "the tools answer a real MCP client")
+    expect("TOOLS passages,search,status" in answer and "notes.txt" in answer, "the tools answer a real MCP client")
     run(*dugup, "mcp", "disable")
 
     step("Upgrade over the top: the data stays")
