@@ -4,6 +4,7 @@ a test that needs a background run to finish keeps handing the window its events
 
 import datetime
 import threading
+import time
 import gc
 import os
 
@@ -195,12 +196,21 @@ class Bench:
         return self.names()
 
     def settle(self):
-        """Let a search by meaning finish: its sketching runs on a thread and answers through the events."""
-        for _ in range(200):
-            if self.app.searcher is None or not self.app.searcher.is_alive():
-                break
-            self.app.searcher.join(0.05)
-        self.app.drain()
+        """Let a search finish: a question is sketched on one thread, the index searched on another, and both
+        answer through the events. Waits until neither has anything left to do and every answer is taken in."""
+        app = self.app
+        for _ in range(400):
+            if app.searcher is not None and app.searcher.is_alive():
+                app.searcher.join(0.05)
+            elif app.fetcher.pending():
+                time.sleep(0.01)
+            else:
+                app.drain()                       # a sketch taken in here may ask for a search: look again
+                if not app.fetcher.pending() and not (app.searcher is not None and app.searcher.is_alive()):
+                    break
+                continue
+            app.drain()
+        app.drain()
         self.root.update()
 
     def handed(self):
@@ -290,6 +300,7 @@ def test_enter_in_the_words_box_searches(bench):
     bench.root.update()
     bench.app.words_entry.event_generate("<Return>")
     bench.root.update()
+    bench.settle()
     assert bench.names() == ["beta.txt"]
 
 
@@ -331,17 +342,22 @@ def test_clicking_headers_sorts_over_every_match_by_up_to_three_keys(bench):
     bench.find()
     app = bench.app
     app.sort_by("name")
+    bench.settle()
     assert bench.names() == ["alpha.txt", "beta.txt", "gamma.txt", "needle-name.txt"]
     assert app.tree.heading("name", "text") == f"Name {w.UP}" and app.order_text.get() == f"name {w.UP}"
     app.sort_by("name")
+    bench.settle()
     assert bench.names() == ["needle-name.txt", "gamma.txt", "beta.txt", "alpha.txt"]
     app.sort_by("modified")
+    bench.settle()
     assert bench.names() == ["needle-name.txt", "gamma.txt", "beta.txt", "alpha.txt"], "newest first"
     app.sort_by("kind")
+    bench.settle()
     assert app.order_text.get() == f"type {w.UP}, then modified {w.DOWN}, then name {w.DOWN}"
     assert app.tree.heading("kind", "text") == f"Type {w.UP}1" and app.tree.heading("name", "text") == f"Name {w.DOWN}3"
     assert bench.names() == ["needle-name.txt", "gamma.txt", "beta.txt", "alpha.txt"], "all text: the date decides"
     app.reset_order()
+    bench.settle()
     assert app.order_text.get() == "best match first" and app.tree.heading("kind", "text") == "Type"
     assert bench.names()[0] == "gamma.txt", "three matches in one short file ranks first"
 
@@ -354,6 +370,7 @@ def test_results_come_a_page_at_a_time_and_more_fetches_the_rest(bench, monkeypa
     assert bench.app.message.get() == "Showing 3 of 4 file(s) for: needle"
     assert str(bench.app.more_button.cget("state")) == "normal"
     bench.app.more()
+    bench.settle()
     assert bench.names() == ["alpha.txt", "beta.txt", "gamma.txt", "needle-name.txt"]
     assert str(bench.app.more_button.cget("state")) == "disabled" and "Showing 4 of 4" in bench.app.message.get()
     bench.app.tree.selection_set("3")
@@ -564,6 +581,86 @@ def finish_asking(bench):
     bench.root.update()
 
 
+def hold_searches(bench, held_words):
+    """The service's search, held for `held_words` until the test lets it go: no reliance on timing."""
+    started, release = threading.Event(), threading.Event()
+    real = bench.service.search
+
+    def search(words, *args, **kwargs):
+        if words == held_words:
+            started.set()
+            assert release.wait(5), "the test never let the search go"
+        return real(words, *args, **kwargs)
+
+    bench.service.search = search
+    return started, release
+
+
+def test_a_slow_search_leaves_the_window_free_and_the_newest_search_wins(bench):
+    bench.ready()
+    started, release = hold_searches(bench, "alpha")
+    bench.app.words.set("alpha")
+    bench.app.search()                       # returns at once: the index is searched on another thread
+    assert started.wait(5) and bench.app.message.get() == "Searching ..."
+    bench.root.update()                      # and the window goes on answering while it runs
+    bench.app.words.set("beta")
+    bench.app.search()                       # a newer search while the older one is still running
+    release.set()
+    bench.settle()
+    assert bench.names() == ["beta.txt"], "the newest search's rows; the older answer is dropped when it comes"
+    assert "for: beta" in bench.app.message.get()
+
+
+def test_an_older_answer_that_comes_while_a_newer_search_is_sketched_is_dropped(bench):
+    bench.ready()
+    assert bench.find("beta") == ["beta.txt"]
+    started, release = hold_searches(bench, "alpha")
+    bench.app.words.set("alpha")
+    bench.app.search()
+    assert started.wait(5)
+    sketching = threading.Event()
+    bench.service.sketch_question = lambda words: sketching.wait(5) and None
+    bench.app.where.set("By meaning")
+    bench.app.words.set("tomatoes")
+    bench.app.search()                       # its question is still being sketched when the older answer comes
+    release.set()
+    for _ in range(200):
+        if not bench.app.fetcher.pending():
+            break
+        time.sleep(0.01)
+    bench.app.drain()
+    assert bench.names() == ["beta.txt"] and bench.app.message.get() == "Searching by meaning ...", \
+        "the words search's rows never show under the meaning search"
+    sketching.set()
+    bench.settle()
+
+
+def test_more_pressed_twice_while_it_runs_adds_the_rows_once(bench, monkeypatch):
+    bench.ready()
+    monkeypatch.setattr(w, "PAGE_ROWS", 2)
+    bench.app.sort_by("name")
+    assert bench.find() == ["alpha.txt", "beta.txt"]
+    started, release = hold_searches(bench, "needle")
+    bench.app.more()
+    assert started.wait(5)
+    bench.app.more()                         # pressed again before the first answer came
+    release.set()
+    bench.settle()
+    assert bench.names() == ["alpha.txt", "beta.txt", "gamma.txt", "needle-name.txt"]
+
+
+def test_a_search_that_fails_on_its_thread_says_so(bench):
+    bench.ready()
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("the disk went away")
+
+    bench.service.search = broken
+    bench.find("needle")
+    assert bench.app.message.get() == "The search could not be done: RuntimeError: the disk went away"
+    assert bench.app.fetcher.pending() is False, "the search thread is still there for the next search"
+
+
 def test_plain_words_work_out_of_the_box_by_rules(bench):
     bench.ready()
     app = bench.app
@@ -576,7 +673,7 @@ def test_plain_words_work_out_of_the_box_by_rules(bench):
     assert [k for k, v in app.kinds.items() if v.get()] == ["text"]
     assert app.message.get().startswith("Filled in: words: needle; types: text; at least 150")
     app.search()
-    bench.root.update()
+    bench.settle()
     assert bench.names() == ["alpha.txt"]
 
 
@@ -651,7 +748,7 @@ def test_a_sentence_fills_in_the_form_and_waits_for_the_person(tmp_path):
         assert said.startswith("Filled in: words: needle; types: text, pdf") and "Not used: a kind of file" in said
         assert "press Enter to search" in said and bench.names() == [], "nothing is searched until the person says so"
         app.search()
-        bench.root.update()
+        bench.settle()
         assert sorted(bench.names()) == ["beta.txt", "gamma.txt"], "the filled-in form searches like a typed one"
 
         reader.answer = Failure(FailureReason.TIMED_OUT, "the model did not answer within 30 s")
@@ -900,7 +997,7 @@ def test_by_meaning_is_a_where_choice_that_searches_the_sketches_and_says_how_fa
     gate.set()
     slow.set()
     bench.settle()
-    assert bench.app.search_number == first + 1 and bench.names()[0] == "shifts.txt", "the newest search's answer, not the dropped one's"
+    assert bench.app.search_number > first and bench.names()[0] == "shifts.txt", "the newest search's answer, not the dropped one's"
     bench.app.warmer.join(2)
     bench.app.drain()
     assert bench.app.warm is True
@@ -1030,7 +1127,7 @@ def test_pictures_by_looks_fill_the_pictures_tab_and_like_this_shows_a_picture_s
     app.tree.selection_set("0")
     app.show_selected()
     app.like_selected()
-    bench.root.update()
+    bench.settle()
     assert [r.name for r in app.rows] == ["red2.png", "blue.png"], "its likes, closest first, itself left out"
     assert "that look like: red.png" in app.message.get() and app.grid.heading == "Pictures that look like red.png"
     # a plain word search: the grid shows the pictures among the results, without scores, and the tab stays put

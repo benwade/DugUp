@@ -95,6 +95,8 @@ class LocalService:
         self._fold: Callable[[str], str] = (lambda t: t.lower()) if self.case_insensitive else (lambda t: t)
         self._store: Optional[Store] = None
         self._store_thread: Optional[int] = None
+        self._readers = threading.local()      # other reading threads' own connections (see `store`)
+        self._store_generation = 0             # bumped when settings change: those connections are reopened
         self._lock = RunLock(layout.root / "index.lock")
         self._run_guard = threading.Lock()
         self._thread: Optional[threading.Thread] = None
@@ -106,11 +108,30 @@ class LocalService:
 
     @property
     def store(self) -> Store:
-        """The reading connection of the calling thread's service. One thread uses a service for reading."""
-        if self._store is None:
+        """The calling thread's reading connection. The first thread to read keeps the service's own (as
+        always); any other reading thread (the window's search thread, say) gets one of its own, opened on its
+        first read and kept for it, so its caches last from one search to the next. A thread that is done with
+        its own calls release_thread_store()."""
+        if self._store is None and self._store_thread in (None, threading.get_ident()):
             self._store = self._open_store()
             self._store_thread = threading.get_ident()
-        return self._store
+        if threading.get_ident() == self._store_thread:
+            return self._store
+        mine = getattr(self._readers, "store", None)
+        if mine is not None and getattr(self._readers, "generation", None) != self._store_generation:
+            mine.close()                         # opened under settings since changed: opened again below
+            mine = None
+        if mine is None:
+            mine = self._open_store()
+            self._readers.store, self._readers.generation = mine, self._store_generation
+        return mine
+
+    def release_thread_store(self) -> None:
+        """Close the calling thread's own reading connection, if it has one (the service's own is left)."""
+        mine = getattr(self._readers, "store", None)
+        if mine is not None:
+            mine.close()
+            self._readers.store = None
 
     @property
     def ocr_backend(self):
@@ -1393,6 +1414,7 @@ class LocalService:
         if self._store is not None and threading.get_ident() == self._store_thread:
             self._store.close()
             self._store = None
+        self._store_generation += 1              # other threads' connections reopen on their next read
         return new
 
     def _build_extractor(self):

@@ -164,6 +164,63 @@ def where_label(kind: str, page: int, file_kind: str) -> str:
 
 # ---- the window ---------------------------------------------------------------------------------------------
 
+
+class SearchWorker:
+    """Runs the window's searches on one thread of their own, so a search over a large index never freezes the
+    window. Only the newest request waits to run: one asked for while another runs replaces any still waiting,
+    and the window drops answers that come back for a search it no longer shows (App.search_number).
+    Answers come back on the window's event queue as ("searched", (number, offset, result))."""
+
+    def __init__(self, service, events: "queue.Queue[object]") -> None:
+        self.service, self.events = service, events
+        self._ready = threading.Condition()
+        self._waiting: Optional[Tuple[int, int, Callable[[object], object]]] = None
+        self._running = False
+        self._closing = False
+        self._thread = threading.Thread(target=self._run, name="dugup-window-searcher", daemon=True)
+        self._thread.start()
+
+    def ask(self, number: int, offset: int, call: Callable[[object], object]) -> None:
+        with self._ready:
+            self._waiting = (number, offset, call)
+            self._ready.notify()
+
+    def pending(self) -> bool:
+        """True while a search runs or waits to run."""
+        with self._ready:
+            return self._running or self._waiting is not None
+
+    def close(self) -> None:
+        with self._ready:
+            self._closing = True
+            self._waiting = None
+            self._ready.notify()
+        self._thread.join(5)
+
+    def _run(self) -> None:
+        try:
+            while True:
+                with self._ready:
+                    while self._waiting is None and not self._closing:
+                        self._ready.wait()
+                    if self._closing:
+                        return
+                    number, offset, call = self._waiting
+                    self._waiting = None
+                    self._running = True
+                try:
+                    try:
+                        result = call(self.service)
+                    except Exception as exc:
+                        result = Failure(FailureReason.CRASHED, f"{type(exc).__name__}: {exc}")
+                    self.events.put(("searched", (number, offset, result)))
+                finally:
+                    with self._ready:
+                        self._running = False
+        finally:
+            self.service.release_thread_store()   # this thread's own connection to the index
+
+
 class App:
     """`root` is a tkinter root (or Toplevel). `service` is a LocalService. The rest can be replaced in tests."""
 
@@ -205,6 +262,7 @@ class App:
         self.warm: "bool | Failure | None" = None          # what the warm-up found; None while it has not finished
         self.searcher: Optional[threading.Thread] = None  # sketches a question for a search by meaning
         self.search_number = 0                            # the newest search wins; older answers are dropped
+        self.fetcher = SearchWorker(service, self.events)  # searches the index off the window's thread
         self.search_started = 0.0
         self.like_of = None                               # the picture whose likes the results are, when they are
         self._build()
@@ -644,8 +702,7 @@ class App:
         if filters.where in (WHERE_MEANING, WHERE_BOTH, WHERE_LOOKS):
             self._sketch_then_fetch(words, filters)
         else:
-            self.search_number += 1       # every search takes a turn: a sketch still in flight for an older one is dropped
-            self._fetch(0)
+            self._fetch(0)                # a new turn: a sketch or search still in flight for an older one is dropped
 
     def like_selected(self) -> None:
         """Pictures that look like the selected one: the results become its likes, closest first."""
@@ -659,7 +716,6 @@ class App:
             return
         self.like_of = row
         self.last = (row.name, dataclasses.replace(filters, where=WHERE_LOOKS), None)
-        self.search_number += 1
         self._fetch(0)
 
     def _sketch_then_fetch(self, words: str, filters: SearchFilters) -> None:
@@ -913,15 +969,42 @@ class App:
             self._fetch(len(self.rows))
 
     def _fetch(self, offset: int) -> None:
+        """Search the index on the search thread (SearchWorker); the rows arrive in _searched. Offset 0 is a new
+        search and takes a new turn, so whatever an older one sends back is dropped; more rows keep the turn."""
+        if offset == 0:
+            self.search_number += 1
         words, filters, question = self.last    # type: ignore[misc]
-        if self.like_of is not None:
-            page = self.service.search_like(self.like_of.file_id, PAGE_ROWS, offset, filters,
-                                            self.order.as_request(), False)
-        else:
-            page = self.service.search(words, PAGE_ROWS, offset, self.order.as_request(), False, filters, question)
-        if isinstance(page, Failure):
-            self.say(f"The search could not be done: {page.detail}")
+        like_id = self.like_of.file_id if self.like_of is not None else None
+        order = self.order.as_request()
+        by_meaning = filters is not None and filters.where in (WHERE_MEANING, WHERE_BOTH)
+        by_looks = filters is not None and filters.where == WHERE_LOOKS
+
+        def call(service):
+            if like_id is not None:
+                page = service.search_like(like_id, PAGE_ROWS, offset, filters, order, False)
+            else:
+                page = service.search(words, PAGE_ROWS, offset, order, False, filters, question)
+            if isinstance(page, Failure):
+                return page
+            coverage = (service.meaning_coverage()[:2] if by_meaning
+                        else service.looks_coverage()[:2] if by_looks else (0, 0))
+            return page, coverage
+
+        if offset == 0:
+            self.say("Searching ...")
+        self.fetcher.ask(self.search_number, offset, call)
+
+    def _searched(self, report) -> None:
+        number, offset, result = report
+        if number != self.search_number or self.last is None:
+            return                    # a newer search has taken over: this answer is for rows no longer shown
+        if offset != 0 and offset != len(self.rows):
+            return                    # "More" pressed twice: these rows are already on screen
+        if isinstance(result, Failure):
+            self.say(f"The search could not be done: {result.detail}")
             return
+        page, (done, could) = result
+        words, filters, _ = self.last
         if offset == 0:
             self.rows = []
             self.tree.delete(*self.tree.get_children())
@@ -935,11 +1018,9 @@ class App:
         by_meaning = filters is not None and filters.where in (WHERE_MEANING, WHERE_BOTH)
         coverage = ""
         if by_meaning:
-            done, could = self.service.meaning_coverage()
             if could > done:
                 coverage = f"  (sketches of meaning cover {done:,} of {could:,} file(s) with text so far)"
         elif by_looks:
-            done, could, _ = self.service.looks_coverage()
             if could > done:
                 coverage = f"  (sketches cover {done:,} of {could:,} picture(s) so far)"
         if self.total == 0:
@@ -1570,6 +1651,8 @@ class App:
                 self._understood(report)
             elif what == "sketched":
                 self._sketched(report)
+            elif what == "searched":
+                self._searched(report)
             elif what == "thumb":
                 self.grid.thumb_arrived(report)
                 self.renamer.thumb_arrived(report)
@@ -1728,6 +1811,7 @@ class App:
         worker = self.worker
         if worker is not None:
             worker.join()        # a stop request ends a run promptly; nothing is lost
+        self.fetcher.close()     # a search under way finishes first; its answer is not wanted
         try:
             self.root.after_cancel(self._poll_id)
         except Exception:

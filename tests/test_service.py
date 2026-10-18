@@ -311,3 +311,26 @@ def test_saved_settings_govern_the_next_run_and_the_reading_connection(layout, d
         after = service.store.text_of(service.store.get_file(str(docs / "long.txt")).row_id)
         assert after and all(len(text) <= 200 for _, _, text in after), "the readers rebuilt with the saved chunk size"
 
+
+
+def test_another_thread_reads_through_a_connection_of_its_own(service, docs):
+    """The window searches on a thread of its own; SQLite connections stay with the thread that opened them."""
+    import threading
+
+    service.set_root(Root(str(docs)))
+    service.run_indexing()
+    mine = service.store
+    seen = {}
+
+    def other():
+        seen["store"] = service.store
+        seen["again"] = service.store
+        seen["found"] = service.search("needle", 10, 0).total
+        service.release_thread_store()
+
+    reader = threading.Thread(target=other)
+    reader.start()
+    reader.join(10)
+    assert seen["store"] is not mine and seen["again"] is seen["store"], "one connection per thread, kept for it"
+    assert seen["found"] == service.search("needle", 10, 0).total > 0
+    assert service.store is mine
