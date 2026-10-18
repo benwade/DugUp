@@ -32,7 +32,7 @@ RestartApplications=no
 SetupLogging=yes
 
 [Messages]
-WelcomeLabel2=This installs DugUp {#AppVersion}: find your files by what is in them.%n%nEverything goes into one folder for your user account, with no administrator rights needed. Nothing you have leaves this computer.%n%nPlease note: DugUp's index is not yet encrypted (encryption is planned, not implemented). It holds the text of the files you index, so keep it on an encrypted drive (BitLocker or Device encryption). The README explains more.%n%nDugUp is provided as is, without warranty of any kind. You use it at your own risk, and the author is not liable for any damage or loss arising from its use, including lost or changed files.
+WelcomeLabel2=This installs DugUp {#AppVersion}: find your files by what is in them.%n%nEverything goes into one folder for your user account, with no administrator rights needed. Nothing you have leaves this computer.%n%nPlease note: DugUp's index is not yet encrypted (encryption is planned, not implemented). It holds the text of the files you index, so keep it on an encrypted drive (BitLocker or Device encryption). The README explains more.%n%nDugUp is provided "as is", without warranty of any kind, express or implied, including any warranty that it is fit for a particular purpose, that it works as described, or that it is free of errors. You use it at your own risk, and the author is not liable for any damage or loss arising from its use, including lost or changed files. The license on the next page, which you must accept to install DugUp, sets out these terms in full: please read its "No Liability" section.
 
 [Tasks]
 Name: "desktopicon"; Description: "Put DugUp on the desktop"; Flags: unchecked
