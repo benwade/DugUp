@@ -4,9 +4,12 @@ Find your files by what is in them: the words inside, the words in a photo or a 
 means, what a picture looks like. Press one key anywhere, type a few letters, and the file opens.
 Everything runs on your own machine; nothing you have leaves it.
 
-**No warranty.** DugUp is provided as is, without warranty of any kind. You use it at your own risk, and the author is not liable for any damage or loss arising from its use, including lost or changed files. Keep backups of anything that matters to
-you, especially before using the parts that change files (trash, rename, near-duplicate cleanup). This is
-stated in the [license](LICENSE) under *No Liability*.
+**No warranty.** DugUp is provided "as is", without warranty of any kind, express or implied, including any
+warranty that it is fit for a particular purpose, that it works as described, or that it is free of errors.
+You use it at your own risk, and the author is not liable for any damage or loss arising from its use,
+including lost or changed files. The [license](LICENSE), which you accept by using DugUp, sets out these terms
+in full; read its *No Liability* section. Keep backups of anything that matters to you, especially before
+using the parts that change files (trash, rename, near-duplicate cleanup).
 
 DugUp was inspired by the macOS app [DigUp](https://github.com/ARahim3/DigUp) but is a separate design,
 written from scratch in Python; it shares no code with it. It runs on Windows 11; Linux is supported and
