@@ -15,6 +15,8 @@ AppSupportURL=https://github.com/benwade/DugUp/issues
 DefaultDirName={autopf}\DugUp
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
+; The welcome page carries the notes on encryption and warranty: Inno Setup 6 hides it unless told to show it.
+DisableWelcomePage=no
 LicenseFile=..\LICENSE
 OutputDir=build\out
 OutputBaseFilename=DugUp-Setup-{#AppVersion}
