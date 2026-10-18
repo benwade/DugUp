@@ -1,5 +1,7 @@
 # DugUp
 
+**Windows: [download the installer](https://github.com/benwade/DugUp/releases/latest)** (open the link, then click `DugUp-Setup-….exe` under *Assets*). The green *Code* button on this page downloads the source code, not the installer.
+
 Find your files by what is in them: the words inside, the words in a photo or a scan, what a passage
 means, what a picture looks like. Press one key anywhere, type a few letters, and the file opens.
 Everything runs on your own machine; nothing you have leaves it.
