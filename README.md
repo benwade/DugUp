@@ -13,7 +13,7 @@ written from scratch in Python; it shares no code with it. It runs on Windows 11
 tested on Ubuntu (the full test suite runs there on every push, under Python 3.10, 3.12 and 3.13; the window,
 the tray and the search key have had real daily use only on Windows so far).
 
-**Status: beta (0.2.0).** The searches, the index and the file-changing paths (trash, rename, undo,
+**Status: beta (0.2.1).** The searches, the index and the file-changing paths (trash, rename, undo,
 near-duplicate cleanup) have been reviewed independently, probed, and tested on Windows and Linux; the
 guarantees they keep are stated below under *What it touches on your disk*. There is now a Windows installer.
 Known limits: the index is not yet encrypted (encryption is planned, not implemented; see *Before you
@@ -605,6 +605,10 @@ Copies on another drive are never duplicates to this report: a file on your own 
 cloud drive are a file and its backup. Run it per drive, and only on the drive you mean to clean.
 
 ## Recent changes
+
+**0.2.1 beta (October 2026).** The installer now shows its welcome page, which says that the index is not
+yet encrypted and that DugUp comes without warranty; the same notice is in the README and the About box.
+`DugUp Remote.cmd` opens the remote from a copy of the source.
 
 **0.2.0 beta (October 2026).** A Windows installer, which asks where to keep the index; DugUp and its index in one
 folder by default (an older index is offered a move, and kept where it is if you say no); clear offers and sizes for the optional downloads; a
