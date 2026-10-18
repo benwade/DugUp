@@ -1417,7 +1417,7 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     help_menu = bench.root.nametowidget(bar.entrycget(3, "menu"))
     assert help_menu.entrycget(0, "label") == "Report a problem..." and help_menu.entrycget(1, "label") == "About DugUp"
     help_menu.invoke(1)
-    assert bench.told and bench.told[-1][0] == "About DugUp" and "0.2.2" in bench.told[-1][1]
+    assert bench.told and bench.told[-1][0] == "About DugUp" and "0.2.3" in bench.told[-1][1]
     assert "PolyForm Noncommercial" in bench.told[-1][1] and "Ben Wade" in bench.told[-1][1], "the license is in the About box"
     assert "without warranty" in bench.told[-1][1] and "your own risk" in bench.told[-1][1], "and that it comes as is"
     # disk space: the index, the models, the records, and what is free
