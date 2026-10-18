@@ -258,6 +258,18 @@ Text is stored once and compressed with `text_compression = "zlib"`. `"none"` di
 
 `content_marks` controls exact-content fingerprints used to group copies. `read_once` lets copies reuse extracted text and OCR results. Empty files are not grouped as copies, and files with the same bytes but different extensions are processed separately. Older indexes gain content marks on the next update. `main_place` influences which copy is displayed; on Windows the default is inferred from the drive holding your user folders.
 
+### File types
+
+The `[extensions]` table in `config.toml` tells DugUp how to treat a file ending. Each line maps an ending, without the dot, to a kind: `pdf`, `image`, `text`, `office` or `other`.
+
+```toml
+[extensions]
+nfo = "text"      # read .nfo files as plain text
+heic = "other"    # index .heic pictures by name only
+```
+
+Your lines add to the built-in list or change entries in it; every ending you do not mention keeps its default. `text` reads a file as plain text, `image` makes it eligible for OCR and picture search, and `other` keeps its name searchable without reading its contents. Endings are not case-sensitive. A kind DugUp does not recognize is reported when the settings load, and that line is ignored. The change applies to files DugUp reads from then on, new files and files that change; files already indexed keep their earlier treatment until they change. The built-in list is `DEFAULT_EXTENSIONS` in [kinds.py](../src/dugup/kinds.py).
+
 Folder suggestions can be adjusted through `book_folders`, `book_folder_level`, `picture_heavy_fraction` and `picture_heavy_min`. See [settings.py](../src/dugup/settings.py) for the complete settings and defaults, or use `dugup config list --all`.
 
 ## Architecture
