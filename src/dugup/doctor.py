@@ -63,6 +63,11 @@ def find_ocr_card() -> str:
         return ""
 
 
+def _sync_survey():
+    from . import syncfolders
+    return syncfolders.survey()
+
+
 def _has_directml() -> bool:
     """True when the installed runtime is the DirectML one (it offers a route to a card on every machine)."""
     try:
@@ -91,6 +96,7 @@ class Environment:
     has_fts5: Callable[[], bool] = lambda: _probe_fts5()
     elevated: Callable[[], bool] = lambda: _elevated()
     directml: Callable[[], bool] = lambda: _has_directml()
+    sync: Callable[[], object] = lambda: _sync_survey()
 
     @property
     def is_windows(self) -> bool:
@@ -151,6 +157,16 @@ def run_checks(env: Optional[Environment] = None, data_dir: Optional[os.PathLike
             add("data folder", OK, str(data_dir))
         except DataDirError as exc:
             add("data folder", FAIL, exc.reason)
+    found = env.sync()
+    apps = sorted({f.by for f in found.folders})
+    if found.unread:
+        add("cloud sync", WARN, f"could not read which folders {' and '.join(found.unread)} syncs; DugUp cannot tell "
+            "whether its data folder is uploaded")
+    elif apps:
+        add("cloud sync", OK, "synced folders known from " + ", ".join(apps) +
+            ("; the data folder is not in one" if data_dir is not None else ""))
+    else:
+        add("cloud sync", INFO, "no sync app's folders found")
 
     if env.elevated():
         add("administrator rights", INFO, "running with them. Nothing is wrong; as a precaution, DugUp is best "

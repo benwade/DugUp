@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+
 from .common import _service, _layout
 from .output import safe_write
 
@@ -42,6 +44,19 @@ def cmd_window(args, env, out, environ) -> int:
     return 0
 
 
+def move_waits_for(args, environ) -> bool:
+    """True when an older index waits to be moved beside the program and this tray would open that very index:
+    started plainly, or by its login entry, which names the older folder with --data-dir."""
+    import os
+    from ..datadir import beside_program
+    beside = beside_program(None, environ)
+    if beside is None or beside.move_from is None:
+        return False
+    if not args.data_dir:
+        return True
+    return os.path.normcase(os.path.abspath(args.data_dir)) == os.path.normcase(os.path.abspath(beside.move_from))
+
+
 def cmd_tray(args, env, out, environ) -> int:
     from .. import summons, tray as tray_module
     layout = _layout(args, environ, create=True)
@@ -71,6 +86,16 @@ def cmd_tray(args, env, out, environ) -> int:
     except tkinter.TclError as exc:
         safe_write(f"A window cannot be opened here ({(str(exc).splitlines() or ['no reason'])[0]}), so there is no tray.", out)
         return 1
+    root.withdraw()                              # the tray never shows its root; the question shows on its own
+    try:
+        if move_waits_for(args, environ):
+            from ..startnotes import MOVE, before_window
+            asked = argparse.Namespace(**{**vars(args), "data_dir": None})
+            if before_window(root, asked, environ, is_elevated=lambda: False) == MOVE:
+                args.data_dir = None             # the data is beside the program now; the login entry says so too
+    except BaseException:
+        root.destroy()
+        raise
     try:
         service = _service(args, environ, out, create=True)
     except BaseException:

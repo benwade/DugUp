@@ -49,6 +49,7 @@ class Moved:
     bytes: int = 0
     startup_updated: bool = False
     left_behind: str = ""          # the old folder could not be removed: why (the data is safe in `new`)
+    notes: List[str] = field(default_factory=list)   # anything else worth saying (a leftover from an earlier try)
 
 
 @dataclass
@@ -159,6 +160,34 @@ def tray_running(old: Path) -> bool:
     return summons.summon(old, "ping") == "pong"
 
 
+def _staging(new: Path) -> "tuple[Path, Optional[Path]]":
+    """The temporary folder to copy into, beside `new`, and a leftover from an earlier try that could not be
+    removed (then a fresh name is used, so a stuck leftover never blocks a move)."""
+    first = new.with_name(new.name + ".moving")
+    if not first.exists():
+        return first, None
+    shutil.rmtree(first, ignore_errors=True)       # ours, from a move that was cut off
+    if not first.exists():
+        return first, None
+    for number in range(2, 100):
+        other = new.with_name(f"{new.name}.moving-{number}")
+        if other.exists():
+            shutil.rmtree(other, ignore_errors=True)
+        if not other.exists():
+            return other, first
+    raise MoveError(f"earlier attempts left folders beside {new} that cannot be removed; restart the computer, "
+                    "delete them, and try again")
+
+
+def _drop(staging: Path) -> str:
+    """Remove the temporary copy. "" when it went; otherwise words saying what was left and where."""
+    shutil.rmtree(staging, ignore_errors=True)
+    if staging.exists():
+        return (f". The temporary folder {staging} could not be removed yet (a sync app or a scanner may hold it); "
+                "it holds no data that is in use and can be deleted later")
+    return ""
+
+
 def move(old: Path | str, new: Path | str, tell: Optional[Callable[[int, int], None]] = None,
          stop: Optional[Callable[[], bool]] = None, startup_entry: Optional[Path] = None,
          is_tray_running: Callable[[Path], bool] = tray_running) -> Moved:
@@ -172,17 +201,23 @@ def move(old: Path | str, new: Path | str, tell: Optional[Callable[[int, int], N
     if old == new:
         raise MoveError("the data folder is already there")
     _destination_is_free(new)
+    from .datadir import DataDirError, check_allowed
+    try:
+        check_allowed(new)
+    except DataDirError as exc:
+        raise MoveError(f"the new place is not safe for the index: {exc.reason}") from exc
     if is_tray_running(old):
         raise MoveError("DugUp is running in the tray. Quit it first (right-click its icon, Quit), then move")
     lock = RunLock(old / "index.lock")
     if not lock.acquire():
         raise MoveError("DugUp is indexing right now. Let it finish or stop it, then move")
-    staging = new.with_name(new.name + ".moving")
     done = Moved(str(old), str(new))
+    staging, stuck = _staging(new)
+    if stuck is not None:
+        done.notes.append(f"an earlier attempt left {stuck} behind and Windows would not let it be removed yet "
+                          "(a sync app or a scanner may hold it); it holds no data of yours and can be deleted later")
     try:
         try:
-            if staging.exists():
-                shutil.rmtree(staging)            # ours, from a move that was cut off
             staging.mkdir(parents=True)
             plan = _plan(old)
             had_index = (old / INDEX).is_file()
@@ -206,14 +241,14 @@ def move(old: Path | str, new: Path | str, tell: Optional[Callable[[int, int], N
                     note.unlink()
                 new.rmdir()
             os.replace(staging, new)
-        except MoveError:
-            shutil.rmtree(staging, ignore_errors=True)
+        except MoveError as exc:
+            exc.reason += _drop(staging)
             raise
         except (OSError, sqlite3.Error) as exc:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise MoveError(f"could not copy the data folder ({exc}); nothing was moved") from exc
+            raise MoveError(f"could not copy the data folder ({exc}); nothing was moved, and your index is still "
+                            f"in use in {old}" + _drop(staging)) from exc
         except BaseException:                    # Ctrl+C: the copy is dropped, the old folder is untouched
-            shutil.rmtree(staging, ignore_errors=True)
+            _drop(staging)
             raise
         done.startup_updated = update_startup(old, new, startup_entry)
     finally:

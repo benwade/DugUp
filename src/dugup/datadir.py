@@ -127,6 +127,7 @@ class BesideChoice:
     path: Path                            # the data folder to use
     home: ProgramHome
     move_from: Optional[Path] = None      # an index in the older per-user folder, not yet moved in or kept
+    synced: object = None                 # the synced folder that kept the data from beside the program
 
 
 def choose_beside(home: ProgramHome, per_user: Path) -> BesideChoice:
@@ -135,6 +136,10 @@ def choose_beside(home: ProgramHome, per_user: Path) -> BesideChoice:
     kept = kept_elsewhere(home.data)
     if kept is not None and kept.is_dir():
         return BesideChoice(kept, home)
+    if not has_index(home.data):
+        synced = synced_folder(home.data)
+        if synced is not None:        # beside the program is uploaded by a sync app: the index stays out of it
+            return BesideChoice(per_user, home, synced=synced)
     if not has_index(home.data) and has_index(per_user) and not is_within(per_user, home.data):
         return BesideChoice(per_user, home, move_from=per_user)
     return BesideChoice(home.data, home)
@@ -178,6 +183,18 @@ def check_allowed(path: os.PathLike | str, never_write: Iterable[os.PathLike | s
                     f"looks like a cloud-synced folder ('{part}'); choose another folder, "
                     "or allow it explicitly if you are sure"
                 )
+        synced = synced_folder(path)
+        if synced is not None:
+            raise DataDirError(
+                f"inside {synced.path}, which {synced.by} syncs to the cloud: the index (the text of your files) "
+                "would be uploaded with it. Choose another folder, or allow it explicitly if you are sure"
+            )
+
+
+def synced_folder(path: os.PathLike | str):
+    """The folder a sync app says it syncs that `path` lies in, or None (syncfolders.py)."""
+    from . import syncfolders
+    return syncfolders.survey().synced_by(path)
 
 
 def never_write_from_env(environ: Optional[Mapping[str, str]] = None) -> list:

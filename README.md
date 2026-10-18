@@ -58,7 +58,7 @@ file names, since that is what undo needs. Delete the data folder and all of it 
 ## What it touches on your disk
 
 Indexing only reads. The index lives in DugUp's own data folder (see *Where DugUp keeps its data*, below),
-never in the folders you index, and never in a folder that looks cloud-synced unless you say so. The two things that change files, clearing out copies and renaming
+never in the folders you index, and never in a folder that is synced to the cloud unless you say so. The two things that change files, clearing out copies and renaming
 pictures, happen only when you ask, show you first, keep a record, and move files to the trash rather
 than deleting them. On Windows that is the Recycle Bin through the shell, which warns, with its own
 dialog, in the rare case where it could only delete outright (a drive with no bin); that is a warning you
@@ -101,6 +101,9 @@ possible) lives in one data folder. Which one, in order:
    names the program's own folders, which are never indexed.
 3. Otherwise the per-user folder: `%LOCALAPPDATA%\DugUp` on Windows, `~/.local/share/DugUp` on Linux.
 
+If the folder beside the program is itself synced to the cloud (a copy of the source inside a folder Google
+Drive backs up, say), the index stays in the per-user folder and DugUp does not offer to move it there.
+
 If DugUp finds an index in the per-user folder and none beside the program (from an earlier version), it
 keeps using the older one and asks once: move it beside the program, or keep it where it is. The window
 asks when it opens; on the command line, `dugup data move` and `dugup data keep` answer, and
@@ -137,7 +140,9 @@ encryption arrives:
 - **Keep the data folder on an encrypted drive.** On Windows, turn on BitLocker, or *Device encryption*
   (Settings, Privacy & security) where BitLocker is not offered. On Linux, use an encrypted disk (LUKS).
 - **Install where only your account can read.** The installer's default folder is; a shared folder is not.
-  DugUp already refuses a cloud-synced folder unless you allow it.
+  DugUp refuses a folder that a sync app uploads, unless you allow it: it reads which folders Google Drive
+  for desktop, OneDrive, Dropbox and Windows' own sync register say they sync, not only folder names. If it
+  cannot read one of those lists, it says so and carries on (`dugup doctor` shows what it found).
 - **Leave out what should not be copied as text.** Exclude those folders, or index them by file name only
   (`dugup roots level <folder> names`).
 
