@@ -427,7 +427,7 @@ def _entries() -> Tuple[Entry, ...]:
 
 
 ENTRIES: Dict[str, Entry] = {entry.name: entry for entry in _entries()}
-NOT_HERE = frozenset({"extensions"})      # a table, not one value: edited in config.toml, described in the README
+NOT_HERE = frozenset({"extensions"})      # a table, not one value: edited in config.toml (defaults: DEFAULT_EXTENSIONS in kinds.py)
 _KINDS = {f.name: str(f.type) for f in fields(Settings) if f.name not in NOT_HERE}
 _DEFAULTS = Settings()
 
