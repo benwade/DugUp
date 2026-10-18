@@ -4,6 +4,10 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
+## Since 0.2.2
+
+**Changing a file type now updates the index.** When you change the `[extensions]` table in `config.toml`, the next index update reads again just the files whose type changed. See [File types](technical.md#file-types).
+
 ## 0.2.2 beta — October 2026
 
 **Claude can search your files for you, when you allow it.** Cloud search access is off unless you turn it on. When it is on, Claude can search the index read-only, in the folders you choose, and read short passages around what it finds. It can never change, move or delete anything.

@@ -29,7 +29,7 @@ from .kinds import classify, is_lock_file
 from .protocols import (OCR_FAILED, OCR_WAITING, Extraction, Extractor, FileEntry, FileSource, ScanRules, Skipped,
                         StopSignal, Store)
 from .settings import Settings
-from .shapes import (LEVEL_NAMES, OPTION_WORDS, POLICY_NAMES_ONLY, level_for, wants, Failure, FailureReason, FileRecord, FileState, Root)
+from .shapes import (LEVEL_NAMES, OPTION_WORDS, POLICY_NAMES_ONLY, level_for, wants, Failure, FailureReason, FileKind, FileRecord, FileState, Root)
 
 log = logging.getLogger("dugup.indexer")
 
@@ -138,6 +138,7 @@ class RootReport:
     restored: int = 0                # were missing, are back unchanged
     purged: int = 0                  # missing for longer than the retention time
     held_back: int = 0               # disappearances not recorded because of a warning
+    retyped: int = 0                 # unchanged files read again because their type changed ([extensions])
     warnings: Tuple[str, ...] = ()
     skipped: Tuple[Skipped, ...] = ()   # folders the scan could not read
 
@@ -322,9 +323,13 @@ class Indexer:
         report = RootReport(root.path)
         self._tell(Progress("scan", root.path, 0, 0))
         previous: Dict[str, FileEntry] = {}
+        kinds_now: Dict[str, FileKind] = {}         # a file whose type the settings now say differently is read again
         for record in self.store.list_files(prefix=root.path, missing=False):
             offline = record.state is FileState.SKIPPED and record.error == OFFLINE_NOTE
             previous[record.path] = FileEntry(record.path, record.size, record.modified, record.file_id, offline)
+            kind = classify(record.path, self.settings.extensions)
+            if kind is not record.kind:
+                kinds_now[record.path] = kind
         changes = self.source.changes(root.path, previous, self.rules_for(root), stop)
         now = self.clock()
         if isinstance(changes, Failure):
@@ -385,6 +390,14 @@ class Indexer:
         steps += [lambda e=e: add(e) for e in changes.added]
         steps += [lambda e=e: change(e) for e in changes.changed]
         steps += [lambda p=p: gone(p) for p in changes.removed]
+
+        def retype(entry: FileEntry) -> None:
+            self._new_content(root, entry)        # recorded with its new type; read again with the reader for it
+            report.retyped += 1
+
+        touched = changed_paths | {e.path for e in changes.added} | {old for old, _ in changes.moved} \
+            | {e.path for _, e in changes.moved} | set(changes.removed)
+        steps += [lambda e=previous[p]: retype(e) for p in kinds_now if p not in touched]
         started = self.timer()
         for at in range(0, len(steps), APPLY_CHUNK):
             if _stopped(stop):
@@ -399,9 +412,9 @@ class Indexer:
                 before = now - self.settings.missing_retention_days * 86400.0
                 report.purged = self.store.purge_missing(root.path, before)
             self.store.note_scan(root.path, True, now, report.warnings)
-        log.info("root scanned: added=%d changed=%d moved=%d missing=%d restored=%d purged=%d held_back=%d "
+        log.info("root scanned: added=%d changed=%d moved=%d missing=%d restored=%d purged=%d held_back=%d retyped=%d "
                  "warnings=%s unreadable_folders=%d", report.added, report.changed, report.moved, report.missing,
-                 report.restored, report.purged, report.held_back, ",".join(report.warnings) or "-", len(report.skipped))
+                 report.restored, report.purged, report.held_back, report.retyped, ",".join(report.warnings) or "-", len(report.skipped))
         return report, True
 
     # -- step 2: read what is waiting

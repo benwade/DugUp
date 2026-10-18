@@ -349,3 +349,20 @@ def test_the_thread_that_read_first_can_close_the_connection_it_opened(layout):
     service.close()                              # would raise if the worker's connection were still open
     assert service.store.file_count() == 0, "and the next thread to read opens one of its own"
     service.close()
+
+
+def test_an_ending_given_a_new_type_is_read_that_way_on_the_next_update(layout, tmp_path):
+    """With the real readers: .nfo is found by name only, until [extensions] says it is text."""
+    from dugup.kinds import DEFAULT_EXTENSIONS
+    from dugup.settings import Settings
+    from dugup.shapes import FileKind
+    folder = tmp_path / "Releases"
+    folder.mkdir()
+    (folder / "readme.nfo").write_text("a zebrafish release note", encoding="utf-8")
+    with LocalService(layout) as service:
+        service.set_root(Root(str(folder)))
+        service.run_indexing()
+        assert names(service.search("zebrafish")) == []
+    with LocalService(layout, Settings(extensions={**DEFAULT_EXTENSIONS, "nfo": FileKind.TEXT})) as service:
+        service.run_indexing()
+        assert names(service.search("zebrafish")) == ["readme.nfo"]
