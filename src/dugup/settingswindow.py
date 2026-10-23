@@ -1,5 +1,9 @@
 """The settings window: every setting, found by its group or by searching, with what it costs the machine.
 
+It opens on a short list, the settings people change in everyday use (catalogue.SHORT_LIST), plus any
+setting that differs from its default, so nothing changed is out of sight. "Show all settings" brings in
+the rest; a search always looks through every setting.
+
 Drawn from the catalogue: no setting is named in this file. Groups down the left (and "All"); on the right
 the group's settings, the everyday ones first, then the ones that command the most of the machine, then the
 rest; under each its line of help and, where it has one, what it costs in a coloured tag. A search box at
@@ -57,6 +61,7 @@ class SettingsWindow:
         self.widgets: Dict[str, object] = {}
         self.reasons: Dict[str, str] = {}           # name -> why a suggestion was made
         self.current = ALL
+        self.advanced = tk.BooleanVar(value=False)
 
         win = self.window = tk.Toplevel(parent)
         win.title("DugUp settings")
@@ -72,6 +77,8 @@ class SettingsWindow:
         box = ttk.Entry(top, textvariable=self.query, width=36)
         box.pack(side="left", padx=6)
         box.bind("<KeyRelease>", lambda event: self.redraw())
+        ttk.Checkbutton(top, text="Show all settings (advanced)", variable=self.advanced,
+                        command=self._advanced_chosen).pack(side="left", padx=(6, 0))
         self.suggest_button = ttk.Button(top, text="Suggest for this machine", command=self.suggest, state="normal" if look else "disabled")
         self.suggest_button.pack(side="left", padx=(12, 2))
         ttk.Label(top, text="(fills in what fits this computer; nothing is saved until you press Save)", foreground="#666666").pack(side="left")
@@ -84,6 +91,7 @@ class SettingsWindow:
             self.groups.insert("end", g.title)
         self.groups.selection_set(0)
         self.groups.bind("<<ListboxSelect>>", lambda event: self._group_chosen())
+        self.groups.grid_remove()                    # the groups are for "Show all settings"
 
         right = ttk.Frame(win)
         right.grid(row=1, column=1, sticky="nsew", padx=(4, 10))
@@ -119,8 +127,25 @@ class SettingsWindow:
             self.current = self.group_keys[chosen[0]]
             self.redraw()
 
+    def _advanced_chosen(self) -> None:
+        if self.advanced.get():
+            self.groups.grid()
+        else:
+            self.groups.grid_remove()
+            self.current = ALL
+            self.groups.selection_clear(0, "end")
+            self.groups.selection_set(0)
+        self.redraw()
+
+    def short(self) -> bool:
+        """Showing the short list: not every setting, and no search."""
+        return not self.advanced.get() and not self.query.get().strip()
+
     def shown(self) -> List[Entry]:
         words = self.query.get().strip()
+        if self.short():
+            return [e for e in catalogue.ENTRIES.values()
+                    if e.name in catalogue.SHORT_LIST or self._value(e.name) != catalogue.default(e.name)]
         entries = list(catalogue.ENTRIES.values()) if (self.current == ALL or words) else catalogue.in_group(self.current)
         if words:
             entries = [e for e in entries if matches(e, words)]
@@ -140,8 +165,23 @@ class SettingsWindow:
         by_group: Dict[str, List[Entry]] = {}
         for entry in entries:
             by_group.setdefault(entry.group, []).append(entry)
+        short = self.short()
+        if short:
+            ttk.Label(self.body, text="The settings most people change", font=("TkDefaultFont", 12, "bold")).grid(
+                row=row, column=0, sticky="w", pady=(4, 0))
+            row += 1
+            ttk.Label(self.body, text="Everything else (speed, safety, how files are read) is under Show all settings, "
+                                      "at the top. The search box looks through every setting.", wraplength=700,
+                      justify="left", foreground="#444444").grid(row=row, column=0, sticky="w")
+            row += 1
         for g in catalogue.GROUPS:
             if g.key not in by_group:
+                continue
+            if short:
+                ttk.Label(self.body, text=g.title, font=("TkDefaultFont", 10, "bold")).grid(row=row, column=0, sticky="w", pady=(10, 0))
+                row += 1
+                for entry in by_group[g.key]:
+                    row = self._row(entry, row)
                 continue
             if self.current == ALL or words:
                 ttk.Label(self.body, text=g.title, font=("TkDefaultFont", 12, "bold")).grid(row=row, column=0, sticky="w", pady=(12, 0))

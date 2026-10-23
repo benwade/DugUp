@@ -326,7 +326,7 @@ class App:
         self.ask_button = ttk.Button(self.ask_row, text="Fill in the form", command=self.ask_in_plain_words)
         self.ask_button.grid(row=0, column=2, padx=2)
         if self.service.intent is not None:      # the row only exists when a model is set up
-            self.ask_row.grid(row=3, column=0, columnspan=11, sticky="ew", pady=(4, 0))
+            self.ask_row.grid(row=5, column=0, columnspan=13, sticky="ew", pady=(4, 0))
 
         ttk.Label(form, text="Words:").grid(row=0, column=0, sticky="w")
         self.words_entry = ttk.Entry(form, textvariable=self.words)
@@ -335,32 +335,31 @@ class App:
         self.search_button = ttk.Button(form, text="Search", command=self.search)
         self.search_button.grid(row=0, column=10, padx=2)
         modes = ttk.Frame(form)
-        modes.grid(row=0, column=11, columnspan=2, sticky="w", padx=(12, 0))
-        ttk.Label(modes, text="Search by:").pack(side="left", padx=(0, 4))
+        ttk.Label(form, text="Search by:").grid(row=1, column=0, sticky="w")
+        modes.grid(row=1, column=1, columnspan=10, sticky="w", padx=4, pady=(2, 0))
         self.mode_buttons = {}
         for label, value in MODES:
             button = ttk.Radiobutton(modes, text=label, value=value, variable=self.mode, command=self._mode_chosen)
-            button.pack(side="left", padx=(0, 6))
+            button.pack(side="left", padx=(0, 12))
             self.mode_buttons[value] = button
 
-        ttk.Label(form, text="Look in:").grid(row=1, column=0, sticky="w")
-        self.folder_box = ttk.Combobox(form, textvariable=self.folder, state="readonly")
-        self.folder_box.grid(row=1, column=1, sticky="ew", padx=4, pady=2)
-        ttk.Label(form, text="Words in:").grid(row=1, column=2, sticky="e")
+        ttk.Label(form, text="Look in:").grid(row=2, column=0, sticky="w")
+        self.folder_box = ttk.Combobox(form, textvariable=self.folder, state="readonly", width=24)
+        self.folder_box.grid(row=2, column=1, sticky="ew", padx=4, pady=2)
+        ttk.Label(form, text="Words in:").grid(row=2, column=2, sticky="e")
         self.word_place_box = ttk.Combobox(form, textvariable=self.word_place, state="readonly", width=20,
                                            values=[label for label, _ in WORD_PLACES])
-        self.word_place_box.grid(row=1, column=3, padx=4)
+        self.word_place_box.grid(row=2, column=3, padx=4)
         self.word_place_box.bind("<<ComboboxSelected>>", lambda event: self._mode_chosen())
         self.where.trace_add("write", lambda *_: self._where_changed())
         for at, (label, value) in enumerate(KIND_LABELS):
-            ttk.Checkbutton(form, text=label, variable=self.kinds[value]).grid(row=1, column=4 + at, padx=2)
-        ttk.Checkbutton(form, text="Exact form", variable=self.exact).grid(row=1, column=8, padx=(14, 2))
-        ttk.Label(form, text="(off: education also finds educate)").grid(row=1, column=9, columnspan=2, sticky="w")
-        ttk.Checkbutton(form, text="Every copy", variable=self.every_copy).grid(row=1, column=11, padx=(14, 2))
-        ttk.Label(form, text="(off: a file kept in several places is shown once)").grid(row=1, column=12, sticky="w")
-
+            ttk.Checkbutton(form, text=label, variable=self.kinds[value]).grid(row=2, column=4 + at, padx=2)
+        ttk.Checkbutton(form, text="Exact form", variable=self.exact).grid(row=2, column=8, padx=(14, 2))
+        ttk.Label(form, text="(off: education also finds educate)").grid(row=2, column=9, columnspan=4, sticky="w")
         narrow = ttk.Frame(form)
-        narrow.grid(row=2, column=0, columnspan=11, sticky="w", pady=2)
+        narrow.grid(row=3, column=0, columnspan=13, sticky="w", pady=2)
+        more = ttk.Frame(form)                  # a line of its own: on one line the form ran off a normal window
+        more.grid(row=4, column=0, columnspan=13, sticky="w", pady=(0, 2))
         for text, variable, width in (("Modified on or after:", self.after_day, 11), ("up to and including:", self.before_day, 11),
                                       ("Size at least:", self.smallest, 8), ("at most:", self.largest, 8)):
             ttk.Label(narrow, text=text).pack(side="left", padx=(0, 2))
@@ -368,9 +367,11 @@ class App:
             entry.pack(side="left", padx=(0, 10))
             entry.bind("<Return>", lambda event: self.search())
         ttk.Label(narrow, text="(dates as 2026-10-12; sizes as 200k, 5m, 1g)").pack(side="left")
-        ttk.Checkbutton(narrow, text="Only files that are here now", variable=self.present_only).pack(side="left", padx=(14, 2))
-        ttk.Label(narrow, text="(off: files gone since the last scan, or on a drive not reachable now, are shown flagged)").pack(side="left")
-        ttk.Button(narrow, text="Clear filters", command=self.clear_filters).pack(side="left", padx=10)
+        ttk.Checkbutton(more, text="Every copy", variable=self.every_copy).pack(side="left", padx=(0, 2))
+        ttk.Label(more, text="(off: a file kept in several places is shown once)").pack(side="left")
+        ttk.Checkbutton(more, text="Only files that are here now", variable=self.present_only).pack(side="left", padx=(14, 2))
+        ttk.Label(more, text="(off: files that are gone, or on a drive not plugged in, are shown flagged)").pack(side="left")
+        ttk.Button(more, text="Clear filters", command=self.clear_filters).pack(side="left", padx=10)
 
         panes = ttk.PanedWindow(root, orient="horizontal")
         panes.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=6)
@@ -1834,7 +1835,7 @@ class App:
                 return
             self.progress_text.set("Plain-words search is set up.")
             if self.service.intent is not None:
-                self.ask_row.grid(row=3, column=0, columnspan=11, sticky="ew", pady=(4, 0))
+                self.ask_row.grid(row=5, column=0, columnspan=13, sticky="ew", pady=(4, 0))
                 self.setup_button.pack_forget()
                 self.run_buttons = [b for b in self.run_buttons if b is not self.setup_button]
             self.refresh_status('Plain-words search is ready: type a sentence in the "In plain words" box at the top.')
