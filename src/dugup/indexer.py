@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .filesource import excluded
-from .kinds import classify, is_lock_file
+from .kinds import classify, extension, is_lock_file
 from .protocols import (OCR_FAILED, OCR_WAITING, Extraction, Extractor, FileEntry, FileSource, ScanRules, Skipped,
                         StopSignal, Store)
 from .settings import Settings
@@ -236,6 +236,23 @@ class Indexer:
             self.store.set_fingerprint(current)
         return ()
 
+    def _legacy_readable_now(self, roots: Sequence[Root]) -> int:
+        """Old Office files (.doc, .xls, .ppt, .rtf) set aside because nothing could read them are queued again
+        once LibreOffice is installed. Returns how many."""
+        from .extractors.office import LEGACY, find_converter
+        if find_converter() is None:
+            return 0
+        count = 0
+        with self.store.transaction():
+            for root in roots:
+                for record in self.store.list_files(prefix=root.path, state=FileState.SKIPPED):
+                    if extension(record.path) in LEGACY and "LibreOffice" in (record.error or ""):
+                        self.store.set_state(record.row_id, FileState.PENDING)
+                        count += 1
+        if count:
+            log.info("old Office files queued again, LibreOffice is here: %d", count)
+        return count
+
     def requeue(self, states: Sequence[FileState], prefix: Optional[str] = None) -> int:
         """Put files back in the queue (not placeholders, not files held back by policy). Returns how many."""
         count = 0
@@ -265,6 +282,7 @@ class Indexer:
         if retry_failed:
             for root in chosen:
                 self.requeue((FileState.FAILED,), root.path)
+        self._legacy_readable_now(chosen)
         readable: List[Root] = []
         for root in chosen:
             if _stopped(stop):

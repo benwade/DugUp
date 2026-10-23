@@ -4,6 +4,22 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
+## 0.2.4 beta — October 2026
+
+Thanks to an early tester who showed us where DugUp was hard to use.
+
+**Picture search is easy to find.** **Search by** sits under the search box with four choices: **Words**, **Meaning**, **Words + meaning** and **Pictures**. When a search by words finds nothing and your pictures are ready, DugUp offers **Search pictures instead**. See [Search for a file](user-guide.md#search-for-a-file).
+
+**Plain words understands picture requests.** “Pictures of dogs” or “beach photos” now sets up a search for what the pictures show.
+
+**Pictures are prepared for you.** **Update the index** now finishes by preparing new pictures for picture search, the same as the tray. The **Index** tab says how many pictures are waiting, and **Prepare picture search** does it on request, asking before it downloads the picture model.
+
+**Settings are shorter.** Settings opens on the ten choices most people change, plus anything you have changed. **Show all settings (advanced)** shows the rest, and the search box always finds every setting.
+
+**More files are read.** Saved e-mails (`.eml`) are read: subject, people, date, message and attachment names. Older Office files (`.doc`, `.xls`, `.ppt`, `.rtf`) are read when the free LibreOffice is installed; install it later and the next update reads them. See [File types](technical.md#file-types).
+
+**The search form fits the window.** At the usual window size, some filters and **Clear filters** were off the right edge. The form now uses an extra line so everything is visible.
+
 ## 0.2.3 beta — October 2026
 
 **Report a problem, even when DugUp is stuck.** A new report window gathers the versions, health check, recent log and any freeze notes, hides folder and file names behind numbered stand-ins, shows you everything, and lets you open a GitHub issue, copy, or save it. It runs as a program of its own and is one step away in the Start menu, the search box, the tray menu, DugUp Remote and the main window. A freeze recorder in each window notes where a window got stuck. See [Report a problem](user-guide.md#report-a-problem).

@@ -198,7 +198,7 @@ def run_checks(env: Optional[Environment] = None, data_dir: Optional[os.PathLike
 
     soffice = find_libreoffice(env)
     add("libreoffice", OK if soffice else WARN,
-        soffice or "not found; Office files fall back to native text readers (no page images)")
+        soffice or "not found; old Office files (.doc, .xls, .ppt, .rtf) are read once it is installed (free, libreoffice.org)")
     office = find_ms_office(env)
     add("microsoft office", OK if office else INFO, office or ("not found" if env.is_windows else "not applicable on this system"))
 

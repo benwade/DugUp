@@ -28,7 +28,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .cli import (format_bytes, format_date, format_seconds, megabytes, print_compacted, print_meaning_report, print_ocr_report, print_report,
+from .cli import (format_bytes, format_date, format_seconds, megabytes, print_compacted, print_looks_report, print_meaning_report, print_ocr_report, print_report,
                   progress_text)
 from .desktop import Desktop
 from . import remember
@@ -81,6 +81,10 @@ def parse_day(text: str, end_of_day: bool = False) -> Optional[float]:
 WHERE_LABELS = (("Anywhere", WHERE_ANYWHERE), ("In the text", WHERE_TEXT), ("In the file name", WHERE_NAME),
                 ("In text read by OCR", WHERE_OCR), ("By meaning", WHERE_MEANING), ("Words and meaning", WHERE_BOTH),
                 ("By looks (pictures)", WHERE_LOOKS))
+WORD_PLACES = WHERE_LABELS[:4]          # where the words must be, for a search by words
+# The four ways to search, as buttons beside the search box: the first thing a person sees, not a choice inside a list.
+MODES = (("Words", "words"), ("Meaning", "meaning"), ("Words + meaning", "both"), ("Pictures", "looks"))
+MODE_WHERE = {"meaning": "By meaning", "both": "Words and meaning", "looks": "By looks (pictures)"}
 KIND_LABELS = (("PDF", FileKind.PDF.value), ("Office", FileKind.OFFICE.value), ("Text", FileKind.TEXT.value),
                ("Pictures", FileKind.IMAGE.value))
 ALL_FOLDERS = "All indexed folders"
@@ -299,7 +303,10 @@ class App:
         self.words = tk.StringVar()
         self.folder = tk.StringVar(value=ALL_FOLDERS)
         self.folder.trace_add("write", lambda *_: remember.write(self.service.layout.root, folder="" if self.folder.get() == ALL_FOLDERS else self.folder.get()))
-        self.where = tk.StringVar(value=WHERE_LABELS[0][0])
+        self.where = tk.StringVar(value=WHERE_LABELS[0][0])     # the search's "where": the one the search reads
+        self.mode = tk.StringVar(value="words")                  # the buttons; kept in step with self.where
+        self.word_place = tk.StringVar(value=WORD_PLACES[0][0])  # where the words must be, for a search by words
+        self._syncing = False
         self.after_day, self.before_day = tk.StringVar(), tk.StringVar()
         self.smallest, self.largest = tk.StringVar(), tk.StringVar()
         self.kinds: Dict[str, object] = {value: tk.BooleanVar(value=True) for _, value in KIND_LABELS}
@@ -319,7 +326,7 @@ class App:
         self.ask_button = ttk.Button(self.ask_row, text="Fill in the form", command=self.ask_in_plain_words)
         self.ask_button.grid(row=0, column=2, padx=2)
         if self.service.intent is not None:      # the row only exists when a model is set up
-            self.ask_row.grid(row=3, column=0, columnspan=11, sticky="ew", pady=(4, 0))
+            self.ask_row.grid(row=5, column=0, columnspan=13, sticky="ew", pady=(4, 0))
 
         ttk.Label(form, text="Words:").grid(row=0, column=0, sticky="w")
         self.words_entry = ttk.Entry(form, textvariable=self.words)
@@ -327,22 +334,32 @@ class App:
         self.words_entry.bind("<Return>", lambda event: self.search())
         self.search_button = ttk.Button(form, text="Search", command=self.search)
         self.search_button.grid(row=0, column=10, padx=2)
+        modes = ttk.Frame(form)
+        ttk.Label(form, text="Search by:").grid(row=1, column=0, sticky="w")
+        modes.grid(row=1, column=1, columnspan=10, sticky="w", padx=4, pady=(2, 0))
+        self.mode_buttons = {}
+        for label, value in MODES:
+            button = ttk.Radiobutton(modes, text=label, value=value, variable=self.mode, command=self._mode_chosen)
+            button.pack(side="left", padx=(0, 12))
+            self.mode_buttons[value] = button
 
-        ttk.Label(form, text="Look in:").grid(row=1, column=0, sticky="w")
-        self.folder_box = ttk.Combobox(form, textvariable=self.folder, state="readonly")
-        self.folder_box.grid(row=1, column=1, sticky="ew", padx=4, pady=2)
-        ttk.Label(form, text="Words are:").grid(row=1, column=2, sticky="e")
-        ttk.Combobox(form, textvariable=self.where, state="readonly", width=20,
-                     values=[label for label, _ in WHERE_LABELS]).grid(row=1, column=3, padx=4)
+        ttk.Label(form, text="Look in:").grid(row=2, column=0, sticky="w")
+        self.folder_box = ttk.Combobox(form, textvariable=self.folder, state="readonly", width=24)
+        self.folder_box.grid(row=2, column=1, sticky="ew", padx=4, pady=2)
+        ttk.Label(form, text="Words in:").grid(row=2, column=2, sticky="e")
+        self.word_place_box = ttk.Combobox(form, textvariable=self.word_place, state="readonly", width=20,
+                                           values=[label for label, _ in WORD_PLACES])
+        self.word_place_box.grid(row=2, column=3, padx=4)
+        self.word_place_box.bind("<<ComboboxSelected>>", lambda event: self._mode_chosen())
+        self.where.trace_add("write", lambda *_: self._where_changed())
         for at, (label, value) in enumerate(KIND_LABELS):
-            ttk.Checkbutton(form, text=label, variable=self.kinds[value]).grid(row=1, column=4 + at, padx=2)
-        ttk.Checkbutton(form, text="Exact form", variable=self.exact).grid(row=1, column=8, padx=(14, 2))
-        ttk.Label(form, text="(off: education also finds educate)").grid(row=1, column=9, columnspan=2, sticky="w")
-        ttk.Checkbutton(form, text="Every copy", variable=self.every_copy).grid(row=1, column=11, padx=(14, 2))
-        ttk.Label(form, text="(off: a file kept in several places is shown once)").grid(row=1, column=12, sticky="w")
-
+            ttk.Checkbutton(form, text=label, variable=self.kinds[value]).grid(row=2, column=4 + at, padx=2)
+        ttk.Checkbutton(form, text="Exact form", variable=self.exact).grid(row=2, column=8, padx=(14, 2))
+        ttk.Label(form, text="(off: education also finds educate)").grid(row=2, column=9, columnspan=4, sticky="w")
         narrow = ttk.Frame(form)
-        narrow.grid(row=2, column=0, columnspan=11, sticky="w", pady=2)
+        narrow.grid(row=3, column=0, columnspan=13, sticky="w", pady=2)
+        more = ttk.Frame(form)                  # a line of its own: on one line the form ran off a normal window
+        more.grid(row=4, column=0, columnspan=13, sticky="w", pady=(0, 2))
         for text, variable, width in (("Modified on or after:", self.after_day, 11), ("up to and including:", self.before_day, 11),
                                       ("Size at least:", self.smallest, 8), ("at most:", self.largest, 8)):
             ttk.Label(narrow, text=text).pack(side="left", padx=(0, 2))
@@ -350,9 +367,11 @@ class App:
             entry.pack(side="left", padx=(0, 10))
             entry.bind("<Return>", lambda event: self.search())
         ttk.Label(narrow, text="(dates as 2026-10-12; sizes as 200k, 5m, 1g)").pack(side="left")
-        ttk.Checkbutton(narrow, text="Only files that are here now", variable=self.present_only).pack(side="left", padx=(14, 2))
-        ttk.Label(narrow, text="(off: files gone since the last scan, or on a drive not reachable now, are shown flagged)").pack(side="left")
-        ttk.Button(narrow, text="Clear filters", command=self.clear_filters).pack(side="left", padx=10)
+        ttk.Checkbutton(more, text="Every copy", variable=self.every_copy).pack(side="left", padx=(0, 2))
+        ttk.Label(more, text="(off: a file kept in several places is shown once)").pack(side="left")
+        ttk.Checkbutton(more, text="Only files that are here now", variable=self.present_only).pack(side="left", padx=(14, 2))
+        ttk.Label(more, text="(off: files that are gone, or on a drive not plugged in, are shown flagged)").pack(side="left")
+        ttk.Button(more, text="Clear filters", command=self.clear_filters).pack(side="left", padx=10)
 
         panes = ttk.PanedWindow(root, orient="horizontal")
         panes.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=6)
@@ -463,7 +482,8 @@ class App:
         for where, text, command in ((upper, "Add folder...", self.add_folder), (upper, "Choose what to index...", self.choose_what),
                                      (upper, "Update the index", lambda: self.start("index")),
                                      (lower, "Read pictures and scans (OCR)", lambda: self.start("ocr")),
-                                     (lower, "Read a folder now, fast...", self.read_folder_now)):
+                                     (lower, "Read a folder now, fast...", self.read_folder_now),
+                                     (lower, "Prepare picture search", self.prepare_pictures)):
             button = ttk.Button(where, text=text, command=command)
             button.pack(side="left", padx=2)
             self.run_buttons.append(button)
@@ -491,6 +511,7 @@ class App:
         self.message = tk.StringVar(value='Type words and press Enter. Put "a phrase" in double quotes to find it as typed.')
         self._readonly(root, self.message, row=2, column=0, sticky="ew", padx=6, pady=4)
         # always in sight, beside the message line; it opens a program of its own (report.py)
+        self.pictures_button = ttk.Button(root, text="Search pictures instead", command=self.search_pictures_instead)
         self.report_button = ttk.Button(root, text="Report a problem", command=self.report_problem)
         self.report_button.grid(row=2, column=1, sticky="e", padx=(0, 6), pady=4)
         self.words_entry.focus_set()
@@ -616,9 +637,46 @@ class App:
                              self.before_day.get(), self.smallest.get(), self.largest.get(), self.exact.get(),
                              self.every_copy.get(), self.present_only.get())
 
+    # -- the way to search: the buttons and "Words in" set self.where; whatever sets self.where moves the buttons
+
+    def _mode_chosen(self) -> None:
+        mode = self.mode.get()
+        self._syncing = True
+        try:
+            self.where.set(self.word_place.get() if mode == "words" else MODE_WHERE[mode])
+        finally:
+            self._syncing = False
+        self._show_mode()
+
+    def _where_changed(self) -> None:
+        if self._syncing:
+            return
+        label = self.where.get()
+        mode = next((m for m, l in MODE_WHERE.items() if l == label), "words")
+        if mode == "words" and label in dict(WORD_PLACES):
+            self.word_place.set(label)
+        self.mode.set(mode)
+        self._show_mode()
+
+    def _show_mode(self) -> None:
+        words = self.mode.get() == "words"
+        self.word_place_box.configure(state="readonly" if words else "disabled")
+
+    def _offer_pictures(self, offered: bool) -> None:
+        if offered:
+            self.pictures_button.grid(row=2, column=1, sticky="e", padx=(0, 150), pady=4)
+        else:
+            self.pictures_button.grid_remove()
+
+    def search_pictures_instead(self) -> None:
+        """The offer after a word search that found nothing: the same words, as a description of pictures."""
+        self.mode.set("looks")
+        self._mode_chosen()
+        self.search()
+
     def clear_filters(self) -> None:
         self.folder.set(ALL_FOLDERS)
-        self.where.set(WHERE_LABELS[0][0])
+        self.where.set(WHERE_LABELS[0][0])          # a search by words, anywhere (the buttons follow)
         for variable in (self.after_day, self.before_day, self.smallest, self.largest):
             variable.set("")
         for variable in self.kinds.values():
@@ -829,7 +887,7 @@ class App:
             return
         done, could, _ = self.service.looks_coverage()
         if not done:
-            self.say("No pictures have sketches yet. Update the index (or run dugup alike fill) first.")
+            self.say("No pictures are ready for picture search yet. Prepare picture search (on the Index tab) does it.")
             return
         self.stop = threading.Event()
         stop, events, service = self.stop, self.events, self.service
@@ -1011,7 +1069,10 @@ class App:
                 return page
             coverage = (service.meaning_coverage()[:2] if by_meaning
                         else service.looks_coverage()[:2] if by_looks else (0, 0))
-            return page, coverage
+            pictures = 0
+            if page.total == 0 and offset == 0 and not by_looks and not by_meaning and like_id is None:
+                pictures = service.looks_coverage()[0]      # sketched pictures: worth offering to search them instead
+            return page, coverage, pictures
 
         if offset == 0:
             self.say("Searching ...")
@@ -1026,7 +1087,7 @@ class App:
         if isinstance(result, Failure):
             self.say(f"The search could not be done: {result.detail}")
             return
-        page, (done, could) = result
+        page, (done, could), pictures = result
         words, filters, _ = self.last
         if offset == 0:
             self.rows = []
@@ -1046,7 +1107,11 @@ class App:
         elif by_looks:
             if could > done:
                 coverage = f"  (sketches cover {done:,} of {could:,} picture(s) so far)"
-        if self.total == 0:
+        self._offer_pictures(pictures > 0 and self.total == 0)
+        if self.total == 0 and pictures > 0:
+            self.say(f"No file has the words: {words}. To find pictures that show it, choose Search pictures instead "
+                     "(descriptions work best in English).")
+        elif self.total == 0:
             self.say(f"No files found for: {words}{coverage}")
         else:
             way = ("that look like" if self.like_of is not None else "that look most like" if by_looks
@@ -1309,6 +1374,9 @@ class App:
         tally = service.attention_counts()
         if tally["waiting_for_ocr"]:
             lines.append(f"{tally['waiting_for_ocr']:,} file(s) wait for OCR: Read pictures and scans.")
+        pictures = self._pictures_waiting()
+        if pictures:
+            lines.append(f"{pictures:,} picture(s) wait for picture search: Prepare picture search.")
         if tally["attention"]:
             lines.append(f"{tally['attention']:,} file(s) are worth a look (a limit, a timeout or a crash):")
             for record in service.needs_attention(limit=20):
@@ -1517,6 +1585,36 @@ class App:
             return
         self.start("models")
 
+    def _pictures_waiting(self, ready_only: bool = False) -> int:
+        """Pictures with no sketch yet in folders that ask for picture search; with `ready_only`, 0 unless they
+        can be sketched now without a download (an update does not fetch a model by itself)."""
+        try:
+            if not self.service.looks_wanted():
+                return 0
+            if ready_only and self.service.looks_ready() is not True:
+                return 0
+            return self.service.looks_waiting()
+        except Exception:
+            return 0
+
+    def prepare_pictures(self) -> None:
+        """Sketch the waiting pictures now, fetching the picture model first if it is not here yet."""
+        waiting = self._pictures_waiting()
+        if not waiting:
+            self.say("Every picture is ready for picture search." if self.service.looks_wanted() else
+                     "No folder asks for picture search. Choose what to index... turns it on for a folder.")
+            return
+        ready = self.service.looks_ready()
+        if ready is not True and "not installed" in str(ready):
+            self.say(f"Picture search cannot be prepared here: {ready}.")
+            return
+        if ready is not True and not self.ask("Prepare picture search",
+                                              f"{waiting:,} picture(s) wait. First, {ready.split(';')[0]}.\n\n"
+                                              "Download it now? It is fetched once and kept in the data folder."):
+            self.say("Nothing was downloaded.")
+            return
+        self.start("looks")
+
     def busy(self) -> bool:
         return self.worker is not None and self.worker.is_alive()
 
@@ -1544,6 +1642,8 @@ class App:
                     report = service.run_ocr(stop, events.put)
                 elif what == "meaning":
                     report = service.run_meaning(stop, events.put)
+                elif what == "looks":
+                    report = service.run_looks(stop, events.put)
                 else:
                     report = service.run_indexing(stop, events.put, None, on_settings_change)
             except Exception as exc:      # never die silently in the background
@@ -1735,7 +1835,7 @@ class App:
                 return
             self.progress_text.set("Plain-words search is set up.")
             if self.service.intent is not None:
-                self.ask_row.grid(row=3, column=0, columnspan=11, sticky="ew", pady=(4, 0))
+                self.ask_row.grid(row=5, column=0, columnspan=13, sticky="ew", pady=(4, 0))
                 self.setup_button.pack_forget()
                 self.run_buttons = [b for b in self.run_buttons if b is not self.setup_button]
             self.refresh_status('Plain-words search is ready: type a sentence in the "In plain words" box at the top.')
@@ -1761,6 +1861,8 @@ class App:
             print_ocr_report(report, out)
         elif what == "meaning":
             print_meaning_report(report, out)
+        elif what == "looks":
+            print_looks_report(report, out)
         else:
             print_report(report, out, self.service.settings.missing_retention_days)
         if getattr(report, "paused", ""):
@@ -1779,6 +1881,8 @@ class App:
             text = self.carried.rstrip() + "\n\nThen pictures and scans were read (OCR):\n" + text
         elif what == "meaning" and self.carried:
             text = self.carried.rstrip() + "\n\nThen sketches of meaning were made:\n" + text
+        elif what == "looks" and self.carried:
+            text = self.carried.rstrip() + "\n\nThen pictures were prepared for picture search:\n" + text
         self.carried = ""
         if what == "index" and not report.stopped and not report.paused and self.service.settings.ocr_after_index:
             # an index update goes straight on to the pictures and scans its folders ask for: one run, one Stop
@@ -1806,6 +1910,17 @@ class App:
                 self.refresh_status(text.rstrip() + f"\n\nNow making sketches of meaning for {waiting:,} file(s), the most "
                                     "recently changed first. Stop keeps what is done; the rest waits for next time.")
                 self.start("meaning")
+                return
+        if what in ("index", "ocr", "meaning") and not report.stopped and not getattr(report, "paused", "") \
+                and self.service.settings.looks_after_index:
+            # ... and last, the pictures, so that they can be found by what they show
+            waiting = self._pictures_waiting(ready_only=True)
+            if waiting:
+                self.carried = text
+                self.refresh_folders()
+                self.refresh_status(text.rstrip() + f"\n\nNow preparing {waiting:,} picture(s) for picture search. "
+                                    "Stop keeps what is done; the rest waits for next time.")
+                self.start("looks")
                 return
         self.progress_text.set(f"Finished in {format_seconds(report.seconds)}." if not report.stopped else "Stopped.")
         self.refresh_folders()

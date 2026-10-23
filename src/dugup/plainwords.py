@@ -20,7 +20,7 @@ import re
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from .intent import Understood, period_days
-from .shapes import WHERE_ANYWHERE, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind
+from .shapes import WHERE_ANYWHERE, WHERE_LOOKS, WHERE_NAME, WHERE_OCR, WHERE_TEXT, Failure, FailureReason, FileKind
 
 MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
           "november", "december")
@@ -38,6 +38,10 @@ KIND_WORDS: Tuple[Tuple[str, str], ...] = (
     (FileKind.TEXT.value, r"(?:plain\s+)?text\s+files?|txt(?:\s+files?)?|markdown(?:\s+files?)?|web\s?pages?|html(?:\s+files?)?"),
     (FileKind.IMAGE.value, r"pictures?|photos?|photographs?|images?|scans?|scanned\s+(?:pages?|documents?|files?)|screenshots?|screen\s+shots?"),
 )
+# a picture named by what it shows: "photos of a dog", "pictures showing the beach"
+_PICTURE = r"(?:pictures?|photos?|photographs?|images?|pics?|snapshots?)"
+_SHOWING = (_PICTURE + r"\s+(?:of|showing|that\s+shows?|which\s+shows?|depicting|that\s+depicts?|that\s+look\s+like"
+            r"|looking\s+like)")
 _SIZE_UNIT = r"(kb|k|kilobytes?|mb|m|megs?|megabytes?|gb|g|gigs?|gigabytes?|bytes?|b)"
 _AMOUNT = r"(\d+(?:[.,]\d+)?)\s*" + _SIZE_UNIT + r"\b"
 _MORE = r"(?:bigger|larger|greater|more|heavier)\s+than|over|above|at\s+least|exceeding|>\s*=?|no\s+(?:smaller|less)\s+than|minimum(?:\s+of)?"
@@ -124,7 +128,10 @@ def read(text: str, folders: Sequence[str] = (), today: Optional[datetime.date] 
 
     # where the words must be
     where = WHERE_ANYWHERE
-    if s.take(r"(?:(?:with|having|that\s+have|whose)\s+)?(?:in|inside)\s+(?:the\s+|their\s+|its\s+)?(?:file\s*)?names?"
+    shown = False                      # the sentence named pictures by what they show
+    if s.take(_SHOWING):
+        where, shown = WHERE_LOOKS, True
+    elif s.take(r"(?:(?:with|having|that\s+have|whose)\s+)?(?:in|inside)\s+(?:the\s+|their\s+|its\s+)?(?:file\s*)?names?"
               r"|(?:file\s*)?names?\s+(?:contains?|containing|has|have|having|includes?|including|with)"
               r"|(?:files?\s+)?(?:named|called|titled)|whose\s+names?\s+(?:contains?|has|have|includes?)|by\s+name"):
         where = WHERE_NAME
@@ -200,6 +207,17 @@ def read(text: str, folders: Sequence[str] = (), today: Optional[datetime.date] 
     for kind, pattern in KIND_WORDS:
         if s.take_all(pattern):
             kinds.append(kind)
+    # "dog photos", "beach pictures": pictures and some words, nothing saying the words are written down,
+    # so the words are what the pictures show (scans and screenshots hold writing, so they keep a word search)
+    if (where == WHERE_ANYWHERE and kinds == [FileKind.IMAGE.value] and not exact and not s.quoted
+            and re.search(r"(?<![\w-])" + _PICTURE + r"(?![\w-])", text, re.IGNORECASE)
+            and not re.search(r"\b(?:scan|scanned|screenshot|screen\s+shot|words?|text|says?|saying|written|reads?)\b",
+                              text, re.IGNORECASE)):
+        where = WHERE_LOOKS
+    if shown and FileKind.IMAGE.value not in kinds:
+        kinds.append(FileKind.IMAGE.value)
+    if shown and len(kinds) > 1:
+        where = WHERE_ANYWHERE          # "PDFs and pictures of receipts": the same words in both, so by words
     if where == WHERE_OCR and not kinds:
         kinds.append(FileKind.IMAGE.value) if re.search(r"sign|label|poster|banner|whiteboard|receipt", text, re.IGNORECASE) else None
 
@@ -229,6 +247,8 @@ def read(text: str, folders: Sequence[str] = (), today: Optional[datetime.date] 
             words.append(bare)
     if not words:
         notes.append("no words to look for were found in the sentence")
+        if where == WHERE_LOOKS:
+            where = WHERE_ANYWHERE      # nothing to say what the pictures show: every picture, by the other fields
     return Understood(" ".join(words), folder, where, tuple(kinds), after, before, smallest, largest, exact, tuple(notes), sort)
 
 

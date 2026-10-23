@@ -104,7 +104,9 @@ class Understood:
             parts.append(f"{self.sort} first")
         if self.kinds:
             parts.append("types: " + ", ".join(self.kinds))
-        if self.where != WHERE_ANYWHERE:
+        if self.where == "looks":
+            parts.append("pictures that show it")
+        elif self.where != WHERE_ANYWHERE:
             parts.append(f"words in: {self.where}")
         if self.after or self.before:
             parts.append(f"modified {self.after or 'any time'} to {self.before or 'now'}")

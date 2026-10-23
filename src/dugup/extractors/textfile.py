@@ -76,6 +76,38 @@ def html_to_text(markup: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def email_to_text(data: bytes) -> str:
+    """A saved e-mail (.eml) as text: who it is from and to, when, the subject, the message itself, and the
+    names of its attachments (their contents are not read)."""
+    import email
+    from email import policy
+    message = email.message_from_bytes(data, policy=policy.default)
+    lines = []
+    for field in ("Subject", "From", "To", "Cc", "Date"):
+        value = message.get(field)
+        if value:
+            lines.append(f"{field}: {value}")
+    body = ""
+    try:
+        part = message.get_body(preferencelist=("plain", "html"))
+        if part is not None:
+            body = part.get_content()
+            if part.get_content_subtype() == "html":
+                body = html_to_text(body)
+    except Exception:              # a damaged part or an unknown character set: the headers are still worth having
+        body = ""
+    names = []
+    try:
+        names = [a.get_filename() for a in message.iter_attachments() if a.get_filename()]
+    except Exception:
+        pass
+    if body:
+        lines += ["", body.strip()]
+    if names:
+        lines += ["", "Attachments: " + ", ".join(names)]
+    return "\n".join(lines)
+
+
 class TextFileExtractor:
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self.settings = settings or Settings()
@@ -93,6 +125,12 @@ class TextFileExtractor:
         except OSError as exc:
             return Failure(FailureReason.OTHER, f"the file could not be read ({type(exc).__name__}: {exc.strerror or exc})")
         cut = len(data) > limit
+        if extension(record.path) == "eml":
+            text = email_to_text(data[:limit])
+            unread = (f"only the first {limit:,} bytes were read (the file is larger)",) if cut else ()
+            segments = [SegmentIn(0, order, SegmentKind.TEXT, piece) for order, piece in
+                        enumerate(chunk_text(text, self.settings.chunk_chars, self.settings.chunk_overlap))]
+            return Extraction(tuple(segments), (), unread)
         decoded = decode_bytes(data[:limit], complete=not cut)
         if isinstance(decoded, Failure):
             return decoded

@@ -427,6 +427,12 @@ def _entries() -> Tuple[Entry, ...]:
 
 
 ENTRIES: Dict[str, Entry] = {entry.name: entry for entry in _entries()}
+
+# The Settings window's short list: what people change in everyday use. The rest are a tick away
+# ("Show all settings"), and a search always reaches every setting.
+SHORT_LIST: Tuple[str, ...] = ("watch_every_minutes", "watch_on_battery", "hotkey", "ocr_after_index", "meaning_after_index",
+                               "looks_after_index", "meaning_model", "meaning_warm_up", "max_index_mb",
+                               "missing_retention_days")
 NOT_HERE = frozenset({"extensions"})      # a table, not one value: edited in config.toml (defaults: DEFAULT_EXTENSIONS in kinds.py)
 _KINDS = {f.name: str(f.type) for f in fields(Settings) if f.name not in NOT_HERE}
 _DEFAULTS = Settings()

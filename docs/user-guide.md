@@ -31,9 +31,18 @@ Use **Choose what to index...** to revisit a folder's choices. Names-only indexi
 
 Type words in the search box and press **Enter**. Double-click a result to open it. The buttons below the list let you edit the selected file, show it in its folder, or copy its path.
 
+**Search by** sits right under the search box. Choose how to search:
+
+- **Words**: files that contain your words. This is the default.
+- **Meaning**: passages that say what you describe, in any words.
+- **Words + meaning**: both together, for names plus a description.
+- **Pictures**: pictures that show what you describe, such as “a dog on a beach.”
+
+If a search by words finds nothing and your pictures are ready for picture search, DugUp offers **Search pictures instead**.
+
 Word search matches related forms: “education” can also find “educate.” Choose **Exact form** when you want the word exactly as typed. Put a phrase in double quotes to search for those words together. Without quotes, results where your words appear close together rank above results where they are far apart.
 
-Use the filters to narrow your search by folder, file type, date, size, or where the words appear: in the file name, document text, or text read by OCR.
+Use the filters to narrow your search by folder, file type, date or size. For a search by words, **Words in** chooses where the words must appear: anywhere, in the file name, in the document text, or in text read by OCR.
 
 Click a column heading to sort. You can build a sort using up to three columns; earlier choices become secondary sort keys. Use **More** to load another page of results. If you start a different search while one is running, DugUp discards the older answer when it arrives.
 
@@ -43,15 +52,15 @@ The **In plain words** box fills in the search form from a request such as:
 
 > PDFs about nursing from last month over 1 MB
 
-Check the words, file type, dates and size it chooses, then press **Enter**. It understands English requests for file types, sizes, dates, indexed folder names, quoted phrases, exact words, and sorting such as “newest” or “biggest.” You can also say “in the file name” or “on a sign.”
+Check the words, file type, dates and size it chooses, then press **Enter**. It understands English requests for file types, sizes, dates, indexed folder names, quoted phrases, exact words, and sorting such as “newest” or “biggest.” You can also say “in the file name” or “on a sign.” Ask for “pictures of dogs” or “beach photos” and it sets up a picture search for what the pictures show.
 
 This uses built-in rules by default, with no additional download. If the index has meaning information, the request uses **Words and meaning**. An experimental model-based reader is available in [Technical information](technical.md#experimental-plain-words-reader).
 
 ### Search by meaning
 
-Choose **By meaning** and describe what you remember, such as “a receipt for a licence I paid online.” DugUp looks for passages expressing a similar idea, even if they use different words.
+Choose **Meaning** and describe what you remember, such as “a receipt for a licence I paid online.” DugUp looks for passages expressing a similar idea, even if they use different words.
 
-Choose **Words and meaning** when exact names or terms also matter. For example, “EZDriveMA receipt from 2018” can benefit from both kinds of match.
+Choose **Words + meaning** when exact names or terms also matter. For example, “EZDriveMA receipt from 2018” can benefit from both kinds of match.
 
 These modes require the optional meaning model and meaning indexing for the folders being searched. Results include each file's closest passage. Folder, type, date and size filters still apply; word-specific options such as **Exact form** do not apply to meaning-only search.
 
@@ -59,9 +68,11 @@ If indexing is incomplete, the results report how many files have meaning inform
 
 ### Search for pictures
 
-Choose **By looks (pictures)** and describe a scene, such as “a dog on a beach.” To start from an image instead, select it and choose **Pictures like this**.
+Choose **Pictures** under **Search by** and describe a scene, such as “a dog on a beach.” Describe it in English: the picture model understands English best. To start from an image instead, select it and choose **Pictures like this**.
 
-The **Pictures** tab shows matching images as thumbnails. Click one to select it or double-click to open it. These searches require the optional picture models and picture indexing.
+The **Pictures** tab shows matching images as thumbnails. Click one to select it or double-click to open it.
+
+Pictures need preparing once before they can be found this way. **Update the index** does it as its last step when the picture model is installed. The **Index** tab says how many pictures are waiting, and **Prepare picture search** does it right away, downloading the picture model first if it is missing (it asks before downloading).
 
 For screenshots and scanned pages, search by their text instead. Picture similarity tends to treat many pages of text as visually alike, even when they contain different information.
 
@@ -77,7 +88,7 @@ To select several results, use **Ctrl-click**, **Shift-click**, or **Ctrl+A**. T
 
 ## Keep the index current
 
-Choose **Update the index** on the **Index** tab after adding or changing files. By default, the run continues with OCR where enabled, then meaning and picture indexing where the corresponding models are installed. The progress display includes a **Stop** button. Work still waiting can be continued later.
+Choose **Update the index** on the **Index** tab after adding or changing files. By default, the run continues with OCR where enabled, then meaning and picture indexing where the corresponding models are installed. The status lists any work still waiting, such as pictures waiting for picture search. The progress display includes a **Stop** button. Work still waiting can be continued later.
 
 OCR reads clear printed text best. Handwriting, decorative lettering and blurred photos are often missed. For a folder that needs attention immediately, **Read a folder now, fast...** starts OCR for that folder. If another run is active, DugUp stops it cleanly and leaves unfinished work queued.
 
@@ -186,7 +197,7 @@ Each DugUp window has a small freeze recorder. If a window stops responding for 
 
 Adjust DugUp to your computer, or review its suggested settings before saving.
 
-Open **Settings...** from the File menu or Index tab. Settings are grouped by feature, with everyday choices first. Search by a word such as “battery,” “card,” or “readers” to find a setting by its name or help text.
+Open **Settings...** from the File menu or Index tab. It opens on the settings most people change: background updates, the search key, what an update includes, the meaning model, and disk space. Any setting you have changed is listed too. Tick **Show all settings (advanced)** for everything else, grouped by feature. The search box looks through every setting: try a word such as “battery,” “card,” or “readers.”
 
 Each setting explains what it does. Cost labels indicate whether increasing it uses light, medium or heavy resources. Changed values are marked, with **Reset** beside them.
 

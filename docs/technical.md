@@ -170,7 +170,7 @@ dugup alike like "D:\Photos\example.jpg"
 
 `looks_readers` controls parallel image reading; `0` chooses a value based on available cores. `looks_gpu` controls supported graphics acceleration. Reading and resizing images can take more time than the model itself, so additional readers can help.
 
-Manual index updates process new pictures once the models are installed unless `looks_after_index` is false or `--no-looks` is supplied. As with meaning indexing, the tray's background fill operation can fetch missing models when work is waiting.
+Index updates, from the window or the command line, finish with new pictures once the models are installed, unless `looks_after_index` is false or `--no-looks` is supplied. An update from the window or the command line never downloads the picture model by itself; the window's **Prepare picture search** asks first, then downloads it and processes the waiting pictures. The CLIP models are English-only, so descriptions work best in English. As with meaning indexing, the tray's background fill operation can fetch missing models when work is waiting.
 
 Similarity scores are useful for ordering, not certainty. Earlier guidance used around `0.30` for a strong description match and around `0.20` for a weak one; image-to-image scores around `0.9` often show the same scene, while `0.97` is the default near-duplicate threshold. Distinct images can exceed those values. Use OCR to distinguish pages of text, and review [near-duplicate groups](file-changes.md#near-duplicate-pictures) before removing anything.
 
@@ -267,6 +267,8 @@ The `[extensions]` table in `config.toml` tells DugUp how to treat a file ending
 nfo = "text"      # read .nfo files as plain text
 heic = "other"    # index .heic pictures by name only
 ```
+
+Saved e-mails (`.eml`) are `text`: DugUp reads the subject, sender, recipients, date, message and attachment names, not attachment contents. Old Office formats (`.doc`, `.dot`, `.xls`, `.xlt`, `.ppt`, `.pps`, `.rtf`) are `office` and are read through LibreOffice when it is installed: each file is converted to the newer format in a temporary folder, using a LibreOffice profile of DugUp's own, and that copy is read. Without LibreOffice they keep their names searchable and are read at the first update after it is installed. Setting the environment variable `DUGUP_NO_LIBREOFFICE` turns this off. Outlook's `.msg` files are not read yet.
 
 Your lines add to the built-in list or change entries in it; every ending you do not mention keeps its default. `text` reads a file as plain text, `image` makes it eligible for OCR and picture search, and `other` keeps its name searchable without reading its contents. Endings are not case-sensitive. A kind DugUp does not recognize is reported when the settings load, and that line is ignored. The next index update applies the change: files whose type it changes are read again, including files already indexed, and nothing else is. The built-in list is `DEFAULT_EXTENSIONS` in [kinds.py](../src/dugup/kinds.py).
 

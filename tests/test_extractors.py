@@ -1,6 +1,7 @@
 """The real extractors on generated files: encodings, each Office format, PDF verdicts as a table, limits."""
 
 import codecs
+import os
 import threading
 
 import pytest
@@ -251,7 +252,9 @@ def test_open_document_text_sheet_and_slides(h):
     ("old.xls", ow.ole_file(), FailureReason.UNSUPPORTED),
     ("note.rtf", b"{\\rtf1 hello}", FailureReason.UNSUPPORTED),
 ])
-def test_office_files_that_cannot_be_read_say_why(h, name, data, reason):
+def test_office_files_that_cannot_be_read_say_why(h, name, data, reason, monkeypatch):
+    from dugup.extractors import office
+    monkeypatch.setattr(office, "find_converter", lambda: None)      # as on a computer without LibreOffice
     result = h.extractor.extract(h.write(name, data))
     assert isinstance(result, Failure) and result.reason is reason and result.detail.strip()
 
@@ -430,3 +433,55 @@ def test_every_family_honours_a_stop_set_before_it_starts(h):
     for name, data in (("a.txt", b"x"), ("a.png", b"x"), ("a.docx", ow.build_docx(["x"])), ("a.pdf", build_pdf([PdfPage("born_digital", "x")]))):
         result = h.extractor.extract(h.write(name, data), stop)
         assert isinstance(result, Failure) and result.reason is FailureReason.STOPPED, name
+
+
+def test_an_old_office_file_says_how_to_read_it_and_is_read_through_libreoffice_when_it_is_there(h, monkeypatch):
+    from dugup.extractors import office
+    monkeypatch.setattr(office, "find_converter", lambda: None)
+    record = h.write("old report.doc", ow.ole_file())
+    result = h.extractor.extract(record)
+    assert result.reason is FailureReason.UNSUPPORTED and "Install LibreOffice" in result.detail
+
+    asked = []
+
+    def convert(path, ext, soffice, folder, seconds):        # LibreOffice, as far as DugUp can tell
+        asked.append((ext, soffice, seconds > 0))
+        made = os.path.join(folder, "old report.docx")
+        with open(made, "wb") as out:
+            out.write(ow.build_docx(["written long ago in Word 97"]))
+        return made
+
+    monkeypatch.setattr(office, "find_converter", lambda: "soffice")
+    monkeypatch.setattr(office, "convert", convert)
+    text = whole(h.extractor.extract(record))
+    assert "written long ago in Word 97" in text and asked == [("doc", "soffice", True)]
+    monkeypatch.setattr(office, "convert", lambda *a: Failure(FailureReason.TIMED_OUT, "took too long"))
+    assert h.extractor.extract(record).reason is FailureReason.TIMED_OUT
+
+
+@pytest.mark.skipif(not __import__("shutil").which("soffice"), reason="LibreOffice is not installed here")
+def test_a_real_rtf_file_is_read_through_a_real_libreoffice(h):
+    text = whole(h.extractor.extract(h.write("letter.rtf", b"{\\rtf1\\ansi Dear reader, the harbour is calm.\\par}")))
+    assert "the harbour is calm" in text
+
+
+def test_a_saved_email_gives_its_people_subject_message_and_attachment_names(h):
+    from email.message import EmailMessage
+    message = EmailMessage()
+    message["Subject"] = "Quarterly figures"
+    message["From"] = "Ana <ana@example.com>"
+    message["To"] = "team@example.com"
+    message["Date"] = "Tue, 13 Oct 2026 09:30:00 +0000"
+    message.set_content("The harbour project is on budget.")
+    message.add_alternative("<p>The <b>harbour</b> project is on budget.</p>", subtype="html")
+    message.add_attachment(b"%PDF-1.4", maintype="application", subtype="pdf", filename="figures Q3.pdf")
+    record = h.write("figures.eml", message.as_bytes())
+    assert record.kind is FileKind.TEXT
+    text = whole(h.extractor.extract(record))
+    assert "Subject: Quarterly figures" in text and "From: Ana <ana@example.com>" in text
+    assert "The harbour project is on budget." in text and "<b>" not in text
+    assert "Attachments: figures Q3.pdf" in text and "PDF-1.4" not in text, "attachment names, not their contents"
+    html_only = EmailMessage()
+    html_only["Subject"] = "Only HTML"
+    html_only.set_content("<html><body><p>Meet at <i>noon</i></p></body></html>", subtype="html")
+    assert "Meet at noon" in whole(h.extractor.extract(h.write("html.eml", html_only.as_bytes())))

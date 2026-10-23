@@ -3,8 +3,10 @@
 They need nothing installed: these formats are zip files of XML, read here with the standard library.
 They give text only (no page images), so segments are kind `native` on page 0.
 
-Old binary formats (.doc, .xls, .ppt) and .rtf cannot be read this way. They are answered with
-`unsupported` and a reason that names the fix (a converter), never with an empty result.
+Old binary formats (.doc, .xls, .ppt) and .rtf cannot be read this way. When LibreOffice is installed
+(it is free), it turns them into the newer format in a temporary folder, out of sight, and that copy is
+read here. Without it they are answered with `unsupported` and a reason that names the fix, never with an
+empty result; once LibreOffice is there, the next update reads them (the indexer queues them again).
 
 Safety: a part is read up to a size limit and is refused when it declares a DTD or entities, so a
 crafted file cannot make the reader expand itself into gigabytes.
@@ -30,6 +32,50 @@ EXCEL = ("xlsx", "xlsm", "xltx")
 POWERPOINT = ("pptx", "pptm", "ppsx", "potx")
 OPEN_DOCUMENT = ("odt", "ott", "ods", "ots", "odp", "otp")
 LEGACY = ("doc", "dot", "xls", "xlt", "ppt", "pps", "rtf")
+CONVERTED = {"doc": "docx", "dot": "docx", "rtf": "docx", "xls": "xlsx", "xlt": "xlsx", "ppt": "pptx", "pps": "pptx"}
+
+
+def find_converter() -> Optional[str]:
+    """LibreOffice's soffice program, when it is installed; None otherwise, or when DUGUP_NO_LIBREOFFICE is set
+    (the tests set it to stand for a computer without it; the readers run in processes of their own)."""
+    import os
+    if os.environ.get("DUGUP_NO_LIBREOFFICE"):
+        return None
+    from ..doctor import Environment, find_libreoffice
+    try:
+        return find_libreoffice(Environment())
+    except Exception:
+        return None
+
+
+def legacy_note(ext: str) -> str:
+    return (f"a .{ext} file is an old Office format. Install LibreOffice (free, libreoffice.org) and DugUp reads "
+            "it at the next update")
+
+
+def convert(path: str, ext: str, soffice: str, folder: str, seconds: float) -> "str | Failure":
+    """An old-format file turned into the newer one by LibreOffice, in `folder`: the new file's path.
+    LibreOffice runs with a profile of its own, so a LibreOffice window already open does not swallow the job."""
+    import os
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    target = CONVERTED[ext]
+    profile = Path(tempfile.gettempdir()) / f"dugup-libreoffice-{os.getpid()}"
+    command = [soffice, f"-env:UserInstallation={profile.as_uri()}", "--headless", "--norestore", "--nologo",
+               "--nodefault", "--convert-to", target, "--outdir", folder, path]
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=seconds, creationflags=flags, check=False)
+    except subprocess.TimeoutExpired:
+        return Failure(FailureReason.TIMED_OUT, f"LibreOffice took longer than {seconds:.0f} s to convert it")
+    except OSError as exc:
+        return Failure(FailureReason.NOT_INSTALLED, f"LibreOffice could not be started ({type(exc).__name__})")
+    made = Path(folder) / (Path(path).stem + "." + target)
+    if not made.is_file():
+        return Failure(FailureReason.CORRUPT, "LibreOffice could not convert it (damaged, or needs a password)")
+    return str(made)
 
 
 class _PartError(Exception):
@@ -300,13 +346,23 @@ class OfficeExtractor:
             return STOPPED
         ext = extension(record.path)
         if ext in LEGACY:
-            return Failure(FailureReason.UNSUPPORTED,
-                           f"a .{ext} file needs a converter (LibreOffice or Microsoft Office); the built-in readers "
-                           "only read the newer formats")
+            soffice = find_converter()
+            if soffice is None:
+                return Failure(FailureReason.UNSUPPORTED, legacy_note(ext))
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="dugup-convert-") as folder:
+                seconds = max(10.0, self.settings.reader_limit(record.size or 0) - 5.0)
+                made = convert(record.path, ext, soffice, folder, seconds)
+                if isinstance(made, Failure):
+                    return made
+                return self._read(made, CONVERTED[ext], stop)
+        return self._read(record.path, ext, stop)
+
+    def _read(self, path: str, ext: str, stop: Optional[StopSignal]) -> "Extraction | Failure":
         reader = _READERS.get(ext)
         if reader is None:
             return Failure(FailureReason.UNSUPPORTED, f"no built-in reader for .{ext} files")
-        handle = open_file(record.path)
+        handle = open_file(path)
         if isinstance(handle, Failure):
             return handle
         with handle:

@@ -73,6 +73,8 @@ def stage():
 
 def test_every_setting_is_shown_and_search_finds_by_label_help_or_name(stage):
     s = stage()
+    s.window.advanced.set(True)
+    s.window._advanced_chosen()
     assert sorted(s.window.widgets) == sorted(catalogue.ENTRIES), "All settings: a row for each"
     s.window.query.set("readers")
     s.window.redraw()
@@ -146,3 +148,23 @@ def test_a_look_that_fails_says_so_and_leaves_the_window_working(stage):
 def test_without_a_look_the_button_is_off(stage):
     s = stage(look=None)
     assert str(s.window.suggest_button["state"]) == "disabled"
+
+
+def test_it_opens_on_a_short_list_that_also_shows_whatever_was_changed(stage):
+    assert set(catalogue.SHORT_LIST) <= set(catalogue.ENTRIES)
+    s = stage(settings=Settings(near_words=33))
+    assert set(s.window.widgets) == set(catalogue.SHORT_LIST) | {"near_words"}, "the short list, and a changed one"
+    assert not s.window.groups.winfo_ismapped()
+    s.window.query.set("battery")
+    s.window.redraw()
+    assert set(s.window.widgets) == {"watch_on_battery"}
+    s.window.query.set("readers")
+    s.window.redraw()
+    assert "index_readers" in s.window.widgets, "a search reaches every setting"
+    s.window.query.set("")
+    s.window.advanced.set(True)
+    s.window._advanced_chosen()
+    assert sorted(s.window.widgets) == sorted(catalogue.ENTRIES)
+    s.window.advanced.set(False)
+    s.window._advanced_chosen()
+    assert len(s.window.widgets) == len(catalogue.SHORT_LIST) + 1

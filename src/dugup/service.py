@@ -617,6 +617,14 @@ class LocalService:
         done, could, _ = self.looks_coverage()
         return max(0, could - done)
 
+    def looks_wanted(self) -> bool:
+        """Whether any folder (or part of one) asks for picture search: when none does, waiting pictures are
+        not worth mentioning."""
+        for root in self.list_roots():
+            if any(wants(level, OPTION_ALIKE) for level in (root.base_level, *(level for _, level in root.levels))):
+                return True
+        return False
+
     def looks_ready(self) -> "bool | str":
         """True when pictures can be looked at now; otherwise a sentence saying what is missing."""
         from . import embedding_models
