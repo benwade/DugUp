@@ -628,3 +628,27 @@ def test_files_whose_type_the_settings_change_are_read_again_once(w):
     report = w.run()                                           # back to the default: back to names only
     assert report.roots[0].retyped == 1 and w.get("notes.nfo").kind is FileKind.OTHER
     assert w.reader.calls == [w.h.full_path(w.root, "notes.nfo")]
+
+
+def test_old_office_files_set_aside_are_read_once_libreoffice_is_installed(w, monkeypatch):
+    from dugup.extractors import office
+    there = {"soffice": None}
+    monkeypatch.setattr(office, "find_converter", lambda: there["soffice"])
+    plain = w.reader.extract
+
+    def reader(record, stop=None):           # the real Office reader's answer, as far as the indexer can tell
+        if record.path.endswith(".doc") and there["soffice"] is None:
+            return Failure(FailureReason.UNSUPPORTED, office.legacy_note("doc"))
+        return plain(record, stop)
+
+    monkeypatch.setattr(w.reader, "extract", reader)
+    w.put("old.doc", "alpha from long ago")
+    w.put("other.txt", "!unsupported")
+    w.run()
+    assert w.get("old.doc").state is FileState.SKIPPED and "Install LibreOffice" in w.get("old.doc").error
+    w.run()
+    assert w.get("old.doc").state is FileState.SKIPPED, "nothing changed: still set aside"
+    there["soffice"] = "soffice"
+    w.run()
+    assert w.get("old.doc").state is FileState.DONE and w.found("alpha") == ["old.doc"]
+    assert w.get("other.txt").state is FileState.SKIPPED, "only old Office files waiting for LibreOffice are queued again"

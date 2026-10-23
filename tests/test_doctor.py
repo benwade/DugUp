@@ -82,7 +82,7 @@ def test_libreoffice_in_program_files_counts():
 
 def test_missing_libreoffice_is_a_warning_that_names_the_fallback():
     check = by_name(run_checks(fake_env(programs=("tesseract",))))["libreoffice"]
-    assert check.status == WARN and "native" in check.detail
+    assert check.status == WARN and ".doc" in check.detail and "libreoffice.org" in check.detail
 
 
 def test_microsoft_office_is_only_informational_and_windows_only():

@@ -81,7 +81,7 @@ def build_tree(folder: os.PathLike) -> List[Expect]:
     add("office/letter.odt", ow.build_odt(["nimbleforth body"], heading="A heading"), "done", ["nimbleforth"])
     add("office/sheet.ods", ow.build_ods({"S": [["perrywhittle", 7]]}), "done", ["perrywhittle"])
     add("office/slides.odp", ow.build_odp([["quandelby slide"]]), "done", ["quandelby"])
-    add("office/old format.doc", ow.ole_file(), "skipped", note="converter")
+    add("office/old format.doc", ow.ole_file(), "skipped", note="Install LibreOffice")
     add("office/locked.docx", ow.ole_file(), "failed", note="password_protected")
     add("office/broken.xlsx", b"PK\x03\x04 not really", "failed", note="corrupt")
 

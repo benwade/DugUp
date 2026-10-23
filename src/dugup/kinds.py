@@ -14,7 +14,7 @@ DEFAULT_EXTENSIONS: Dict[str, FileKind] = {}
 for _kind, _names in (
     (FileKind.PDF, "pdf"),
     (FileKind.IMAGE, "png jpg jpeg jpe tif tiff bmp gif webp heic heif"),
-    (FileKind.TEXT, "txt text md markdown rst csv tsv log htm html"),
+    (FileKind.TEXT, "txt text md markdown rst csv tsv log htm html eml"),
     (FileKind.OFFICE, "docx docm dotx xlsx xlsm xltx pptx pptm ppsx potx odt ott ods ots odp otp doc dot xls xlt ppt pps rtf"),
 ):
     for _name in _names.split():

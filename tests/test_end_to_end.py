@@ -43,7 +43,8 @@ def found(service, word):
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path, monkeypatch):
+    monkeypatch.setenv("DUGUP_NO_LIBREOFFICE", "1")   # the corpus expects a computer without LibreOffice
     tree = tmp_path / "tree"
     rows = build_tree(tree)
     with make(tmp_path) as service:
