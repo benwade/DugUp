@@ -28,7 +28,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .cli import (format_bytes, format_date, format_seconds, megabytes, print_compacted, print_meaning_report, print_ocr_report, print_report,
+from .cli import (format_bytes, format_date, format_seconds, megabytes, print_compacted, print_looks_report, print_meaning_report, print_ocr_report, print_report,
                   progress_text)
 from .desktop import Desktop
 from . import remember
@@ -481,7 +481,8 @@ class App:
         for where, text, command in ((upper, "Add folder...", self.add_folder), (upper, "Choose what to index...", self.choose_what),
                                      (upper, "Update the index", lambda: self.start("index")),
                                      (lower, "Read pictures and scans (OCR)", lambda: self.start("ocr")),
-                                     (lower, "Read a folder now, fast...", self.read_folder_now)):
+                                     (lower, "Read a folder now, fast...", self.read_folder_now),
+                                     (lower, "Prepare picture search", self.prepare_pictures)):
             button = ttk.Button(where, text=text, command=command)
             button.pack(side="left", padx=2)
             self.run_buttons.append(button)
@@ -885,7 +886,7 @@ class App:
             return
         done, could, _ = self.service.looks_coverage()
         if not done:
-            self.say("No pictures have sketches yet. Update the index (or run dugup alike fill) first.")
+            self.say("No pictures are ready for picture search yet. Prepare picture search (on the Index tab) does it.")
             return
         self.stop = threading.Event()
         stop, events, service = self.stop, self.events, self.service
@@ -1372,6 +1373,9 @@ class App:
         tally = service.attention_counts()
         if tally["waiting_for_ocr"]:
             lines.append(f"{tally['waiting_for_ocr']:,} file(s) wait for OCR: Read pictures and scans.")
+        pictures = self._pictures_waiting()
+        if pictures:
+            lines.append(f"{pictures:,} picture(s) wait for picture search: Prepare picture search.")
         if tally["attention"]:
             lines.append(f"{tally['attention']:,} file(s) are worth a look (a limit, a timeout or a crash):")
             for record in service.needs_attention(limit=20):
@@ -1580,6 +1584,36 @@ class App:
             return
         self.start("models")
 
+    def _pictures_waiting(self, ready_only: bool = False) -> int:
+        """Pictures with no sketch yet in folders that ask for picture search; with `ready_only`, 0 unless they
+        can be sketched now without a download (an update does not fetch a model by itself)."""
+        try:
+            if not self.service.looks_wanted():
+                return 0
+            if ready_only and self.service.looks_ready() is not True:
+                return 0
+            return self.service.looks_waiting()
+        except Exception:
+            return 0
+
+    def prepare_pictures(self) -> None:
+        """Sketch the waiting pictures now, fetching the picture model first if it is not here yet."""
+        waiting = self._pictures_waiting()
+        if not waiting:
+            self.say("Every picture is ready for picture search." if self.service.looks_wanted() else
+                     "No folder asks for picture search. Choose what to index... turns it on for a folder.")
+            return
+        ready = self.service.looks_ready()
+        if ready is not True and "not installed" in str(ready):
+            self.say(f"Picture search cannot be prepared here: {ready}.")
+            return
+        if ready is not True and not self.ask("Prepare picture search",
+                                              f"{waiting:,} picture(s) wait. First, {ready.split(';')[0]}.\n\n"
+                                              "Download it now? It is fetched once and kept in the data folder."):
+            self.say("Nothing was downloaded.")
+            return
+        self.start("looks")
+
     def busy(self) -> bool:
         return self.worker is not None and self.worker.is_alive()
 
@@ -1607,6 +1641,8 @@ class App:
                     report = service.run_ocr(stop, events.put)
                 elif what == "meaning":
                     report = service.run_meaning(stop, events.put)
+                elif what == "looks":
+                    report = service.run_looks(stop, events.put)
                 else:
                     report = service.run_indexing(stop, events.put, None, on_settings_change)
             except Exception as exc:      # never die silently in the background
@@ -1824,6 +1860,8 @@ class App:
             print_ocr_report(report, out)
         elif what == "meaning":
             print_meaning_report(report, out)
+        elif what == "looks":
+            print_looks_report(report, out)
         else:
             print_report(report, out, self.service.settings.missing_retention_days)
         if getattr(report, "paused", ""):
@@ -1842,6 +1880,8 @@ class App:
             text = self.carried.rstrip() + "\n\nThen pictures and scans were read (OCR):\n" + text
         elif what == "meaning" and self.carried:
             text = self.carried.rstrip() + "\n\nThen sketches of meaning were made:\n" + text
+        elif what == "looks" and self.carried:
+            text = self.carried.rstrip() + "\n\nThen pictures were prepared for picture search:\n" + text
         self.carried = ""
         if what == "index" and not report.stopped and not report.paused and self.service.settings.ocr_after_index:
             # an index update goes straight on to the pictures and scans its folders ask for: one run, one Stop
@@ -1869,6 +1909,17 @@ class App:
                 self.refresh_status(text.rstrip() + f"\n\nNow making sketches of meaning for {waiting:,} file(s), the most "
                                     "recently changed first. Stop keeps what is done; the rest waits for next time.")
                 self.start("meaning")
+                return
+        if what in ("index", "ocr", "meaning") and not report.stopped and not getattr(report, "paused", "") \
+                and self.service.settings.looks_after_index:
+            # ... and last, the pictures, so that they can be found by what they show
+            waiting = self._pictures_waiting(ready_only=True)
+            if waiting:
+                self.carried = text
+                self.refresh_folders()
+                self.refresh_status(text.rstrip() + f"\n\nNow preparing {waiting:,} picture(s) for picture search. "
+                                    "Stop keeps what is done; the rest waits for next time.")
+                self.start("looks")
                 return
         self.progress_text.set(f"Finished in {format_seconds(report.seconds)}." if not report.stopped else "Stopped.")
         self.refresh_folders()

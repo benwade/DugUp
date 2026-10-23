@@ -1555,3 +1555,33 @@ def test_the_ways_to_search_are_buttons_and_a_word_search_that_finds_nothing_off
     bench.settle()
     assert app.mode.get() == "looks" and [r.name for r in app.grid.rows] == ["IMG_0001.png"]
     assert app.pictures_button.winfo_manager() == "", "the offer goes once it is taken"
+
+
+def test_an_update_goes_on_to_prepare_the_pictures_and_the_status_says_how_many_wait(bench, monkeypatch):
+    from dugup import looks
+    from dugup.service import LocalService
+    runs = []
+
+    def run_looks(self, stop=None, progress=None, **more):
+        runs.append(True)
+        return looks.FillReport(model="m", pictures=1, done=1, could=1, seconds=0.1)
+
+    monkeypatch.setattr(LocalService, "run_looks", run_looks)
+    # without the picture model here, an update does not download it: the waiting pictures are only said
+    monkeypatch.setattr(LocalService, "looks_ready", lambda self: "the picture model is not fetched yet (350 MB); x")
+    bench.ready()
+    assert runs == [] and "1 picture(s) wait for picture search: Prepare picture search." in bench.text(bench.app.status)
+    # Prepare picture search asks before the download, and does nothing on a no
+    bench.answer = False
+    bench.app.prepare_pictures()
+    assert "the picture model is not fetched yet (350 MB)" in bench.asked[-1] and runs == []
+    bench.answer = True
+    bench.app.prepare_pictures()
+    bench.finish_run()
+    assert runs == [True] and "Now 1 of 1 picture(s) have sketches" in bench.text(bench.app.status)
+    # with the model here, the next update goes straight on to the pictures
+    monkeypatch.setattr(LocalService, "looks_ready", lambda self: True)
+    monkeypatch.setattr(LocalService, "looks_waiting", lambda self: 3)
+    bench.app.start("index")
+    bench.finish_run()
+    assert runs == [True, True] and "Then pictures were prepared for picture search" in bench.text(bench.app.status)
