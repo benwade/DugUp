@@ -6,11 +6,11 @@ Find files by what you remember about them: words in a document, text on a scann
 
 Your files stay on your computer, where all indexing and search processing happens. No account, telemetry or crash reporting — and no cloud service needed to search your files.
 
-**Beta 0.2.3 · Windows 11 · Linux supported, with less desktop testing**
+**Beta 0.2.4 · Windows 11 · Linux supported, with less desktop testing**
 
 ## What you can do
 
-- **Find documents by the words they contain.** Search file names and text in PDFs, Office and OpenDocument files, plain text and HTML.
+- **Find documents by the words they contain.** Search file names and text in PDFs, Office and OpenDocument files, saved e-mails (.eml), plain text and HTML. Older Office files (.doc, .xls, .ppt, .rtf) are read too when the free LibreOffice is installed.
 - **Read words in images.** Find receipts, screenshots and scanned pages by the text on them, using OCR.
 - **Search by meaning.** Ask in your own words, or combine meaning with word matches.
 - **Find pictures by appearance.** Describe a scene or find pictures like one you already have.
@@ -35,7 +35,7 @@ For Linux or a source checkout, see [source installation](docs/technical.md#sour
 
 **Search:** type words in the search box and press Enter. Use quotes for a phrase, or **Exact form** to match the word as typed. Narrow results by folder, file type, date or size. Double-click a result to open it.
 
-**Try a different search:** choose **By meaning**, **Words and meaning**, or **By looks (pictures)**. **Pictures like this** finds images similar to a selected picture. These features need their optional models.
+**Try a different search:** under the search box, **Search by** offers **Words**, **Meaning**, **Words + meaning** and **Pictures**. **Pictures like this** finds images similar to a selected picture. Meaning and picture search need their optional models.
 
 **Describe your filters:** the **In plain words** box turns a request such as “PDFs about nursing from last month over 1 MB” into a search form for you to check. Press Enter when it is ready. This currently understands English.
 
