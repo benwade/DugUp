@@ -1506,3 +1506,52 @@ def test_report_a_problem_is_beside_the_message_line_and_in_the_help_menu(tmp_pa
         assert help_menu.entrycget(0, "label") == "Report a problem..."
     finally:
         bench.close()
+
+
+def test_the_ways_to_search_are_buttons_and_a_word_search_that_finds_nothing_offers_pictures(bench, monkeypatch):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    from PIL import Image
+    from dugup import looks, sketches
+    from dugup.service import LocalService
+    from dugup.shapes import WHERE_LOOKS, WHERE_MEANING, WHERE_NAME
+    Image.new("RGB", (60, 40), (200, 150, 90)).save(bench.docs / "IMG_0001.png")
+    (bench.docs / "note.txt").write_text("a note about cats", encoding="utf-8")
+    bench.ready()
+    store = bench.app.service.store
+
+    def sketch(words):
+        v = np.zeros(512, dtype=np.float32)
+        for w in words.split():
+            v[zlib.crc32(w.encode()) % 512] += 1.0
+        return v / np.linalg.norm(v)
+
+    record = store.get_file(str(bench.docs / "IMG_0001.png"))
+    v = sketch("dog")
+    data, scales = sketches.quantize(v[None, :])
+    store.save_looks(looks.model_name(), [(record.row_id, scales[0], data, sketches.fingerprint_of(v), "")])
+    monkeypatch.setattr(LocalService, "sketch_sentence", lambda self, sentence: sketch(sentence))
+    app = bench.app
+
+    # the buttons set the search; "Words in" counts only for a search by words
+    assert app.mode.get() == "words" and str(app.word_place_box["state"]) == "readonly"
+    app.mode_buttons["looks"].invoke()
+    assert app.filters().where == WHERE_LOOKS and str(app.word_place_box["state"]) == "disabled"
+    app.mode_buttons["meaning"].invoke()
+    assert app.filters().where == WHERE_MEANING
+    app.word_place.set("In the file name")
+    app.mode_buttons["words"].invoke()
+    assert app.filters().where == WHERE_NAME, "back to words, where the words were last asked to be"
+    # whatever sets the search (plain words, Clear) moves the buttons with it
+    app.where.set("By looks (pictures)")
+    assert app.mode.get() == "looks"
+    app.clear_filters()
+    assert app.mode.get() == "words" and app.word_place.get() == "Anywhere"
+
+    # a word search that finds nothing, with pictures that can be searched by what they show: offered, not forced
+    assert bench.find("dog") == []
+    assert "Search pictures instead" in app.message.get() and app.pictures_button.winfo_manager() == "grid"
+    app.search_pictures_instead()
+    bench.settle()
+    assert app.mode.get() == "looks" and [r.name for r in app.grid.rows] == ["IMG_0001.png"]
+    assert app.pictures_button.winfo_manager() == "", "the offer goes once it is taken"
