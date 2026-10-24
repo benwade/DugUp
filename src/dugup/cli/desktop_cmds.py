@@ -61,15 +61,16 @@ def move_waits_for(args, environ) -> bool:
 
 def cmd_tray(args, env, out, environ) -> int:
     from .. import summons, tray as tray_module
+    if args.startup == "refresh":                   # an upgrade: an entry there is made again, in today's form;
+        # before the data folder is looked up, which would make it: installing makes no data folder
+        path = tray_module.refresh_startup()
+        safe_write(f"The start-at-login entry was made again ({path})." if path else
+                   "Nothing to remake: no start-at-login entry, one already in today's form, or one for another copy of DugUp.", out)
+        return 0
     layout = _layout(args, environ, create=True)
     if args.startup == "add":
         path = tray_module.install_startup(layout)
         safe_write(f"The tray will start when you log in (the entry is {path}). Start it now with: dugup tray", out)
-        return 0
-    if args.startup == "refresh":                   # an upgrade: an entry there is made again, in today's form
-        path = tray_module.refresh_startup()
-        safe_write(f"The start-at-login entry was made again ({path})." if path else
-                   "Nothing to remake: no start-at-login entry, one already in today's form, or one for another copy of DugUp.", out)
         return 0
     if args.startup == "remove":
         path = tray_module.remove_startup()

@@ -534,3 +534,13 @@ def test_report_a_problem_is_one_step_from_the_tray_the_search_box_and_the_remot
         assert launched[-1][1:4] == ["-m", "dugup", "report"] and "own" in window.note.get()
     finally:
         window.close()
+
+
+def test_refreshing_the_startup_entry_makes_no_data_folder(tmp_path):
+    """The installer runs it on every install; installing must not make a data folder before DugUp first runs."""
+    import io
+    from dugup import cli
+    data = tmp_path / "data"
+    out = io.StringIO()
+    assert cli.main(["tray", "--startup", "refresh", "--data-dir", str(data)], stdout=out, environ={}) == 0
+    assert not data.exists() and "Nothing to remake" in out.getvalue()
