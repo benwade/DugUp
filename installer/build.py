@@ -157,9 +157,16 @@ def build_launcher(python_dir: Path, version: str, work: Path) -> Path:
     (work / "launcher.rc").write_text(rc, encoding="utf-8")
     env = compiler_environment()
 
+    search = next((value for name, value in env.items() if name.upper() == "PATH"), "")
+
     def tool(*args: str) -> None:
         print("+", " ".join(args), flush=True)
-        done = subprocess.run(args, cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        # Windows looks a program up on this script's own PATH, not the one handed to it: find it on the compiler's
+        program = shutil.which(args[0], path=search)
+        if program is None:
+            sys.exit(f"{args[0]} was not found on the compiler's PATH")
+        done = subprocess.run([program, *args[1:]], cwd=work, env=env, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace")
         if done.returncode != 0:
             print(done.stdout, done.stderr, sep="\n")
             sys.exit(f"Failed ({done.returncode}): {' '.join(args)}")
