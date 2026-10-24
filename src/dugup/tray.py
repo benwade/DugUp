@@ -75,6 +75,8 @@ class Tray:
         self.say = say or (lambda text: print(text, flush=True))
         self.events: "queue.Queue[str]" = queue.Queue()
         self.closed = False
+        from .quitsignal import Listener
+        self.quit_listener = Listener(self.layout.root)     # "Quit DugUp" from any DugUp program
         self.loading = False
         from .popup import Popup
         root.withdraw()
@@ -215,6 +217,9 @@ class Tray:
             self.handle(command)
             if self.closed:
                 return
+        if self.quit_listener.due():
+            self.quit()
+            return
         self.watcher.tick()
         self._poll_id = self.root.after(POLL_MS, self._poll)
 
@@ -248,6 +253,10 @@ class Tray:
             self.popup.show()                  # the switch asks first when turning on: the question needs a window
             self.popup.cloud_switch.click()
         elif command == "quit":
+            self.quit()
+        elif command == "quit-all":            # the icon's Quit DugUp: every DugUp program, not only the tray
+            from . import quitsignal
+            quitsignal.send(self.layout.root)
             self.quit()
 
 
@@ -289,7 +298,7 @@ def make_pystray_icon(tray: Tray):
         pystray.MenuItem("Report a problem...", lambda: tray.events.put("report")),
         pystray.MenuItem("About DugUp", lambda: tray.events.put("about")),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Quit DugUp", lambda: tray.events.put("quit")),
+        pystray.MenuItem("Quit DugUp", lambda: tray.events.put("quit-all")),
     )
     icon = pystray.Icon("dugup", image, TITLE + (f" ({key})" if key else ""), menu)
     threading.Thread(target=icon.run, name="dugup-tray-icon", daemon=True).start()

@@ -79,8 +79,14 @@ def _status(args, environ, out) -> int:
     if current.mcp_enabled:
         _say_folders(current, out)
     path = claude_config_path(environ)
-    connected = setup.is_connected(path)
-    safe_write(f"The Claude desktop app {'has' if connected else 'does not have'} the DugUp entry ({path}).", out)
+    state = setup.connection(path, server_entry(args, environ))
+    if state == "this":
+        safe_write(f"The Claude desktop app starts this DugUp ({path}).", out)
+    elif state == "other":
+        safe_write(f"The Claude desktop app starts a different copy of DugUp ({setup.connected_command(path)}). "
+                   "To point it at this one: dugup mcp connect --write", out)
+    else:
+        safe_write(f"The Claude desktop app does not have the DugUp entry ({path}). To add it: dugup mcp connect --write", out)
     return 0
 
 
@@ -126,6 +132,14 @@ def _serve(args, environ) -> int:
     if importlib.util.find_spec("mcp") is None:
         safe_write("The MCP library is not installed here: pip install mcp", sys.stderr)
         return 1
+    layout = _layout(args, environ, create=False)
+    if not layout.index.exists():
+        # start all the same: the assistant is told why there is nothing to search, instead of its app saying
+        # that DugUp "couldn't start"
+        from ..assistant import NoIndex
+        safe_write(f"There is no index yet in {layout.root}; DugUp's tools will say so.", sys.stderr)
+        serve(None, lambda: setup.load(layout), tools=NoIndex(layout))
+        return 0
     service = _service(args, environ, sys.stderr, create=False)
     if service is None:
         return 1

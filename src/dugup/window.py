@@ -276,7 +276,10 @@ class App:
         self._build()
         self.refresh_folders()
         self.refresh_status()
+        self._check_claude_connection()
         root.protocol("WM_DELETE_WINDOW", self.leave)
+        from .quitsignal import Listener
+        self.quit_listener = Listener(service.layout.root)      # "Quit DugUp" from any DugUp program closes this too
         self._poll_id = root.after(POLL_MS, self._poll)
         from .watchdog import Watchdog
         self.watchdog = Watchdog(root, service.layout.logs, "window")
@@ -542,6 +545,7 @@ class App:
         file.add_checkbutton(label="Allow cloud search access (what Claude is shown leaves this computer)",
                              variable=self.cloud_switch.on, command=self.cloud_switch.toggle)
         file.add_command(label="Folders Claude may search...", command=self.cloud_switch.choose_folders)
+        file.add_command(label="Connect the Claude app to this DugUp...", command=self.cloud_switch.connect_claude)
         file.configure(postcommand=self.cloud_switch.sync)
         file.add_separator()
         file.add_command(label="Close the window", command=self.leave)
@@ -1796,6 +1800,9 @@ class App:
         elif self.waiting is not None and self.searcher is not None and self.searcher.is_alive():
             self.waiting.say(self.warming_text())
         self.drain()
+        if self.quit_listener.due():
+            self.close()             # another DugUp program asked to quit all: a run under way stops cleanly
+            return
         self._poll_id = self.root.after(POLL_MS, self._poll)
 
     def _bar_moving(self) -> None:
@@ -1993,6 +2000,16 @@ class App:
 
     # -- closing
 
+    def _check_claude_connection(self) -> None:
+        """With cloud access on, say so when the Claude app starts a different copy of DugUp (it would search
+        another index, or none, and say "DugUp couldn't start")."""
+        try:
+            if self.cloud_switch.on.get() and self.cloud_switch.connection() == "other":
+                self.say("The Claude app's DugUp connection starts a different copy of DugUp. "
+                         "File, Connect the Claude app to this DugUp fixes it.")
+        except Exception:
+            pass                     # a nicety: never a reason for the window not to open
+
     def _ask_tray(self, command: str):
         from . import summons
         return (self.summon or summons.summon)(self.service.layout.root, command)
@@ -2018,7 +2035,7 @@ class App:
                 remember.write(root, told_tray=True)
                 self.tell("DugUp is still in the tray",
                           "DugUp keeps running in the tray, by the clock (on Windows, the icon may be under the ^ arrow).\n\n"
-                          "To come back: click the icon, or press the search key, then choose Open the full window. "
+                          "To come back: click the icon, or press the search key, then choose Open the main window. "
                           "The Start menu works too.\n\n"
                           "To quit DugUp completely: right-click the icon and choose Quit, or use File, Quit DugUp "
                           "here.\n\nTo have the close button end DugUp instead, turn off \"Closing the window keeps "
@@ -2026,8 +2043,10 @@ class App:
         self.close()
 
     def quit_all(self) -> None:
-        """File, Quit DugUp: the tray too, if it is running."""
-        self._ask_tray("quit")
+        """File, Quit DugUp: every DugUp program on this data folder (the tray, Remote, other windows)."""
+        from . import quitsignal
+        quitsignal.send(self.service.layout.root)
+        self._ask_tray("quit")       # at once, rather than at its next look
         self.close()
 
     def close(self) -> None:

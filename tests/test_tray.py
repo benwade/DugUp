@@ -364,7 +364,8 @@ def test_the_remote_drives_the_tray_through_its_summons_and_starts_it_when_there
     try:
         settle()
         assert window.status.get() == remote_module.NOT_RUNNING
-        assert "disabled" not in window.buttons["start"].state() and "disabled" in window.buttons["quit"].state()
+        assert "disabled" not in window.buttons["start"].state() and "disabled" not in window.buttons["quit"].state(), \
+            "Quit DugUp closes DugUp's windows even with no tray"
         window.window()
         assert launched[-1][2:4] == ["dugup", "window"], "no tray: the window is started on its own"
         window.start_tray()
@@ -546,3 +547,50 @@ def test_refreshing_the_startup_entry_makes_no_data_folder(tmp_path):
     out = io.StringIO()
     assert cli.main(["tray", "--startup", "refresh", "--data-dir", str(data)], stdout=out, environ={}) == 0
     assert not data.exists() and "Nothing to remake" in out.getvalue()
+
+
+def test_quit_dugup_on_the_tray_or_remote_tells_every_dugup_program_and_the_tray_obeys_one(stage):
+    import tkinter as tk
+    from dugup import quitsignal, remote as remote_module
+    from test_watcher import Service as FakeRuns, settings as watch_settings
+
+    def make_tray():
+        root = tk.Toplevel(stage.root)
+        watcher = tray_module.Watcher(FakeRuns(), watch_settings(watch_every_minutes=0), cores=4)
+        tray = tray_module.Tray(root, stage.service, stage.service.settings, launch=lambda a: None, make_icon=lambda t: None,
+                                start_hotkey=lambda text, fire: hotkey.Hotkey(""), say=lambda t: None, watcher=watcher)
+        tray.quit_listener.started -= 10
+        return root, tray
+
+    # the icon's Quit DugUp: the signal for the others, and the tray itself
+    root, tray = make_tray()
+    try:
+        before = tray.quit_listener.started
+        tray.handle("quit-all")
+        assert tray.closed and quitsignal.asked_since(stage.layout.root, before)
+    finally:
+        tray.quit()
+        root.destroy()
+    # a tray that sees a signal sent after it started closes itself
+    root, tray = make_tray()
+    try:
+        quitsignal.send(stage.layout.root)
+        for _ in range(quitsignal.EVERY):
+            if tray.closed:
+                break
+            tray._poll()
+        assert tray.closed
+    finally:
+        tray.quit()
+        root.destroy()
+    # Remote's Quit DugUp: the signal, the tray told at once, and Remote closes
+    sent = []
+    window = remote_module.Remote(tk.Toplevel(stage.root), stage.layout, ask=lambda folder, command: sent.append(command),
+                                  launch=lambda a: None, startup_entry=lambda: stage.layout.root / "none", platform="win32")
+    try:
+        assert window.buttons["quit"]["text"] == "Quit DugUp"
+        started = window.quit_listener.started
+        window.quit_all()
+        assert window.closed and "quit" in sent and quitsignal.asked_since(stage.layout.root, started - 1)
+    finally:
+        window.close()

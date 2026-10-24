@@ -233,15 +233,38 @@ class CloudSwitch:
             self.tell("Cloud search access is off. Claude can no longer search, from its next request.")
             return
         self.tell("Cloud search access is on.")
-        if not setup.is_connected(self.claude_config):
-            if self.confirm("Connect the Claude app?",
-                            "To search, the Claude desktop app needs DugUp in its settings. Add it now? "
-                            "Everything else in those settings is kept, with a copy of the old file.",
-                            "Connect", "Not now"):
-                done, said = setup.connect(self.claude_config, setup.server_entry(chosen_data_dir(self.layout)))
-                self.tell("On, and connected: restart the Claude app to finish." if done else said.splitlines()[0])
-            else:
-                self.tell("On. To connect the Claude app later: dugup mcp connect --write")
+        if self.connection() != "this":
+            if not self.connect_claude(asked_from_switch=True):
+                self.tell("On. To connect the Claude app later: File, Connect the Claude app to this DugUp in the "
+                          "main window, or run: dugup mcp connect --write")
+
+    def connection(self) -> str:
+        """"this", "other" (the Claude app starts another copy of DugUp) or "none"."""
+        return setup.connection(self.claude_config, setup.server_entry(chosen_data_dir(self.layout)))
+
+    def connect_claude(self, asked_from_switch: bool = False) -> bool:
+        """Point the Claude desktop app at this DugUp, after asking. True when it was connected."""
+        state = self.connection()
+        if state == "this":
+            self.tell("The Claude app already starts this DugUp. If it says DugUp could not start, restart the Claude app.")
+            return True
+        if state == "other":
+            title, text = ("The Claude app starts another DugUp",
+                           "The Claude desktop app's DugUp entry starts a different copy of DugUp:\n\n"
+                           f"{setup.connected_command(self.claude_config)}\n\n"
+                           "Point it at this one? It then searches the index you use here. Everything else in "
+                           "the app's settings is kept, with a copy of the old file.")
+        else:
+            title, text = ("Connect the Claude app?",
+                           "To search, the Claude desktop app needs DugUp in its settings. Add it now? "
+                           "Everything else in those settings is kept, with a copy of the old file.")
+        if not self.confirm(title, text, "Connect", "Not now"):
+            if not asked_from_switch:
+                self.tell("The Claude app was not changed.")
+            return False
+        done, said = setup.connect(self.claude_config, setup.server_entry(chosen_data_dir(self.layout)))
+        self.tell("Connected: restart the Claude app (quit it from its tray icon) to finish." if done else said.splitlines()[0])
+        return done
 
     def choose_folders(self) -> "FolderChooser":
         def saved(settings) -> None:

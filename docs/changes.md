@@ -4,6 +4,16 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
+## 0.2.7 beta — October 2026
+
+**Quit DugUp means all of DugUp.** **Quit DugUp** on the tray icon, in the window's **File** menu, or in DugUp Remote now closes every DugUp window as well as the tray. An index update under way stops cleanly and keeps what it has done. Closing one window with its **X** still closes only that window.
+
+**The Claude connection finds the right DugUp.** When the Claude desktop app's DugUp entry starts a different copy of DugUp, for example one used before installing, DugUp says so when its window opens and offers to point it at this copy (**File → Connect the Claude app to this DugUp**). `dugup mcp status` says which copy the Claude app starts.
+
+**No more "DugUp couldn't start".** When the data folder has no index, the Claude connection starts all the same, and Claude is told why there is nothing to search and what to do.
+
+**The search box points to the full search.** A large **Open the main window** button, with a line explaining that the box searches names and words, and the main window searches everything, including pictures and meaning.
+
 ## 0.2.6 beta — October 2026
 
 **Leave a folder out.** **Leave a folder out...** on the **Index** tab, or **Leave this folder out of the index...** on a search result's right-click menu, keeps a folder and everything in it out of the index. DugUp says how many files will leave the index and asks once; your files are not touched. **Index → Put a folder back** undoes it. See [Leave a folder out](user-guide.md#leave-a-folder-out).

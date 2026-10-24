@@ -73,9 +73,9 @@ def build(tools: Tools):
     return server
 
 
-def serve(service, load_settings) -> None:
-    """Serve until the assistant closes the connection."""
-    tools = Tools(service, load_settings)
+def serve(service, load_settings, tools=None) -> None:
+    """Serve until the assistant closes the connection. `tools` stands in for the usual ones (NoIndex)."""
+    tools = tools if tools is not None else Tools(service, load_settings)
     try:
         build(tools).run("stdio")
     finally:

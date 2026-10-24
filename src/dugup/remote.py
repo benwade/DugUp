@@ -53,6 +53,8 @@ class Remote:
         self.choose_folder = choose_folder
         self.claude_config = claude_config if claude_config is not None else assistantsetup.claude_config_path()
         self.closed = False
+        from .quitsignal import Listener
+        self.quit_listener = Listener(layout.root)     # "Quit DugUp" from any DugUp program
         self.answers: "queue.Queue[Optional[str]]" = queue.Queue()
         self.state: Optional[str] = None          # the tray's last answer; None: not running
         self.models: str = "none"                 # the tray's answer to "models": what is loaded, "loading", or "none"
@@ -68,7 +70,7 @@ class Remote:
         self.buttons = {}
         rows = [("start", "Start tray", self.start_tray), ("popup", "Search box", self.popup),
                 ("window", "Full window", self.window), ("update", "Update the index now", self.update),
-                ("free", FREE, self.toggle_models), ("quit", "Quit tray", self.quit_tray)]
+                ("free", FREE, self.toggle_models), ("quit", "Quit DugUp", self.quit_all)]
         for at, (name, label, action) in enumerate(rows, start=1):
             button = ttk.Button(frame, text=label, command=action)
             button.grid(row=at, column=0, columnspan=3, sticky="ew", pady=2)
@@ -130,6 +132,9 @@ class Remote:
                 break
             self.asking = False
             self._show(*answer)
+        if self.quit_listener.due():
+            self.close()
+            return
         self._poll_id = self.root.after(POLL_MS, self._poll)
 
     def _show(self, answer: Optional[str], models: Optional[str] = None) -> None:
@@ -139,7 +144,7 @@ class Remote:
         running = answer is not None
         self.status.set(answer if running else NOT_RUNNING)
         self.buttons["start"].state(["disabled"] if running else ["!disabled"])
-        for name in ("popup", "update", "free", "quit"):
+        for name in ("popup", "update", "free"):      # Quit DugUp stays live: it also closes DugUp's windows
             self.buttons[name].state(["!disabled"] if running else ["disabled"])
         if self.models == "loading":
             self.buttons["free"].configure(text=LOADING)
@@ -193,6 +198,13 @@ class Remote:
 
     def load(self) -> None:
         self._send("load", "Loading the models (a few seconds); background updates resume.")
+
+    def quit_all(self) -> None:
+        """Quit DugUp: the tray, every DugUp window, and this one."""
+        from . import quitsignal
+        quitsignal.send(self.layout.root)
+        self.ask(self.layout.root, "quit")      # the tray at once, rather than at its next look
+        self.close()
 
     def quit_tray(self) -> None:
         self._send("quit", "The tray was told to quit; it unloads every model on the way out.")

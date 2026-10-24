@@ -243,3 +243,39 @@ def test_an_assistant_can_search_over_mcp_and_nothing_else(made, tmp_path):
     is_error, text = seen["search"]
     assert not is_error and "rent.txt" in text and "health.txt" not in text
     assert seen["hidden"] is True
+
+
+def test_the_claude_app_entry_is_told_apart_this_copy_another_copy_or_none(tmp_path):
+    from dugup import assistantsetup as setup
+    config = tmp_path / "claude.json"
+    here = setup.server_entry(python=str(tmp_path / "installed" / "python.exe"))
+    assert setup.connection(config, here) == "none"
+    other = setup.server_entry(python=str(tmp_path / "source" / ".venv" / "python.exe"))
+    config.write_text(json.dumps({"mcpServers": {"dugup": other, "else": {"command": "x"}}}), encoding="utf-8")
+    assert setup.connection(config, here) == "other" and setup.connected_command(config) == other["command"]
+    done, _ = setup.connect(config, here)
+    assert done and setup.connection(config, here) == "this"
+    assert json.loads(config.read_text(encoding="utf-8"))["mcpServers"]["else"] == {"command": "x"}, "the rest is kept"
+    with_folder = setup.server_entry(str(tmp_path / "data"), python=str(tmp_path / "installed" / "python.exe"))
+    assert setup.connection(config, with_folder) == "other", "another data folder is another DugUp too"
+
+
+def test_with_no_index_the_connection_starts_and_every_answer_says_what_to_do(tmp_path, monkeypatch):
+    from dugup import mcpserver
+    from dugup.assistant import NoIndex, Refused
+    served = []
+    monkeypatch.setattr(mcpserver, "serve", lambda service, load, tools=None: served.append(tools))
+    data = tmp_path / "data"
+    out = io.StringIO()
+    assert cli.main(["mcp", "serve", "--data-dir", str(data)], stdout=out, environ={}) == 0, "it starts, not fails"
+    tools = served[0]
+    assert isinstance(tools, NoIndex)
+    for call in (lambda: tools.search("rent"), tools.status, lambda: tools.passages("x", "y")):
+        with pytest.raises(Refused) as caught:
+            call()
+        assert "no index" in str(caught.value) and "Connect the Claude app to this DugUp" in str(caught.value)
+    data.mkdir(exist_ok=True)
+    (data / "index.sqlite").write_bytes(b"")
+    with pytest.raises(Refused) as caught:
+        tools.search("rent")
+    assert "Restart the Claude desktop app" in str(caught.value)
