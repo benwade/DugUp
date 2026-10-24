@@ -49,6 +49,14 @@ def wait_until(condition, what: str, limit: float = 300) -> None:
     print(f"ok: {what}")
 
 
+def same_file(one, other) -> bool:
+    """The same file, however each path is written (Windows mixes short names such as RUNNER~1 with long ones)."""
+    try:
+        return os.path.samefile(one, other)
+    except OSError:
+        return False
+
+
 def marker_text(app: Path) -> str:
     try:
         return (app / "dugup-data-folder.txt").read_text(encoding="utf-8-sig")
@@ -161,7 +169,7 @@ def main() -> int:
     expect(description == "DugUp", f"Windows reads its name as DugUp (it said {description!r})")
     target = run("powershell", "-NoProfile", "-Command",
                  f"(New-Object -ComObject WScript.Shell).CreateShortcut('{programs / 'DugUp.lnk'}').TargetPath").strip()
-    expect(target.lower() == str(launcher).lower(), f"the Start menu's DugUp starts DugUp.exe (it starts {target})")
+    expect(same_file(target, launcher), f"the Start menu's DugUp starts DugUp.exe (it starts {target})")
 
     step("Start at login: a shortcut named DugUp tray, made, upgraded from an old script, and removed")
     startup = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
@@ -170,7 +178,7 @@ def main() -> int:
     expect(shortcut.is_file() and not script.exists(), "the entry is a shortcut")
     target = run("powershell", "-NoProfile", "-Command",
                  f"(New-Object -ComObject WScript.Shell).CreateShortcut('{shortcut}').TargetPath").strip()
-    expect(target.lower() == str(launcher).lower(), "it starts DugUp.exe")
+    expect(same_file(target, launcher), f"it starts DugUp.exe (it starts {target})")
     run(launcher, "-m", "dugup", "tray", "--startup", "remove")
     expect(not shortcut.exists(), "and it can be removed")
     startup.mkdir(parents=True, exist_ok=True)
