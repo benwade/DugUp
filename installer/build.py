@@ -3,6 +3,7 @@
     DugUp/
         dugup-data-folder.txt    the marker: data beside the program; the bundled Python is never indexed
         python/                  a standalone Python (with tkinter) and every package DugUp uses
+            DugUp.exe            DugUp's own program file (installer/launcher), beside pythonw.exe
         data/                    made on first run, never part of the installer
 
 Also writes installer/build/defines.iss: the version and the download sizes the installer's pages show,
@@ -116,6 +117,67 @@ print("dugup", dugup.__version__, "from", dugup.__file__)
 """
 
 
+def compiler_environment() -> dict:
+    """The environment the Microsoft C compiler needs, from Visual Studio's vcvars64.bat (found with vswhere)."""
+    vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    if not vswhere.is_file():
+        sys.exit("Visual Studio's C compiler is needed to build DugUp.exe (vswhere.exe was not found).")
+    found = run(str(vswhere), "-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "-property", "installationPath").strip().splitlines()
+    if not found:
+        sys.exit("Visual Studio's C compiler is needed to build DugUp.exe (no installation with it was found).")
+    vcvars = Path(found[-1]) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+    dump = subprocess.run(f'"{vcvars}" >nul && set', shell=True, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace")
+    if dump.returncode != 0:
+        sys.exit(f"vcvars64.bat failed: {dump.stderr}")
+    env = {}
+    for line in dump.stdout.splitlines():
+        name, eq, value = line.partition("=")
+        if eq:
+            env[name] = value
+    return env
+
+
+def build_launcher(python_dir: Path, version: str, work: Path) -> Path:
+    """Compile installer/launcher into python_dir/DugUp.exe, with DugUp's icon and version, for the DLL of
+    the Python that was unpacked there."""
+    dlls = sorted(p.name for p in python_dir.glob("python3*.dll") if p.name.lower() != "python3.dll")
+    if len(dlls) != 1:
+        sys.exit(f"Expected one versioned Python DLL in {python_dir}, found {dlls}")
+    numbers = (version.split("+")[0].split("-")[0].split(".") + ["0", "0", "0"])[:3]
+    numbers = [n if n.isdigit() else "0" for n in numbers]
+    source = HERE / "launcher"
+    work.mkdir(parents=True, exist_ok=True)
+    rc = (source / "launcher.rc.in").read_text(encoding="utf-8")
+    shutil.copyfile(REPO / "src" / "dugup" / "dugup.ico", work / "dugup.ico")     # beside the .rc: a plain name
+    for key, value in (("@ICON@", "dugup.ico"), ("@VERSION@", version),
+                       ("@V1@", numbers[0]), ("@V2@", numbers[1]), ("@V3@", numbers[2])):
+        rc = rc.replace(key, value)
+    (work / "launcher.rc").write_text(rc, encoding="utf-8")
+    env = compiler_environment()
+
+    search = next((value for name, value in env.items() if name.upper() == "PATH"), "")
+
+    def tool(*args: str) -> None:
+        print("+", " ".join(args), flush=True)
+        # Windows looks a program up on this script's own PATH, not the one handed to it: find it on the compiler's
+        program = shutil.which(args[0], path=search)
+        if program is None:
+            sys.exit(f"{args[0]} was not found on the compiler's PATH")
+        done = subprocess.run([program, *args[1:]], cwd=work, env=env, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace")
+        if done.returncode != 0:
+            print(done.stdout, done.stderr, sep="\n")
+            sys.exit(f"Failed ({done.returncode}): {' '.join(args)}")
+
+    tool("rc", "/nologo", "/fo", "launcher.res", "launcher.rc")
+    exe = python_dir / "DugUp.exe"
+    tool("cl", "/nologo", "/O2", "/W4", "/WX", "/utf-8", f'/DPYTHON_DLL=L"{dlls[0]}"', str(source / "launcher.c"),
+         "launcher.res", f"/Fe{exe}", "/link", "/SUBSYSTEM:WINDOWS", "user32.lib", "shell32.lib")
+    return exe
+
+
 def size_text(count: int) -> str:
     """As DugUp says it (downloads.size_text): 1 MB = 1,048,576 bytes, GB from 1 GB up."""
     if count >= 1024 ** 3:
@@ -166,6 +228,8 @@ def main() -> int:
     (stage / "dugup-data-folder.txt").write_text(MARKER, encoding="utf-8")
     print(run(str(python), "-c", CHECK))
     found = defines(python, out / "defines.iss")
+    launcher = build_launcher(python_dir, found["version"], out / "launcher")
+    print(run(str(launcher), "-c", "import sys, dugup; print('DugUp.exe runs', sys.version.split()[0], 'with dugup', dugup.__version__)"))
     size = sum(f.stat().st_size for f in stage.rglob("*") if f.is_file())
     print(f"Built DugUp {found['version']} in {stage} ({size_text(size)} before compression).")
     return 0

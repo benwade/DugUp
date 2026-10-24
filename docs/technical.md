@@ -210,7 +210,7 @@ The rules live in `assistant.py`:
 - **One thread for the index.** Every request runs on a single worker thread with its own read connection.
 - **Models are released when idle.** A model loaded for a meaning or picture search is released after `mcp_idle_minutes` (default `5`; `0` keeps it loaded).
 
-The entry starts the console Python, since `pythonw.exe` has no standard input and output. It names a data folder only when one was chosen by hand, so the server finds the data folder as other commands do, including after a move. The Windows installer includes the MCP library; a source checkout needs the `assistant` extra.
+The entry starts the console Python, since `pythonw.exe` and `DugUp.exe` have no standard input and output. It names a data folder only when one was chosen by hand, so the server finds the data folder as other commands do, including after a move. The Windows installer includes the MCP library; a source checkout needs the `assistant` extra.
 
 ## Experimental plain-words reader
 
@@ -293,6 +293,8 @@ with LocalService(layout, settings) as dugup:
     for row in dugup.search("nursing license", limit=5).rows:
         print(row.path, row.rank)
 ```
+
+On Windows, the installer's shortcuts start `DugUp.exe`, a small program of DugUp's own built for each release from [installer/launcher](../installer/launcher/launcher.c). It sits beside the bundled `pythonw.exe` and does exactly what that does: it loads the bundled Python and runs the command line it is given. Windows then names DugUp after its own program file, so the Start menu, Startup apps, the taskbar and Task Manager show DugUp rather than Python. The start-at-login entry is a shortcut named **DugUp tray** that starts it; a source checkout, which has no `DugUp.exe`, uses a small script that starts `pythonw.exe`. Installing over an older version turns that version's start-at-login script into the shortcut, keeping its data folder; an entry that starts a different copy of DugUp is left alone. Each window also claims the app ID `DugUp.DugUp`, which the shortcuts carry too, so a pinned DugUp and a running one share a taskbar button.
 
 The same service backs the [MCP server](#cloud-search-for-assistants-mcp) for assistants, through a read-only layer that applies the folder and passage rules.
 

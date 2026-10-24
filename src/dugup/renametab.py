@@ -303,11 +303,7 @@ class RenameTab(ttk.Frame):
         if not chosen:
             self.status.set("Nothing is ticked.")
             return
-        answer = self.host.ask("Rename these pictures?",
-                               f"{len(chosen):,} picture(s) will be renamed as shown.\n\nA record of every rename is kept so that "
-                               "Undo can put the names back. Nothing is deleted.")
-        if not answer:
-            return
+        # no "are you sure": the preview is what will happen, nothing is deleted, and Undo puts every name back
         from . import records
         try:
             record, handle = records.open_new(self.host.service.layout.root / "renames", "renames")
@@ -328,7 +324,8 @@ class RenameTab(ttk.Frame):
         self.last_record = str(record)
         self.undo_button.configure(state="normal")
         self.rename_button.configure(state="disabled")
-        text = f"Renamed {len(done.renamed):,} picture(s); left {len(done.skipped):,} alone. The record is in {record}."
+        text = (f"Renamed {len(done.renamed):,} picture(s)" + (f"; left {len(done.skipped):,} alone" if done.skipped else "")
+                + ". Undo puts the names back.")
         if done.record_problem:
             text = (f"Renamed {len(done.renamed):,} picture(s) and then stopped: the record could not be written "
                     f"({done.record_problem}). What was renamed:\n\n"
@@ -338,7 +335,8 @@ class RenameTab(ttk.Frame):
         if done.skipped:
             text += "\n\n" + "\n".join(f"{os.path.basename(p)}: {why}" for p, why in done.skipped[:10])
         self.status.set(text.split("\n")[0])
-        self.host.tell("Renamed", text)
+        if done.record_problem or done.index_problems or done.skipped:
+            self.host.tell("Renamed, with something to know", text + f"\n\nThe record is in {record}.")
         self.plan = None
         self.shown_for = None
         self._draw()
@@ -354,7 +352,7 @@ class RenameTab(ttk.Frame):
             return
         done = self.host.service.undo_names(text)
         self.undo_button.configure(state="disabled")
-        message = f"Put back {len(done.renamed):,} name(s); left {len(done.skipped):,}."
+        message = f"Put back {len(done.renamed):,} name(s)" + (f"; left {len(done.skipped):,}" if done.skipped else "") + "."
         if done.record_problem:
             message = (f"Put back {len(done.renamed):,} name(s) and then stopped: the record could not be written "
                        f"({done.record_problem}). What was put back:\n\n"
@@ -364,5 +362,6 @@ class RenameTab(ttk.Frame):
         if done.skipped:
             message += "\n\n" + "\n".join(f"{os.path.basename(p)}: {why}" for p, why in done.skipped[:10])
         self.status.set(message.split("\n")[0])
-        self.host.tell("Undone", message)
+        if done.record_problem or done.index_problems or done.skipped:
+            self.host.tell("Undone, with something to know", message)
 

@@ -19,7 +19,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, List, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
 
 from . import hotkey as hotkeys
 from . import remember, summons
@@ -254,10 +254,13 @@ def make_pystray_icon(tray: Tray):
     is not there; the caller carries on without."""
     import pystray
     from PIL import Image, ImageDraw
-    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.ellipse((6, 6, 44, 44), outline=(43, 108, 176, 255), width=7)
-    draw.line((38, 38, 58, 58), fill=(43, 108, 176, 255), width=9)
+    from .identity import icon_image
+    image = icon_image(64)
+    if image is None:                    # no icon file: a drawn magnifying glass
+        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((6, 6, 44, 44), outline=(43, 108, 176, 255), width=7)
+        draw.line((38, 38, 58, 58), fill=(43, 108, 176, 255), width=9)
     key = tray.settings.hotkey if not tray.hotkey.problem else ""
     def toggle_pause():
         tray.events.put("resume" if tray.watcher.paused else "pause")
@@ -292,36 +295,143 @@ def make_pystray_icon(tray: Tray):
 
 
 # -- starting with the computer
+#
+# On Windows the entry is a shortcut in the Startup folder, "DugUp tray", that starts DugUp.exe (the
+# installer's own program file), so Startup apps lists DugUp, not Python. Where no shortcut can be made
+# (no DugUp.exe, as in a source checkout, or PowerShell refuses), it is a small script, "DugUp tray.cmd",
+# as before; whichever kind is made replaces the other.
+
+def _startup_folder(home: Optional[Path], platform: str) -> Path:
+    home = home or Path.home()
+    appdata = Path(os.environ.get("APPDATA") or (home / "AppData" / "Roaming"))
+    return appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+
 
 def startup_entry(home: Optional[Path] = None, platform: Optional[str] = None) -> Path:
-    """Where an entry that starts the tray at login goes."""
+    """The entry that starts the tray at login: the one there is, or where a new one goes."""
     platform = platform or sys.platform
-    home = home or Path.home()
     if platform.startswith("win"):
-        appdata = Path(os.environ.get("APPDATA") or (home / "AppData" / "Roaming"))
-        return appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "DugUp tray.cmd"
-    return home / ".config" / "autostart" / "dugup-tray.desktop"
+        folder = _startup_folder(home, platform)
+        shortcut, script = folder / "DugUp tray.lnk", folder / "DugUp tray.cmd"
+        return script if script.exists() and not shortcut.exists() else shortcut
+    return (home or Path.home()) / ".config" / "autostart" / "dugup-tray.desktop"
+
+
+def launcher(python: Optional[str] = None) -> Path:
+    """The program that starts DugUp without a console: DugUp.exe where the installer put one beside
+    Python, else pythonw.exe, else Python itself."""
+    python_path = Path(python or sys.executable)
+    for name in ("DugUp.exe", "pythonw.exe"):
+        candidate = python_path.with_name(name)
+        if candidate.exists():
+            return candidate
+    return python_path
+
+
+def tray_arguments(layout) -> str:
+    return f'-m dugup tray --data-dir "{layout.root}"'
 
 
 def startup_text(layout, platform: Optional[str] = None, python: Optional[str] = None) -> str:
     platform = platform or sys.platform
-    python = python or sys.executable
     if platform.startswith("win"):
-        quiet = Path(python).with_name("pythonw.exe")        # no console window at login
-        program = str(quiet if quiet.exists() else python)
-        return f'@echo off\r\nstart "" /min "{program}" -m dugup tray --data-dir "{layout.root}"\r\n'
+        return f'@echo off\r\nstart "" /min "{launcher(python)}" {tray_arguments(layout)}\r\n'
+    python = python or sys.executable
     return ("[Desktop Entry]\nType=Application\nName=DugUp tray\n"
             f"Exec={python} -m dugup tray --data-dir \"{layout.root}\"\nX-GNOME-Autostart-enabled=true\n")
 
 
+class Shortcuts:
+    """Windows shortcuts (.lnk), made and read through PowerShell's WScript.Shell. Every answer is False or
+    None when that cannot be done, never an exception. A seam for tests."""
+
+    MAKE = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:DUGUP_LNK); $s.TargetPath = $env:DUGUP_TARGET; "
+            "$s.Arguments = $env:DUGUP_ARGS; $s.WorkingDirectory = $env:DUGUP_DIR; $s.IconLocation = $env:DUGUP_ICON; "
+            "$s.Description = 'DugUp in the tray: one key searches from anywhere'; $s.WindowStyle = 7; $s.Save()")
+    READ = "(New-Object -ComObject WScript.Shell).CreateShortcut($env:DUGUP_LNK).Arguments"
+
+    def _powershell(self, script: str, values: Dict[str, str]) -> Optional[str]:
+        import subprocess
+        env = dict(os.environ, **values)
+        try:
+            done = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], env=env,
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 else None
+
+    def make(self, path: Path, target: Path, arguments: str) -> bool:
+        if not sys.platform.startswith("win"):
+            return False
+        done = self._powershell(self.MAKE, {"DUGUP_LNK": str(path), "DUGUP_TARGET": str(target), "DUGUP_ARGS": arguments,
+                                            "DUGUP_DIR": str(target.parent.parent), "DUGUP_ICON": f"{target},0"})
+        return done is not None and path.exists()
+
+    def arguments(self, path: Path) -> Optional[str]:
+        if not sys.platform.startswith("win"):
+            return None
+        found = self._powershell(self.READ, {"DUGUP_LNK": str(path)})
+        return None if found is None else found.strip()
+
+
+shortcuts = Shortcuts()
+
+
 def install_startup(layout, platform: Optional[str] = None, home: Optional[Path] = None, python: Optional[str] = None) -> Path:
+    platform = platform or sys.platform
+    if platform.startswith("win"):
+        folder = _startup_folder(home, platform)
+        folder.mkdir(parents=True, exist_ok=True)
+        shortcut, script = folder / "DugUp tray.lnk", folder / "DugUp tray.cmd"
+        target = launcher(python)
+        if target.name.lower() == "dugup.exe" and shortcuts.make(shortcut, target, tray_arguments(layout)):
+            script.unlink(missing_ok=True)
+            return shortcut
+        script.write_text(startup_text(layout, platform, python), encoding="utf-8")
+        shortcut.unlink(missing_ok=True)
+        return script
     path = startup_entry(home, platform)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(startup_text(layout, platform, python), encoding="utf-8")
     return path
 
 
+def refresh_startup(platform: Optional[str] = None, home: Optional[Path] = None, python: Optional[str] = None) -> Optional[Path]:
+    """After an upgrade: an older start-at-login script that starts this copy of DugUp is made again in
+    today's form (a shortcut to DugUp.exe), for the same data folder. An entry for another copy (a source
+    checkout, say) is left alone. The new entry, or None when nothing was remade."""
+    import re
+    platform = platform or sys.platform
+    if not platform.startswith("win"):
+        return None
+    script = _startup_folder(home, platform) / "DugUp tray.cmd"
+    try:
+        text = script.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    here = os.path.normcase(str(Path(python or sys.executable).parent))
+    found = re.search(r'--data-dir "([^"]+)"', text)
+    if here not in os.path.normcase(text) or found is None:
+        return None
+
+    class Kept:
+        root = Path(found.group(1))
+
+    path = install_startup(Kept, platform, home, python)
+    return path if path.suffix.lower() == ".lnk" else None
+
+
 def remove_startup(platform: Optional[str] = None, home: Optional[Path] = None) -> Optional[Path]:
+    platform = platform or sys.platform
+    if platform.startswith("win"):
+        folder = _startup_folder(home, platform)
+        removed = None
+        for path in (folder / "DugUp tray.cmd", folder / "DugUp tray.lnk"):
+            if path.exists():
+                path.unlink()
+                removed = path
+        return removed
     path = startup_entry(home, platform)
     if path.exists():
         path.unlink()

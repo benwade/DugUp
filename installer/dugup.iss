@@ -26,7 +26,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName=DugUp
-UninstallDisplayIcon={app}\python\pythonw.exe
+UninstallDisplayIcon={app}\python\DugUp.exe
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
@@ -55,19 +55,24 @@ Source: "build\DugUp\*"; DestDir: "{app}"; Excludes: "dugup-data-folder.txt"; Fl
 Source: "build\DugUp\dugup-data-folder.txt"; DestDir: "{app}"; Flags: ignoreversion; AfterInstall: WriteMarker
 
 [Icons]
-Name: "{autoprograms}\DugUp"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; Comment: "Find your files by what is in them"
-Name: "{autoprograms}\DugUp Remote"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup remote"; WorkingDir: "{app}"; Comment: "Start or quit DugUp in the tray, bring up search, free the graphics card"
-Name: "{autoprograms}\Report a problem with DugUp"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup report"; WorkingDir: "{app}"; Comment: "Gather what helps find a problem, read it, and choose how to send it (works even when DugUp is stuck)"
-Name: "{autodesktop}\DugUp"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; Comment: "Find your files by what is in them"; Tasks: desktopicon
+; Every shortcut starts DugUp.exe (installer/launcher): Windows then shows DugUp, not Python, and the app ID
+; matches the one DugUp claims when it runs (identity.py), so pinned and running DugUp are one taskbar button.
+Name: "{autoprograms}\DugUp"; Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; AppUserModelID: "DugUp.DugUp"; Comment: "Find your files by what is in them"
+Name: "{autoprograms}\DugUp Remote"; Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup remote"; WorkingDir: "{app}"; AppUserModelID: "DugUp.DugUp"; Comment: "Start or quit DugUp in the tray, bring up search, free the graphics card"
+Name: "{autoprograms}\Report a problem with DugUp"; Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup report"; WorkingDir: "{app}"; AppUserModelID: "DugUp.DugUp"; Comment: "Gather what helps find a problem, read it, and choose how to send it (works even when DugUp is stuck)"
+Name: "{autodesktop}\DugUp"; Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; AppUserModelID: "DugUp.DugUp"; Comment: "Find your files by what is in them"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup tray --startup add"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; Tasks: trayatlogin
-Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup download --window"; WorkingDir: "{app}"; Flags: waituntilterminated; StatusMsg: "Downloading DugUp's optional parts ..."; Check: WantDownloads
-Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; Description: "Open DugUp now"; Flags: postinstall nowait skipifsilent
+; An upgrade remakes a start-at-login entry that is there, so an older script (which started Python) becomes
+; a "DugUp tray" shortcut to DugUp.exe. Nothing is made where there was none.
+Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup tray --startup refresh"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated
+Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup tray --startup add"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; Tasks: trayatlogin
+Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup download --window"; WorkingDir: "{app}"; Flags: waituntilterminated; StatusMsg: "Downloading DugUp's optional parts ..."; Check: WantDownloads
+Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup window"; WorkingDir: "{app}"; Description: "Open DugUp now"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
-Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup tray --quit"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "QuitTray"
-Filename: "{app}\python\pythonw.exe"; Parameters: "-m dugup tray --startup remove"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveStartup"
+Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup tray --quit"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "QuitTray"
+Filename: "{app}\python\DugUp.exe"; Parameters: "-m dugup tray --startup remove"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveStartup"
 
 [Code]
 var

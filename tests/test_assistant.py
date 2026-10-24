@@ -200,6 +200,7 @@ def test_the_server_runs_on_the_console_python(tmp_path):
     (tmp_path / "python.exe").write_text("")
     assert mcp_cmds.console_python(str(tmp_path / "pythonw.exe")) == str(tmp_path / "python.exe")
     assert mcp_cmds.console_python(str(tmp_path / "python.exe")) == str(tmp_path / "python.exe")
+    assert mcp_cmds.console_python(str(tmp_path / "DugUp.exe")) == str(tmp_path / "python.exe"), "DugUp.exe has no console either"
     assert mcp_cmds.claude_config_path({"APPDATA": "C:\\Users\\a\\AppData\\Roaming"}, "win32").parts[-2:] == \
         ("Claude", "claude_desktop_config.json")
 

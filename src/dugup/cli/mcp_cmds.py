@@ -109,6 +109,8 @@ def _folders(args, environ, out) -> int:
     from ..assistantwindow import FolderChooser
     layout = _layout(args, environ, create=True)
     root = tkinter.Tk()
+    from ..identity import dress
+    dress(root)
     root.withdraw()
     chooser = FolderChooser(root, layout)
     root.wait_window(chooser.top)

@@ -1240,7 +1240,7 @@ def test_the_rename_tab_previews_lets_names_be_edited_or_kept_renames_with_a_rec
     assert tab.rename_button["text"] == "Rename as shown" and str(tab.rename_button["state"]) == "disabled"
     assert all(m[1]["text"] == "kept as it is" for m in tab.marks)
     tab.tick_every(True)
-    # edit one name, untick another, rename; a question is asked first
+    # edit one name, untick another, rename: one click, no question and no window when all goes well
     tab.entries[0].set("Seven the cat.jpg")
     tab.keep[1].set(False)
     tab._count()
@@ -1250,24 +1250,26 @@ def test_the_rename_tab_previews_lets_names_be_edited_or_kept_renames_with_a_rec
     told = []
     app.tell = lambda title, text: told.append((title, text))
     tab.rename()
-    assert asked == ["Rename these pictures?"] and told and told[0][0] == "Renamed"
+    assert asked == [] and told == []
     assert (trip / "Seven the cat.jpg").exists() and (trip / "IMG_8.jpg").exists() and (trip / "Cat number 9 IMG_9.jpg").exists()
-    assert "Renamed 2 picture(s)" in told[0][1] and os.path.exists(tab.last_record)
+    assert "Renamed 2 picture(s)" in tab.status.get() and "Undo" in tab.status.get() and os.path.exists(tab.last_record)
     assert app.service.store.get_file(str(trip / "Seven the cat.jpg")) is not None, "the index followed"
     assert str(tab.undo_button["state"]) == "normal" and str(tab.rename_button["state"]) == "disabled"
     tab.undo()
-    assert told[-1][0] == "Undone" and "Put back 2 name(s)" in told[-1][1]
+    assert told == [] and "Put back 2 name(s)" in tab.status.get()
     assert (trip / "IMG_7.jpg").exists() and (trip / "IMG_9.jpg").exists() and str(tab.undo_button["state"]) == "disabled"
-    # saying no renames nothing
+    # a picture that cannot be renamed is worth a window: it says which, and why
     tab.preview()
     for _ in range(200):
         if not tab.busy():
             break
         tab.worker.join(0.05)
     app.drain()
-    app.ask = lambda title, text: False
+    tab.tick_every(True)
+    taken = [i for i, keep in enumerate(tab.keep) if keep.get()]
+    (trip / tab.entries[taken[0]].get()).write_bytes(b"already here")     # its new name is taken
     tab.rename()
-    assert (trip / "IMG_7.jpg").exists() and (trip / "IMG_8.jpg").exists()
+    assert told and told[-1][0] == "Renamed, with something to know" and "left 1 alone" in told[-1][1]
 
 
 def test_to_trash_moves_the_selected_files_after_a_question_keeps_a_record_and_takes_the_rows_out(bench, monkeypatch):

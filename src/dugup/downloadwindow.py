@@ -24,6 +24,9 @@ def run_in_window(chosen: List[downloads.Download], layout, keep_free: int, noti
 
     own_root = root is None
     root = root or tk.Tk()
+    if own_root:
+        from .identity import dress
+        dress(root)
     root.title("DugUp: downloading")
     root.resizable(False, False)
     room = downloads.room_for(chosen, layout.free_bytes(), keep_free)

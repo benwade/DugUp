@@ -75,7 +75,72 @@ def test_startup_entries_for_each_platform(tmp_path):
     assert path == home / ".config" / "autostart" / "dugup-tray.desktop" and path.exists()
     assert tray_module.remove_startup("linux", home) == path and not path.exists()
     assert tray_module.remove_startup("linux", home) is None
-    assert tray_module.startup_entry(home, "win32").name == "DugUp tray.cmd"
+    assert tray_module.startup_entry(home, "win32").name == "DugUp tray.lnk", "a new entry is a shortcut"
+
+
+def test_on_windows_the_entry_is_a_shortcut_to_dugup_exe_and_replaces_the_old_script(tmp_path, monkeypatch):
+    class Layout:
+        root = tmp_path / "data"
+    monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
+    python_dir = tmp_path / "DugUp" / "python"
+    python_dir.mkdir(parents=True)
+    for name in ("python.exe", "pythonw.exe"):
+        (python_dir / name).write_bytes(b"")
+    python = str(python_dir / "python.exe")
+    made = []
+
+    class Fake:
+        def make(self, path, target, arguments):
+            made.append((path.name, target.name, arguments))
+            path.write_bytes(b"shortcut")
+            return True
+
+    monkeypatch.setattr(tray_module, "shortcuts", Fake())
+    # without DugUp.exe (a source checkout): the script, through pythonw
+    script = tray_module.install_startup(Layout, "win32", python=python)
+    assert script.name == "DugUp tray.cmd" and "pythonw.exe" in script.read_text(encoding="utf-8") and made == []
+    assert tray_module.startup_entry(platform="win32") == script
+    # with DugUp.exe (installed): a shortcut named DugUp tray, and the old script goes
+    (python_dir / "DugUp.exe").write_bytes(b"")
+    shortcut = tray_module.install_startup(Layout, "win32", python=python)
+    assert shortcut.name == "DugUp tray.lnk" and not script.exists()
+    assert made == [("DugUp tray.lnk", "DugUp.exe", f'-m dugup tray --data-dir "{tmp_path / "data"}"')]
+    assert tray_module.startup_entry(platform="win32") == shortcut
+    # a shortcut that cannot be made falls back to the script
+    monkeypatch.setattr(Fake, "make", lambda self, path, target, arguments: False)
+    assert tray_module.install_startup(Layout, "win32", python=python).name == "DugUp tray.cmd"
+    assert tray_module.remove_startup("win32") is not None and tray_module.remove_startup("win32") is None
+
+
+
+def test_an_upgrade_remakes_only_an_entry_for_this_copy_and_keeps_its_data_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
+    python_dir = tmp_path / "DugUp" / "python"
+    python_dir.mkdir(parents=True)
+    for name in ("python.exe", "pythonw.exe", "DugUp.exe"):
+        (python_dir / name).write_bytes(b"")
+    python = str(python_dir / "python.exe")
+    made = []
+
+    class Fake:
+        def make(self, path, target, arguments):
+            made.append(arguments)
+            path.write_bytes(b"shortcut")
+            return True
+
+    monkeypatch.setattr(tray_module, "shortcuts", Fake())
+    assert tray_module.refresh_startup("win32", python=python) is None, "no entry: none is made"
+    folder = tmp_path / "roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    folder.mkdir(parents=True)
+    script = folder / "DugUp tray.cmd"
+    script.write_text(f'@echo off\r\nstart "" /min "D:\\source\\.venv\\Scripts\\pythonw.exe" -m dugup tray --data-dir "D:\\mine"\r\n',
+                      encoding="utf-8")
+    assert tray_module.refresh_startup("win32", python=python) is None and script.exists(), "another copy's entry stays"
+    script.write_text(f'@echo off\r\nstart "" /min "{python_dir / "pythonw.exe"}" -m dugup tray --data-dir "E:\\Index"\r\n',
+                      encoding="utf-8")
+    shortcut = tray_module.refresh_startup("win32", python=python)
+    assert shortcut is not None and shortcut.name == "DugUp tray.lnk" and not script.exists()
+    assert made == ['-m dugup tray --data-dir "E:\\Index"'], "the same data folder as before"
 
 
 # -- the tray and the popup, with a window system
@@ -469,3 +534,13 @@ def test_report_a_problem_is_one_step_from_the_tray_the_search_box_and_the_remot
         assert launched[-1][1:4] == ["-m", "dugup", "report"] and "own" in window.note.get()
     finally:
         window.close()
+
+
+def test_refreshing_the_startup_entry_makes_no_data_folder(tmp_path):
+    """The installer runs it on every install; installing must not make a data folder before DugUp first runs."""
+    import io
+    from dugup import cli
+    data = tmp_path / "data"
+    out = io.StringIO()
+    assert cli.main(["tray", "--startup", "refresh", "--data-dir", str(data)], stdout=out, environ={}) == 0
+    assert not data.exists() and "Nothing to remake" in out.getvalue()
