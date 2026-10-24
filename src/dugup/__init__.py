@@ -4,4 +4,4 @@ The design lives in DEVELOPMENT_GUIDE.md, CONTRACTS.md and TEST_PLAN.md in the
 DugUp project folder.
 """
 
-__version__ = "0.2.7"
+__version__ = "0.2.8"

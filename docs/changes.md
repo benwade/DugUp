@@ -4,6 +4,10 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
+## 0.2.8 beta — October 2026
+
+**The search box reads properly on Windows.** The **Open the main window** button showed no text on Windows, and the line explaining it was cut off on the right. The button now draws its own label, and the explanation, the hint and the cloud search warning each wrap to the box's width. The box also grows to fit them, even if it was made smaller before.
+
 ## 0.2.7 beta — October 2026
 
 **Quit DugUp means all of DugUp.** **Quit DugUp** on the tray icon, in the window's **File** menu, or in DugUp Remote now closes every DugUp window as well as the tray. An index update under way stops cleanly and keeps what it has done. Closing one window with its **X** still closes only that window.

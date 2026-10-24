@@ -57,22 +57,27 @@ class Popup:
         self.list.column("where", width=WIDTH - 316)
         self.list.pack(fill="both", expand=True, pady=(6, 0))
         # what this box is for, and the way to the full search: plain to see, not a line of small print
-        full = ttk.Frame(frame)
-        full.pack(fill="x", pady=(8, 0))
-        style = ttk.Style(top)
-        style.configure("Big.TButton", font=("TkDefaultFont", 11, "bold"), padding=(14, 8))
-        self.window_button = ttk.Button(full, text="Open the main window", style="Big.TButton", command=self._to_window)
-        self.window_button.pack(side="right", padx=(8, 0))
-        self.hint = ttk.Label(full, text=FULL_SEARCH_HINT, wraplength=480, justify="left")
-        self.hint.pack(side="left", fill="x", expand=True)
-        foot = ttk.Frame(frame)
-        foot.pack(fill="x", pady=(4, 0))
-        self.note = tk.StringVar(value="Enter opens the chosen file; Esc closes this box.")
-        ttk.Label(foot, textvariable=self.note, foreground="#666666").pack(side="left", fill="x", expand=True)
-        ttk.Button(foot, text="About", command=self.about).pack(side="right", padx=(0, 6))
+        # two rows: the line first, wrapping to the box's width whatever the font; then the button.
+        # A plain tk button, not a styled ttk one: Windows' own theme can draw a styled one's text in the
+        # background colour, leaving a button that looks empty.
+        self.hint = ttk.Label(frame, text=FULL_SEARCH_HINT, justify="left")
+        self.hint.pack(fill="x", pady=(8, 0))
+        self.hint.configure(wraplength=WIDTH - 40)       # a first guess, so the box's first height is about right
+        self.hint.bind("<Configure>", self._fit_hint)
+        buttons = ttk.Frame(frame)                     # the big button on the right, the small ones on the left
+        buttons.pack(fill="x", pady=(6, 0))
+        self.window_button = tk.Button(buttons, text="Open the main window", font=("TkDefaultFont", 11, "bold"),
+                                       fg="black", bg="#e8eef7", activeforeground="black", activebackground="#d6e2f3",
+                                       relief="raised", bd=1, padx=16, pady=6, cursor="hand2", command=self._to_window)
+        self.window_button.pack(side="right")
         self.report = report
         if report is not None:
-            ttk.Button(foot, text="Report a problem", command=report).pack(side="right", padx=(0, 6))
+            ttk.Button(buttons, text="Report a problem", command=report).pack(side="left", padx=(0, 6))
+        ttk.Button(buttons, text="About", command=self.about).pack(side="left")
+        self.note = tk.StringVar(value="Enter opens the chosen file; Esc closes this box.")
+        note = ttk.Label(frame, textvariable=self.note, foreground="#666666", justify="left")
+        note.pack(fill="x", pady=(4, 0))
+        note.bind("<Configure>", lambda event: note.configure(wraplength=max(200, event.width - 4)))
         # cloud search: where people look most, so it is here as well as in DugUp Remote (assistantwindow.py)
         from .assistantwindow import CloudSwitch
         self.cloud_switch = CloudSwitch(frame, service.layout, tell=self.note.set, compact=True, dialog_parent=top,
@@ -86,6 +91,18 @@ class Popup:
         self.entry.bind("<Up>", lambda event: (self._move(-1), "break")[1])
         self.list.bind("<Double-1>", self._enter)
 
+    def _fit_hint(self, event) -> None:
+        """Wrap the line to the box's width, and let the box grow if the wrapped line needs more room (the
+        width is known only once the box is shown, and fonts differ between computers)."""
+        wrap = max(200, event.width - 4)
+        if int(str(self.hint.cget("wraplength")) or 0) == wrap:
+            return
+        self.hint.configure(wraplength=wrap)
+        top = self.top
+        top.update_idletasks()
+        if top.winfo_ismapped() and top.winfo_height() < top.winfo_reqheight():
+            top.geometry(f"{top.winfo_width()}x{top.winfo_reqheight()}")
+
     # -- showing and hiding
 
     def show(self) -> None:
@@ -93,6 +110,7 @@ class Popup:
         top = self.top
         top.update_idletasks()
         width, height = self.size or (WIDTH, max(top.winfo_reqheight(), 120))
+        height = max(height, top.winfo_reqheight())     # a size remembered from before the box grew: never cut it off
         x = (top.winfo_screenwidth() - width) // 2
         y = max(40, top.winfo_screenheight() // 3 - height // 2)
         top.geometry(f"{width}x{height}+{x}+{y}")

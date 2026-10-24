@@ -194,7 +194,9 @@ class CloudSwitch:
         warning = ttk.Label(frame, text=setup.TOGGLE_NOTE if not compact else "(what Claude is shown leaves this computer)",
                             foreground="#9a3412", wraplength=0 if compact else 540, justify="left")
         if compact:
-            warning.grid(row=0, column=1, sticky="w", padx=(6, 6))
+            # the warning wraps under itself in a narrow box rather than being cut off: it must always be read
+            warning.grid(row=0, column=1, sticky="ew", padx=(6, 6))
+            warning.bind("<Configure>", lambda event: warning.configure(wraplength=max(120, event.width - 2)))
             ttk.Button(frame, text="Folders...", command=self.choose_folders).grid(row=0, column=2, sticky="e")
             frame.columnconfigure(1, weight=1)
         else:
