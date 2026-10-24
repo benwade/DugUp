@@ -1415,7 +1415,7 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     file_menu = bench.root.nametowidget(bar.entrycget(0, "menu"))
     labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) == "command"]
     assert labels == ["Add folder...", "Choose what to index...", "Settings...", "Disk space...",
-                      "Free the graphics card and memory...", "Folders Claude may search...", "Close the window",
+                      "Free the graphics card and memory...", "Folders Claude may search...", "Connect the Claude app to this DugUp...", "Close the window",
                       "Quit DugUp (the tray too)"]
     help_menu = bench.root.nametowidget(bar.entrycget(3, "menu"))
     assert help_menu.entrycget(0, "label") == "Report a problem..." and help_menu.entrycget(1, "label") == "About DugUp"
@@ -1662,3 +1662,24 @@ def test_a_folder_is_left_out_from_the_index_tab_or_a_result_and_put_back_from_t
     bench.folder_to_add = sub
     app.leave_folder_out()
     assert "gamma.txt" not in bench.find("needle")
+
+
+def test_quit_dugup_anywhere_closes_this_window_and_asks_everything_else_to_close(tmp_path):
+    from dugup import quitsignal
+    (tmp_path / "one").mkdir()
+    (tmp_path / "two").mkdir()
+    first = Bench(tmp_path / "one")
+    first.app.summon = lambda root, command: None
+    first.app.quit_listener.started -= 10            # started a while ago
+    quitsignal.send(first.layout.root)               # as Remote or the tray icon would
+    for _ in range(quitsignal.EVERY):
+        if first.app.closed:
+            break
+        first.app._poll()
+    assert first.app.closed, "the window closed itself on the signal"
+    second = Bench(tmp_path / "two")
+    asked = []
+    second.app.summon = lambda root, command: asked.append(command)
+    second.app.quit_all()
+    assert second.app.closed and asked == ["quit"]
+    assert quitsignal.asked_since(second.layout.root, second.app.quit_listener.started - 1), "the others are told"

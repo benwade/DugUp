@@ -74,6 +74,29 @@ def _when(stamp: Optional[float]) -> Optional[str]:
         return None
 
 
+class NoIndex:
+    """The tools when the data folder has no index: the connection starts all the same, and every answer says
+    why there is nothing to search and what to do, rather than the assistant app reporting that DugUp
+    "couldn't start"."""
+
+    def __init__(self, layout) -> None:
+        self.layout = layout
+
+    def _refuse(self, *args, **kwargs):
+        if self.layout.index.exists():
+            raise Refused("DugUp's index is there now. Restart the Claude desktop app (quit it from its tray icon) "
+                          "to search it.")
+        raise Refused(f"DugUp has no index in {self.layout.root} yet, so there is nothing to search. If the person "
+                      "has not used DugUp yet: open DugUp and add a folder (Index tab, Add folder...). If they already "
+                      "use DugUp, the Claude app is starting a different copy of it: in DugUp, choose File, Connect "
+                      "the Claude app to this DugUp, then restart the Claude app.")
+
+    search = passages = status = _refuse
+
+    def close(self) -> None:
+        pass
+
+
 class Tools:
     """The assistant's tools over one LocalService. `load_settings()` gives the current Settings (read from
     config.toml on each call, so a change takes effect at once); `clock` is for tests."""

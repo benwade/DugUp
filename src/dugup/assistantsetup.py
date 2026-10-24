@@ -107,6 +107,33 @@ def server_entry(data_dir: Optional[str] = None, python: Optional[str] = None) -
     return {"command": console_python(python), "args": command}
 
 
+def connection(path: Path, entry: Dict[str, object]) -> str:
+    """Whether the Claude app's settings start this DugUp: "this" (they start exactly `entry`), "other" (they
+    have a DugUp entry that starts something else, such as another copy of DugUp), or "none"."""
+    try:
+        servers = json.loads(Path(path).read_text(encoding="utf-8-sig")).get("mcpServers", {})
+    except (OSError, ValueError, AttributeError):
+        return "none"
+    found = servers.get(SERVER_NAME) if isinstance(servers, dict) else None
+    if not isinstance(found, dict):
+        return "none"
+
+    def same(a: Dict[str, object], b: Dict[str, object]) -> bool:
+        program = lambda e: os.path.normcase(os.path.abspath(str(e.get("command", ""))))
+        return program(a) == program(b) and list(a.get("args") or []) == list(b.get("args") or [])
+
+    return "this" if same(found, entry) else "other"
+
+
+def connected_command(path: Path) -> str:
+    """The program the Claude app's DugUp entry starts, or "" when there is none."""
+    try:
+        found = json.loads(Path(path).read_text(encoding="utf-8-sig")).get("mcpServers", {}).get(SERVER_NAME, {})
+        return str(found.get("command", "")) if isinstance(found, dict) else ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 def is_connected(path: Path) -> bool:
     try:
         servers = json.loads(Path(path).read_text(encoding="utf-8-sig")).get("mcpServers", {})

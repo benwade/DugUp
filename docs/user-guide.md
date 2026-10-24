@@ -104,12 +104,13 @@ The tray can handle routine updates in the background. See the next section for 
 
 Keep DugUp in the tray to search from anywhere and update the index in the background.
 
-Closing the DugUp window keeps DugUp running in the tray, by the clock; on Windows the icon may be under the **^** arrow. To come back, click the icon or press the search key, then choose **Open the full window**, or use the Start menu. To quit DugUp completely, right-click the icon and choose **Quit**, or choose **File → Quit DugUp** in the window. To have the close button end DugUp instead, turn off **Closing the window keeps DugUp in the tray** in Settings.
+Closing the DugUp window keeps DugUp running in the tray, by the clock; on Windows the icon may be under the **^** arrow. To come back, click the icon or press the search key, then choose **Open the main window**, or use the Start menu. To quit DugUp completely, choose **Quit DugUp** on the tray icon's menu, in the window's **File** menu, or in DugUp Remote: every DugUp window closes too, and an update under way stops cleanly, keeping what is done. To have the close button end DugUp instead, turn off **Closing the window keeps DugUp in the tray** in Settings.
 
 On Windows, press **Win+Shift+F** to open the small search box:
 
 - Type a few letters to see results as you type.
 - Use the arrow keys to choose a result and **Enter** to open it.
+- The box searches file names and the words in files. For everything else (pictures by what they show, meaning, filters), choose **Open the main window**.
 - Press **Ctrl+Enter** to continue the search in the full window.
 - Press **Esc** to close the box.
 
@@ -119,7 +120,7 @@ Change the shortcut using the `hotkey` setting, for example to `Ctrl+Alt+D`. Dug
 
 ### Control the tray with DugUp Remote
 
-Open **DugUp Remote** from the Windows Start menu to start or quit the tray, open either search window, or update the index. Closing the remote leaves the tray running. The remote also holds the [cloud search](#let-claude-search-for-you) switch and folder list.
+Open **DugUp Remote** from the Windows Start menu to start the tray, open either search window, update the index, or quit DugUp. Closing the remote leaves the tray running. The remote also holds the [cloud search](#let-claude-search-for-you) switch and folder list.
 
 **Free the graphics card and memory** unloads models and pauses background updates while leaving the index open. **Load the models** loads them again and resumes updates. The remote also has a start-at-login checkbox.
 
@@ -144,7 +145,9 @@ Tick **Allow cloud search access** wherever is handiest:
 - the main window's **File** menu;
 - **DugUp Remote**.
 
-DugUp then explains what will leave your computer and asks you to choose **Allow** or **Cancel**. If the Claude desktop app is not yet connected, DugUp offers to connect it; restart the Claude app afterwards to finish.
+DugUp then explains what will leave your computer and asks you to choose **Allow** or **Cancel**. If the Claude desktop app is not yet connected, or is connected to a different copy of DugUp, DugUp offers to connect it to this one; restart the Claude app afterwards to finish.
+
+If the Claude app says **DugUp couldn't start**, or Claude reports that DugUp has no index, choose **File → Connect the Claude app to this DugUp** in the main window, then restart the Claude app. This happens when the Claude app was connected to another copy of DugUp, such as one you used before installing, or one whose index has moved.
 
 ### Choose what Claude can see
 

@@ -18,6 +18,9 @@ from typing import Callable, List, Optional, Sequence, Tuple
 from .shapes import Failure, SearchFilters, SearchRow, WHERE_ANYWHERE, WHERE_NAME
 
 ROWS = 12                # results shown at most
+FULL_SEARCH_HINT = ("This box finds files by name and by the words in them. For a complete search, including "
+                    "pictures by what they show, meaning, and filters, open the main window (Ctrl+Enter takes "
+                    "what you typed with you).")
 SETTLE_MS = 120          # typing pauses this long before the search runs
 WIDTH = 720
 
@@ -53,12 +56,19 @@ class Popup:
         self.list.column("name", width=300, stretch=False)
         self.list.column("where", width=WIDTH - 316)
         self.list.pack(fill="both", expand=True, pady=(6, 0))
+        # what this box is for, and the way to the full search: plain to see, not a line of small print
+        full = ttk.Frame(frame)
+        full.pack(fill="x", pady=(8, 0))
+        style = ttk.Style(top)
+        style.configure("Big.TButton", font=("TkDefaultFont", 11, "bold"), padding=(14, 8))
+        self.window_button = ttk.Button(full, text="Open the main window", style="Big.TButton", command=self._to_window)
+        self.window_button.pack(side="right", padx=(8, 0))
+        self.hint = ttk.Label(full, text=FULL_SEARCH_HINT, wraplength=480, justify="left")
+        self.hint.pack(side="left", fill="x", expand=True)
         foot = ttk.Frame(frame)
         foot.pack(fill="x", pady=(4, 0))
-        self.note = tk.StringVar(value="Enter opens the file, Ctrl+Enter searches in the window, Esc closes.")
+        self.note = tk.StringVar(value="Enter opens the chosen file; Esc closes this box.")
         ttk.Label(foot, textvariable=self.note, foreground="#666666").pack(side="left", fill="x", expand=True)
-        self.window_button = ttk.Button(foot, text="Open the full window", command=self._to_window)
-        self.window_button.pack(side="right")
         ttk.Button(foot, text="About", command=self.about).pack(side="right", padx=(0, 6))
         self.report = report
         if report is not None:
@@ -163,7 +173,7 @@ class Popup:
         if rows:
             self.list.selection_set("0")
             self.list.focus("0")
-        self.note.set(note or "Enter opens the file, Ctrl+Enter searches in the window, Esc closes.")
+        self.note.set(note or "Enter opens the chosen file; Esc closes this box.")
 
     def _move(self, step: int) -> None:
         if not self.rows:
