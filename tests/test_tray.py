@@ -319,6 +319,8 @@ def test_the_window_is_started_with_a_console_free_python_on_windows(tmp_path, m
     class Layout:
         root = tmp_path
     assert tray_module.dugup_command(Layout, "window")[0] == str(quiet)
+    (tmp_path / "DugUp.exe").write_bytes(b"")
+    assert tray_module.quiet_python() == str(tmp_path / "DugUp.exe"), "installed: DugUp's own program file"
 
 
 

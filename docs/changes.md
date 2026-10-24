@@ -4,6 +4,14 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
+## 0.2.6 beta — October 2026
+
+**Leave a folder out.** **Leave a folder out...** on the **Index** tab, or **Leave this folder out of the index...** on a search result's right-click menu, keeps a folder and everything in it out of the index. DugUp says how many files will leave the index and asks once; your files are not touched. **Index → Put a folder back** undoes it. See [Leave a folder out](user-guide.md#leave-a-folder-out).
+
+**Closing the window keeps DugUp in the tray.** The tray icon or the search key brings DugUp back, without the Start menu. The first close explains where DugUp went and how to quit completely (**File → Quit DugUp**, or **Quit** on the tray icon). A setting turns this off.
+
+**Every Index tab button is visible.** The buttons now take three rows, so **Stop**, **Refresh** and **Settings** no longer fall off the edge of the pane.
+
 ## 0.2.5 beta — October 2026
 
 **DugUp is named DugUp everywhere in Windows.** The Start menu, Startup apps, the taskbar and Task Manager showed "Python", because DugUp ran as a Python program. DugUp now has its own program file, `DugUp.exe`, and every shortcut starts it. The start-at-login entry is now a shortcut called **DugUp tray**; installing this version replaces the old one for you.

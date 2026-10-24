@@ -48,9 +48,11 @@ def quiet_python() -> str:
     python.exe is a launcher that starts the real Python as a child, which, started without a console, is
     given a new console window of its own; pythonw.exe never shows one."""
     if os.name == "nt":
-        quiet = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-        if os.path.exists(quiet):
-            return quiet
+        folder = os.path.dirname(sys.executable)
+        for name in ("DugUp.exe", "pythonw.exe"):     # DugUp.exe where installed: Windows names it DugUp
+            quiet = os.path.join(folder, name)
+            if os.path.exists(quiet):
+                return quiet
     return sys.executable
 
 

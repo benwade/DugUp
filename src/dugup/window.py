@@ -232,6 +232,8 @@ class App:
                  pick: bool = True, setup: bool = True, tell=None, cloud_options: Optional[dict] = None) -> None:
         self.cloud_options = cloud_options or {}
         self.launch_report = None          # how Report a problem is started (None: as its own process); a seam for tests
+        self.launch_tray = None            # how the tray is started when the window closes (None: as its own process)
+        self.summon = None                 # how the tray is asked things (None: summons.summon); a seam for tests
         self.waiting = None           # the small window shown while a folder is looked through
         self.pick = pick              # show the folder picker when a folder is added (False: add it whole, at once)
         self.setup_on_first_start = setup    # open the setup wizard by itself when there is no folder yet
@@ -274,7 +276,7 @@ class App:
         self._build()
         self.refresh_folders()
         self.refresh_status()
-        root.protocol("WM_DELETE_WINDOW", self.close)
+        root.protocol("WM_DELETE_WINDOW", self.leave)
         self._poll_id = root.after(POLL_MS, self._poll)
         from .watchdog import Watchdog
         self.watchdog = Watchdog(root, service.layout.logs, "window")
@@ -416,6 +418,8 @@ class App:
         for text, command in (("Open", self.open_selected), ("Edit", self.edit_selected),
                               ("Show in folder", self.show_in_folder), ("Copy path", self.copy_path)):
             self.menu.add_command(label=text, command=command)
+        self.menu.add_separator()
+        self.menu.add_command(label="Leave this folder out of the index...", command=self.leave_selected_folder_out)
         panes.add(left, weight=3)
 
         right = ttk.Notebook(panes)
@@ -473,28 +477,31 @@ class App:
         index = ttk.Frame(right, padding=4)
         index.columnconfigure(0, weight=1)
         index.rowconfigure(2, weight=1)
-        buttons = ttk.Frame(index)              # two rows: the buttons fall off a narrow window in one
+        buttons = ttk.Frame(index)              # three rows: the buttons fall off a narrow pane in fewer
         buttons.grid(row=0, column=0, sticky="ew")
-        upper, lower = ttk.Frame(buttons), ttk.Frame(buttons)
+        upper, middle, lower = ttk.Frame(buttons), ttk.Frame(buttons), ttk.Frame(buttons)
         upper.pack(fill="x")
+        middle.pack(fill="x", pady=(3, 0))
         lower.pack(fill="x", pady=(3, 0))
         self.run_buttons = []
+        # folders; running the index; reading pictures and scans
         for where, text, command in ((upper, "Add folder...", self.add_folder), (upper, "Choose what to index...", self.choose_what),
-                                     (upper, "Update the index", lambda: self.start("index")),
+                                     (upper, "Leave a folder out...", self.leave_folder_out),
+                                     (middle, "Update the index", lambda: self.start("index")),
                                      (lower, "Read pictures and scans (OCR)", lambda: self.start("ocr")),
-                                     (lower, "Read a folder now, fast...", self.read_folder_now),
+                                     (lower, "Read a folder fast...", self.read_folder_now),
                                      (lower, "Prepare picture search", self.prepare_pictures)):
             button = ttk.Button(where, text=text, command=command)
             button.pack(side="left", padx=2)
             self.run_buttons.append(button)
-        self.setup_button = ttk.Button(lower, text="Set up plain-words search...", command=self.set_up_plain_words)
+        self.setup_button = ttk.Button(middle, text="Set up plain-words search...", command=self.set_up_plain_words)
         if self.service.intent is None:          # only when a model was asked for (intent_reader) and none is there
             self.setup_button.pack(side="left", padx=2)
             self.run_buttons.append(self.setup_button)
-        self.stop_button = ttk.Button(upper, text="Stop", command=self.stop_work, state="disabled")
+        self.stop_button = ttk.Button(middle, text="Stop", command=self.stop_work, state="disabled")
         self.stop_button.pack(side="left", padx=2)
-        ttk.Button(upper, text="Refresh", command=self.refresh_status).pack(side="left", padx=2)
-        ttk.Button(lower, text="Settings...", command=self.open_setup).pack(side="left", padx=2)
+        ttk.Button(middle, text="Refresh", command=self.refresh_status).pack(side="left", padx=2)
+        ttk.Button(middle, text="Settings...", command=self.open_setup).pack(side="left", padx=2)
         self._menu_bar()
         self.progress_text = tk.StringVar(value="Nothing is running.")
         self._readonly(index, self.progress_text, row=1, column=0, sticky="ew", pady=3)
@@ -537,12 +544,16 @@ class App:
         file.add_command(label="Folders Claude may search...", command=self.cloud_switch.choose_folders)
         file.configure(postcommand=self.cloud_switch.sync)
         file.add_separator()
-        file.add_command(label="Quit", command=self.close)
+        file.add_command(label="Close the window", command=self.leave)
+        file.add_command(label="Quit DugUp (the tray too)", command=self.quit_all)
         bar.add_cascade(label="File", menu=file)
         index = tk.Menu(bar, tearoff=False)
         index.add_command(label="Update the index", command=lambda: self.start("index"))
+        index.add_command(label="Leave a folder out...", command=self.leave_folder_out)
+        self.put_back_menu = tk.Menu(index, tearoff=False, postcommand=self._fill_put_back)
+        index.add_cascade(label="Put a folder back", menu=self.put_back_menu)
         index.add_command(label="Read pictures and scans (OCR)", command=lambda: self.start("ocr"))
-        index.add_command(label="Read a folder now, fast...", command=self.read_folder_now)
+        index.add_command(label="Read a folder fast...", command=self.read_folder_now)
         index.add_separator()
         index.add_command(label="Stop", command=self.stop_work)
         index.add_command(label="Refresh the status", command=self.refresh_status)
@@ -1361,6 +1372,7 @@ class App:
             self.folder.set(ALL_FOLDERS)
 
     def status_text(self) -> str:
+        from .picker import literal
         service = self.service
         status = service.indexing_status()
         counts = status["counts"]
@@ -1396,8 +1408,13 @@ class App:
             away = "" if root["reachable"] else "  [NOT AVAILABLE at the last scan; its files are kept]"
             lines.append(f"{root['path']}{away}")
             lines.append(f"    {sum(root['counts'].values()):,} file(s); last scan {format_date(root['last_scan'])}")
-            if root["exclude"]:
-                lines.append(f"    skipping: {', '.join(root['exclude'])}")
+            folders = [f for owner, f in service.left_out() if owner == root["path"]]
+            rules = [r for r in root["exclude"] if not any(r == literal(os.path.relpath(f, root["path"]).replace(os.sep, "/"))
+                                                          for f in folders)]
+            for folder in folders:
+                lines.append(f"    left out: {folder}")
+            if rules:
+                lines.append(f"    skipping: {', '.join(rules)}")
         lines.append("")
         used, free, limit = service.layout.index_bytes(), service.layout.free_bytes(), service.settings.max_index_mb
         lines.append(f"The index uses {megabytes(used)}; {megabytes(free)} free on that drive; "
@@ -1425,6 +1442,54 @@ class App:
         self.refresh_folders()
         self.refresh_status()
         self.say(f"Added {result.path}. Update the index to read it.")
+
+    # -- leaving folders out of the index
+
+    def leave_folder_out(self, folder: str = "") -> None:
+        """Leave a folder inside an indexed folder out of the index, after saying what that does."""
+        if self.busy():
+            self.say("Something is running. Stop it first, or wait.")
+            return
+        folder = folder or self.choose_folder()
+        if not folder:
+            return
+        folder = os.path.normpath(folder)
+        count = self.service.files_under(folder)
+        if not self.ask("Leave this folder out?",
+                        f"{folder}\n\n{count:,} file(s) in it will leave the index now, and the folder will be skipped "
+                        "from now on, the folders inside it too.\n\nYour files are not touched: only DugUp's index "
+                        "changes. Index, Put a folder back undoes this."):
+            return
+        done = self.service.leave_out(folder)
+        if isinstance(done, Failure):
+            self.say(f"That folder was not left out: {done.detail}.")
+            return
+        _, removed = done
+        self.refresh_folders()
+        self.refresh_status()
+        self.say(f"Left out {folder}: {removed:,} file(s) left the index.")
+
+    def leave_selected_folder_out(self) -> None:
+        row = self.selected()
+        if row is not None:
+            self.leave_folder_out(os.path.dirname(row.path))
+
+    def _fill_put_back(self) -> None:
+        self.put_back_menu.delete(0, "end")
+        left = self.service.left_out()
+        if not left:
+            self.put_back_menu.add_command(label="(no folder is left out)", state="disabled")
+        for _, folder in left:
+            self.put_back_menu.add_command(label=folder, command=lambda f=folder: self.put_folder_back(f))
+
+    def put_folder_back(self, folder: str) -> None:
+        done = self.service.put_back(folder)
+        if isinstance(done, Failure):
+            self.say(f"That folder was not put back: {done.detail}.")
+            return
+        self.refresh_folders()
+        self.refresh_status()
+        self.say(f"Put back {folder}. Update the index to read it again.")
 
     def choose_what(self) -> None:
         """Open the picker for a folder that is already indexed: the one in the Folder box, or the only one."""
@@ -1927,6 +1992,43 @@ class App:
         self.refresh_status(text)
 
     # -- closing
+
+    def _ask_tray(self, command: str):
+        from . import summons
+        return (self.summon or summons.summon)(self.service.layout.root, command)
+
+    def _tray_possible(self) -> bool:
+        try:
+            import pystray  # noqa: F401
+            return True
+        except Exception:
+            return False
+
+    def leave(self) -> None:
+        """The window's close button. With close_to_tray, DugUp stays in the tray (started if it is not
+        running), so the icon and the search key bring it back; the first time, it says where it went."""
+        if self.closed:
+            return
+        if self.service.settings.close_to_tray and self._tray_possible():
+            if self._ask_tray("ping") != "pong":
+                from . import tray as tray_module
+                (self.launch_tray or tray_module._detached)(tray_module.dugup_command(self.service.layout, "tray"))
+            root = self.service.layout.root
+            if not remember.read(root).get("told_tray"):
+                remember.write(root, told_tray=True)
+                self.tell("DugUp is still in the tray",
+                          "DugUp keeps running in the tray, by the clock (on Windows, the icon may be under the ^ arrow).\n\n"
+                          "To come back: click the icon, or press the search key, then choose Open the full window. "
+                          "The Start menu works too.\n\n"
+                          "To quit DugUp completely: right-click the icon and choose Quit, or use File, Quit DugUp "
+                          "here.\n\nTo have the close button end DugUp instead, turn off \"Closing the window keeps "
+                          "DugUp in the tray\" in Settings.")
+        self.close()
+
+    def quit_all(self) -> None:
+        """File, Quit DugUp: the tray too, if it is running."""
+        self._ask_tray("quit")
+        self.close()
 
     def close(self) -> None:
         if self.closed:

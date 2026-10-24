@@ -27,6 +27,12 @@ A folder normally follows the choices of its parent. You can give a subfolder di
 
 Use **Choose what to index...** to revisit a folder's choices. Names-only indexing removes the stored text for that folder; excluding a folder leaves it out entirely. Neither choice deletes your original files.
 
+### Leave a folder out
+
+To keep a folder out of the index, choose **Leave a folder out...** on the **Index** tab and pick the folder. Or, when a search turns up files from a folder you never want to see, right-click one and choose **Leave this folder out of the index...**. DugUp says how many files will leave the index and asks once. The folder and everything inside it are skipped from then on; your files themselves are not touched.
+
+The **Index** tab lists each folder left out. To take one back, choose it under **Index → Put a folder back**, then **Update the index** to read it again.
+
 ## Search for a file
 
 Type words in the search box and press **Enter**. Double-click a result to open it. The buttons below the list let you edit the selected file, show it in its folder, or copy its path.
@@ -90,13 +96,15 @@ To select several results, use **Ctrl-click**, **Shift-click**, or **Ctrl+A**. T
 
 Choose **Update the index** on the **Index** tab after adding or changing files. By default, the run continues with OCR where enabled, then meaning and picture indexing where the corresponding models are installed. The status lists any work still waiting, such as pictures waiting for picture search. The progress display includes a **Stop** button. Work still waiting can be continued later.
 
-OCR reads clear printed text best. Handwriting, decorative lettering and blurred photos are often missed. For a folder that needs attention immediately, **Read a folder now, fast...** starts OCR for that folder. If another run is active, DugUp stops it cleanly and leaves unfinished work queued.
+OCR reads clear printed text best. Handwriting, decorative lettering and blurred photos are often missed. For a folder that needs attention immediately, **Read a folder fast...** starts OCR for that folder. If another run is active, DugUp stops it cleanly and leaves unfinished work queued.
 
 The tray can handle routine updates in the background. See the next section for its schedule and controls.
 
 ## Tray and search shortcut
 
 Keep DugUp in the tray to search from anywhere and update the index in the background.
+
+Closing the DugUp window keeps DugUp running in the tray, by the clock; on Windows the icon may be under the **^** arrow. To come back, click the icon or press the search key, then choose **Open the full window**, or use the Start menu. To quit DugUp completely, right-click the icon and choose **Quit**, or choose **File → Quit DugUp** in the window. To have the close button end DugUp instead, turn off **Closing the window keeps DugUp in the tray** in Settings.
 
 On Windows, press **Win+Shift+F** to open the small search box:
 
