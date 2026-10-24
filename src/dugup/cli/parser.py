@@ -112,7 +112,8 @@ def build_parser() -> argparse.ArgumentParser:
     reporting.add_argument("--print", action="store_true", help="print the report instead of opening a window")
     sub.add_parser("remote", parents=[common], help="a small window that starts the tray, brings up the search box, frees the graphics card, quits")
     tray = sub.add_parser("tray", parents=[common], help="stay in the tray, with a key that brings up a search box anywhere")
-    tray.add_argument("--startup", choices=("add", "remove"), help="make the tray start when you log in, or stop that")
+    tray.add_argument("--startup", choices=("add", "remove", "refresh"),
+                      help="make the tray start when you log in, or stop that; refresh remakes an entry that is there")
     tray.add_argument("--quit", action="store_true", help="end the tray that is running")
     tray.add_argument("--no-icon", action="store_true", help="no icon in the tray (the key and `dugup popup` still work)")
     sub.add_parser("popup", parents=[common], help="bring up the running tray's search box")

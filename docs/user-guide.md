@@ -267,6 +267,7 @@ dugup popup
 dugup remote
 dugup tray --startup add
 dugup tray --startup remove
+dugup tray --startup refresh
 dugup tray --quit
 ```
 

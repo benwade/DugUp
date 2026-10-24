@@ -169,6 +169,26 @@ def test_the_start_at_login_entry_follows_the_data(tmp_path):
     assert not datamove.update_startup(Path("D:/x"), new, other)
 
 
+def test_a_start_at_login_shortcut_is_made_again_with_the_new_folder(tmp_path, monkeypatch):
+    from dugup import tray
+    old, new = Path("D:/old data"), Path("E:/new data")
+    entry = tmp_path / "DugUp tray.lnk"
+    entry.write_bytes(b"shortcut")
+    made = []
+
+    class Fake:
+        def arguments(self, path):
+            return f'-m dugup tray --data-dir "{old}"'
+
+        def make(self, path, target, arguments):
+            made.append(arguments)
+            return True
+
+    monkeypatch.setattr(tray, "shortcuts", Fake())
+    assert datamove.update_startup(old, new, entry) and made == [f'-m dugup tray --data-dir "{new}"']
+    assert not datamove.update_startup(Path("D:/elsewhere"), new, entry), "a shortcut for another folder is left alone"
+
+
 def test_a_kept_choice_beside_the_program_does_not_block_a_later_move(tmp_path):
     old, new = _old(tmp_path), tmp_path / "data"
     keep_where_it_is(new, old)

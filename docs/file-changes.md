@@ -1,6 +1,6 @@
 # Renaming and removing files
 
-DugUp can help organize pictures and remove extra copies. You choose what changes, review the proposal, and confirm before it acts.
+DugUp can help organize pictures and remove extra copies. You choose what changes and review the proposal before it acts. Removing files asks you to confirm; renaming, which **Undo** reverses, happens with one click.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
@@ -65,9 +65,9 @@ For example, `IMG_4471.jpg` might become a name based on “Green car parked in 
 1. Select pictures and open the **Rename** tab. It previews the selected picture as you change your selection.
 2. Use **Preview** for the current results, or choose a folder. When previewing results, only the previously selected pictures start checked.
 3. Review each thumbnail, caption and proposed name. Edit names or change the checkboxes to choose which pictures will be renamed.
-4. Choose **Rename as shown** and confirm.
+4. Choose **Rename as shown**. The pictures are renamed at once and the status line says how many. A window appears only if a picture could not be renamed, saying which and why.
 
-Captioning runs in the background with a **Stop** button. Applied renames are recorded under `renames` in the data folder. **Undo last rename** attempts to restore the names using that record. The index follows a successful rename, so the new name can be searched without rereading the file.
+Captioning runs in the background with a **Stop** button. Applied renames are recorded under `renames` in the data folder. **Undo last rename** puts the names back using that record, also with one click. The index follows a successful rename, so the new name can be searched without rereading the file.
 
 By default, DugUp proposes names only for pictures with camera or automatic names, such as `IMG_4471`, `DSC_0012`, timestamps, screenshots or numbers. Choose **Also pictures with real names** to include pictures already given descriptive names.
 

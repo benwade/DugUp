@@ -87,10 +87,11 @@ def claude_config_path(environ: Optional[Mapping[str, str]] = None, platform: Op
 
 
 def console_python(executable: Optional[str] = None) -> str:
-    """The Python that runs the server: the console one, since pythonw has no standard input and output."""
+    """The Python that runs the server: the console one, since pythonw (and DugUp.exe, which works like it)
+    has no standard input and output."""
     executable = executable or sys.executable
     folder, name = os.path.split(executable)
-    if name.lower() == "pythonw.exe":
+    if name.lower() in ("pythonw.exe", "dugup.exe"):
         candidate = os.path.join(folder, "python.exe")
         if os.path.exists(candidate):
             return candidate

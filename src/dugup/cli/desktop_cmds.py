@@ -26,6 +26,8 @@ def cmd_window(args, env, out, environ) -> int:
         safe_write(f"A window cannot be opened here ({first_line}). The other commands work without one.", out)
         return 1
     try:
+        from ..identity import dress
+        dress(root)
         root.withdraw()                          # the notes first, on their own, before anything opens the index
         try:
             from ..startnotes import before_window
@@ -64,6 +66,11 @@ def cmd_tray(args, env, out, environ) -> int:
         path = tray_module.install_startup(layout)
         safe_write(f"The tray will start when you log in (the entry is {path}). Start it now with: dugup tray", out)
         return 0
+    if args.startup == "refresh":                   # an upgrade: an entry there is made again, in today's form
+        path = tray_module.refresh_startup()
+        safe_write(f"The start-at-login entry was made again ({path})." if path else
+                   "Nothing to remake: no start-at-login entry, one already in today's form, or one for another copy of DugUp.", out)
+        return 0
     if args.startup == "remove":
         path = tray_module.remove_startup()
         safe_write("The tray will no longer start when you log in." if path else "There was no start-at-login entry.", out)
@@ -86,6 +93,8 @@ def cmd_tray(args, env, out, environ) -> int:
     except tkinter.TclError as exc:
         safe_write(f"A window cannot be opened here ({(str(exc).splitlines() or ['no reason'])[0]}), so there is no tray.", out)
         return 1
+    from ..identity import dress
+    dress(root)                                  # the popup and every window the tray opens are its children
     root.withdraw()                              # the tray never shows its root; the question shows on its own
     try:
         if move_waits_for(args, environ):
@@ -137,7 +146,9 @@ def cmd_report(args, env, out, environ) -> int:
                    + report.ISSUES, out)
         safe_write(report.gather(data_dir), out)
         return 0
+    from ..identity import dress
     from ..reportwindow import ReportWindow
+    dress(root)
     ReportWindow(root, data_dir)
     root.mainloop()
     return 0
@@ -156,6 +167,8 @@ def cmd_remote(args, env, out, environ) -> int:
     except tkinter.TclError as exc:
         safe_write(f"A window cannot be opened here ({(str(exc).splitlines() or ['no reason'])[0]}).", out)
         return 1
+    from ..identity import dress
+    dress(root)
     window = remote_module.Remote(root, layout, say=lambda text: safe_write(text, out))
     try:
         root.mainloop()

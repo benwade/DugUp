@@ -4,6 +4,14 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
+## 0.2.5 beta — October 2026
+
+**DugUp is named DugUp everywhere in Windows.** The Start menu, Startup apps, the taskbar and Task Manager showed "Python", because DugUp ran as a Python program. DugUp now has its own program file, `DugUp.exe`, and every shortcut starts it. The start-at-login entry is now a shortcut called **DugUp tray**; installing this version replaces the old one for you.
+
+**A new icon.** DugUp's windows, shortcuts, tray and program file share a new icon: a magnifying glass over a folder being dug up.
+
+**Rename in one click.** **Rename as shown** renames at once and reports in the status line, with no question first and no window after. A window appears only when a picture could not be renamed. **Undo** works the same way.
+
 ## 0.2.4 beta — October 2026
 
 Thanks to an early tester who showed us where DugUp was hard to use.

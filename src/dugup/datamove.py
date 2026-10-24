@@ -142,12 +142,19 @@ def update_startup(old: Path, new: Path, entry: Optional[Path] = None) -> bool:
     if entry is None:
         from .tray import startup_entry
         entry = startup_entry()
+    before, after = f'--data-dir "{old}"', f'--data-dir "{new}"'
+    if entry.suffix.lower() == ".lnk":                    # a shortcut: read its arguments, make it again
+        from . import tray
+        arguments = tray.shortcuts.arguments(entry)
+        if not arguments or before not in arguments:
+            return False
+        target = tray.launcher()
+        return tray.shortcuts.make(entry, target, arguments.replace(before, after))
     try:
         with open(entry, encoding="utf-8", newline="") as handle:      # line endings kept exactly as they were
             text = handle.read()
     except OSError:
         return False
-    before, after = f'--data-dir "{old}"', f'--data-dir "{new}"'
     if before not in text:
         return False
     with open(entry, "w", encoding="utf-8", newline="") as handle:

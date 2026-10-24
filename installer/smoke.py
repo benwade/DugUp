@@ -151,6 +151,34 @@ def main() -> int:
     expect((programs / "Report a problem with DugUp.lnk").is_file(), "Report a problem is in the Start menu")
     run(*dugup, "remote", "--help")
 
+    step("DugUp.exe: DugUp's own program file, so Windows shows DugUp, not Python")
+    launcher = app / "python" / "DugUp.exe"
+    expect(launcher.is_file(), "DugUp.exe sits beside the bundled Python")
+    said = logs / "launcher.txt"
+    run(launcher, "-c", f"import sys, dugup; open(r'{said}', 'w').write(sys.executable + '|' + dugup.__version__)")
+    expect(said.is_file() and said.read_text().startswith(str(launcher)), "DugUp.exe runs DugUp's Python, as itself")
+    description = run("powershell", "-NoProfile", "-Command", f"(Get-Item '{launcher}').VersionInfo.FileDescription").strip()
+    expect(description == "DugUp", f"Windows reads its name as DugUp (it said {description!r})")
+    target = run("powershell", "-NoProfile", "-Command",
+                 f"(New-Object -ComObject WScript.Shell).CreateShortcut('{programs / 'DugUp.lnk'}').TargetPath").strip()
+    expect(target.lower() == str(launcher).lower(), f"the Start menu's DugUp starts DugUp.exe (it starts {target})")
+
+    step("Start at login: a shortcut named DugUp tray, made, upgraded from an old script, and removed")
+    startup = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    shortcut, script = startup / "DugUp tray.lnk", startup / "DugUp tray.cmd"
+    run(launcher, "-m", "dugup", "tray", "--startup", "add")
+    expect(shortcut.is_file() and not script.exists(), "the entry is a shortcut")
+    target = run("powershell", "-NoProfile", "-Command",
+                 f"(New-Object -ComObject WScript.Shell).CreateShortcut('{shortcut}').TargetPath").strip()
+    expect(target.lower() == str(launcher).lower(), "it starts DugUp.exe")
+    run(launcher, "-m", "dugup", "tray", "--startup", "remove")
+    expect(not shortcut.exists(), "and it can be removed")
+    startup.mkdir(parents=True, exist_ok=True)
+    script.write_text(f'@echo off\r\nstart "" /min "{pythonw}" -m dugup tray --data-dir "{app / "data"}"\r\n', encoding="utf-8")
+    run(launcher, "-m", "dugup", "tray", "--startup", "refresh")
+    expect(shortcut.is_file() and not script.exists(), "an older script for this copy becomes the shortcut")
+    run(launcher, "-m", "dugup", "tray", "--startup", "remove")
+
     step("Report a problem gathers its report (printed here; the window does the same)")
     reported = run(*dugup, "report", "--print", timeout=120)
     expect("## DugUp" in reported and "the Windows installer" in reported and "## Health check" in reported,
