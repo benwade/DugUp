@@ -1415,7 +1415,8 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     file_menu = bench.root.nametowidget(bar.entrycget(0, "menu"))
     labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) == "command"]
     assert labels == ["Add folder...", "Choose what to index...", "Settings...", "Disk space...",
-                      "Free the graphics card and memory...", "Folders Claude may search...", "Quit"]
+                      "Free the graphics card and memory...", "Folders Claude may search...", "Close the window",
+                      "Quit DugUp (the tray too)"]
     help_menu = bench.root.nametowidget(bar.entrycget(3, "menu"))
     assert help_menu.entrycget(0, "label") == "Report a problem..." and help_menu.entrycget(1, "label") == "About DugUp"
     help_menu.invoke(1)
@@ -1435,7 +1436,7 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     app.free_models()
     assert "nothing to free" in app.message.get() or "Freed:" in app.message.get()
     rows = {str(b.master) for b in app.run_buttons}
-    assert len(rows) == 2, "the run buttons are spread over two rows"
+    assert len(rows) == 3, "the run buttons are spread over three rows"
 
 
 def test_an_evicted_thumbnail_is_made_again_when_asked_for(tmp_path, monkeypatch):
@@ -1587,3 +1588,77 @@ def test_an_update_goes_on_to_prepare_the_pictures_and_the_status_says_how_many_
     bench.app.start("index")
     bench.finish_run()
     assert runs == [True, True] and "Then pictures were prepared for picture search" in bench.text(bench.app.status)
+
+
+def test_closing_the_window_leaves_dugup_in_the_tray_and_says_so_once(tmp_path, monkeypatch):
+    from dugup import remember, window as window_module
+    monkeypatch.setattr(window_module.App, "_tray_possible", lambda self: True)
+    (tmp_path / "one").mkdir()
+    (tmp_path / "two").mkdir()
+    asked, started = [], []
+    first = Bench(tmp_path / "one")
+    first.app.summon = lambda root, command: asked.append(command)          # no tray running
+    first.app.launch_tray = started.append
+    first.app.leave()
+    assert asked == ["ping"] and started and started[0][1:4] == ["-m", "dugup", "tray"], "the tray is started"
+    assert first.app.closed and first.told and first.told[0][0] == "DugUp is still in the tray"
+    assert "Quit" in first.told[0][1] and "Settings" in first.told[0][1]
+    assert remember.read(first.layout.root).get("told_tray") is True
+    # once told, and with the tray running: nothing is started and nothing is said
+    second = Bench(tmp_path / "two")
+    remember.write(second.layout.root, told_tray=True)
+    second.app.summon = lambda root, command: "pong"
+    second.app.launch_tray = started.append
+    second.app.leave()
+    assert len(started) == 1 and second.told == [] and second.app.closed
+
+
+def test_with_close_to_tray_off_the_close_button_ends_dugup(tmp_path, monkeypatch):
+    from dugup import window as window_module
+    from dugup.settings import Settings
+    monkeypatch.setattr(window_module.App, "_tray_possible", lambda self: True)
+    bench = Bench(tmp_path, settings=Settings(ocr_after_index=False, close_to_tray=False))
+    started = []
+    bench.app.summon = lambda root, command: started.append(command)
+    bench.app.launch_tray = started.append
+    bench.app.leave()
+    assert bench.app.closed and started == [] and bench.told == []
+
+
+def test_quit_dugup_asks_the_tray_to_quit_too(bench):
+    asked = []
+    bench.app.summon = lambda root, command: asked.append(command)
+    bench.app.quit_all()
+    assert asked == ["quit"] and bench.app.closed
+
+
+def test_a_folder_is_left_out_from_the_index_tab_or_a_result_and_put_back_from_the_menu(bench):
+    bench.ready()
+    app = bench.app
+    sub = str(bench.docs / "sub")
+    assert "gamma.txt" in bench.find("needle")
+    # from a result's right-click: its folder; a "no" changes nothing
+    app.tree.selection_set(next(i for i in app.tree.get_children() if app.tree.item(i, "values")[0] == "gamma.txt"))
+    bench.answer = False
+    app.leave_selected_folder_out()
+    assert "1 file(s) in it will leave the index" in bench.asked[-1] and "not touched" in bench.asked[-1]
+    assert "gamma.txt" in bench.find("needle")
+    bench.answer = True
+    app.leave_selected_folder_out()
+    assert "Left out" in app.message.get() and "gamma.txt" not in bench.find("needle")
+    assert (bench.docs / "sub" / "gamma.txt").exists(), "the file itself stays"
+    assert f"left out: {sub}" in bench.text(app.status)
+    # Put a folder back lists it; choosing it takes it back, and the next update reads it
+    app._fill_put_back()
+    assert app.put_back_menu.entrycget(0, "label") == sub
+    app.put_back_menu.invoke(0)
+    assert "Update the index to read it again" in app.message.get()
+    app.start("index")
+    bench.finish_run()
+    assert "gamma.txt" in bench.find("needle")
+    app._fill_put_back()
+    assert app.put_back_menu.entrycget(0, "label") == "(no folder is left out)"
+    # from the Index tab: a folder chosen in the folder window
+    bench.folder_to_add = sub
+    app.leave_folder_out()
+    assert "gamma.txt" not in bench.find("needle")

@@ -118,6 +118,7 @@ class Settings:
     caption_gpu: bool = True               # write captions on a graphics card when the runtime can
     caption_source: str = "model"          # "model": the pinned captioning model; "server": a local model server (not built yet)
     watch_every_minutes: float = 60.0      # while the tray runs, the index updates itself this often (and once at start); 0: never
+    close_to_tray: bool = True             # closing the window leaves DugUp in the tray (started if need be), to come back to
     watch_on_battery: bool = False         # run those background updates on battery power too; off: they wait for mains power
     watch_readers: int = 0                 # readers a background update may use; 0: a quarter of the cores, at least one, never all
     hotkey: str = "Win+Shift+F"            # the key that brings up the search box anywhere, while the tray runs; "" for none

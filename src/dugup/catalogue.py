@@ -258,6 +258,10 @@ def _entries() -> Tuple[Entry, ...]:
           "the tray's menu has \"Update now\" and \"Pause updates\" either way.",
           why="Once an hour keeps the index current without the machine ever feeling busy. A run you start yourself "
               "in the window goes at full speed and may stop the tray's run to get its turn."),
+        E("close_to_tray", "tray", "Closing the window keeps DugUp in the tray",
+          "On: closing the window leaves DugUp's icon in the tray (by the clock), starting the tray if it is not running, "
+          "so the search key and the icon bring DugUp back. Quit from the icon's menu, or File, Quit DugUp. Off: closing "
+          "the window ends it.", choices=YES_NO),
         E("watch_on_battery", "tray", "Update by itself on battery power too",
           "Off: while the tray runs on battery, the background update waits for mains power (\"Update now\" still "
           "works). On a desktop this makes no difference.", choices=YES_NO),
@@ -430,7 +434,7 @@ ENTRIES: Dict[str, Entry] = {entry.name: entry for entry in _entries()}
 
 # The Settings window's short list: what people change in everyday use. The rest are a tick away
 # ("Show all settings"), and a search always reaches every setting.
-SHORT_LIST: Tuple[str, ...] = ("watch_every_minutes", "watch_on_battery", "hotkey", "ocr_after_index", "meaning_after_index",
+SHORT_LIST: Tuple[str, ...] = ("close_to_tray", "watch_every_minutes", "watch_on_battery", "hotkey", "ocr_after_index", "meaning_after_index",
                                "looks_after_index", "meaning_model", "meaning_warm_up", "max_index_mb",
                                "missing_retention_days")
 NOT_HERE = frozenset({"extensions"})      # a table, not one value: edited in config.toml (defaults: DEFAULT_EXTENSIONS in kinds.py)
@@ -463,6 +467,7 @@ COSTS: Dict[str, Tuple[str, str]] = {
     "ocr_after_index": ("medium", "updating the index goes on to OCR"),
     "watch_every_minutes": ("light", "a scan of the folders each time; cheap unless much has changed"),
     "watch_readers": ("medium", "readers a background update may take; 0 keeps it to a quarter of the cores"),
+    "close_to_tray": ("light", "the tray stays running after the window closes: a little memory, no work until asked"),
     "watch_on_battery": ("medium", "background updates on battery cost battery"),
     "intent_gpu_layers": ("medium", "layers of the plain-words model on the graphics card; 0 keeps it on the processor"),
     "reader_memory_mb": ("light", "a ceiling on one document reader's memory"),

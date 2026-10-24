@@ -1,6 +1,6 @@
 [project]
 name = "dugup"
-version = "0.2.5"
+version = "0.2.6"
 description = "DugUp: local file search for Windows and Linux"
 license = {file = "LICENSE"}
 authors = [{name = "Ben Wade"}]

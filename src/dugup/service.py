@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import datetime
 import os
+import re
 import threading
 import time
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -498,6 +499,69 @@ class LocalService:
             if old is not None and (old.include, old.exclude) != (wanted.include, wanted.exclude):
                 self._apply_rules(wanted)
         return next(r for r in self.store.list_roots() if r.path == path)
+
+    # -- leaving a folder out
+
+    def _owner_and_rel(self, folder: str) -> "Tuple[Root, str] | Failure":
+        """The indexed folder this folder is inside, and the path between them ("a/b"; "" for the root itself)."""
+        wanted = os.path.abspath(os.path.expanduser(folder))
+        for root in self.store.list_roots():
+            if self._fold(wanted) == self._fold(root.path):
+                return root, ""
+            if _under(wanted, root.path, self._fold):
+                rel = wanted[len(root.path.rstrip("/\\")) + 1:].replace("\\", "/").strip("/")
+                return root, rel
+        return Failure(FailureReason.UNSUPPORTED, f"not inside a folder DugUp indexes: {wanted}")
+
+    def files_under(self, folder: str) -> int:
+        """How many indexed files are in this folder and the folders inside it."""
+        wanted = os.path.abspath(os.path.expanduser(folder))
+        base = wanted.rstrip("/\\")
+        return sum(1 for r in self.store.list_files(prefix=base, case_insensitive=self.case_insensitive)
+                   if _under(r.path, base, self._fold))
+
+    def leave_out(self, folder: str) -> "Tuple[Root, int] | Failure":
+        """Leave a folder (inside an indexed folder) out of the index: a skip rule for exactly that folder, and
+        its files taken out of the index now. The files themselves are not touched. (Root, files removed)."""
+        from .picker import literal
+        found = self._owner_and_rel(folder)
+        if isinstance(found, Failure):
+            return found
+        root, rel = found
+        if not rel:
+            return Failure(FailureReason.UNSUPPORTED, "that is a whole indexed folder: remove it from the folders "
+                                                      "list instead (Index tab, or dugup roots remove)")
+        rule = literal(rel)
+        before = self.store.file_count()
+        if rule in root.exclude:
+            return root, 0
+        result = self.set_root(Root(root.path, root.policy, root.include, tuple(root.exclude) + (rule,)))
+        if isinstance(result, Failure):
+            return result
+        return result, before - self.store.file_count()
+
+    def left_out(self) -> List[Tuple[str, str]]:
+        """Folders left out one by one: (indexed folder, the full path of the folder left out)."""
+        found = []
+        for root in self.store.list_roots():
+            for rule in root.exclude:
+                if rule.startswith("/") and not any(c in rule.replace("[*]", "").replace("[?]", "").replace("[[]", "")
+                                                    for c in "*?"):
+                    rel = re.sub(r"\[(.)\]", r"\1", rule[1:])
+                    found.append((root.path, os.path.join(root.path, *rel.split("/"))))
+        return found
+
+    def put_back(self, folder: str) -> "Root | Failure":
+        """Take back a folder that was left out: the next index update reads it again."""
+        from .picker import literal
+        found = self._owner_and_rel(folder)
+        if isinstance(found, Failure):
+            return found
+        root, rel = found
+        rule = literal(rel)
+        if rule not in root.exclude:
+            return Failure(FailureReason.OTHER, "that folder was not left out")
+        return self.set_root(Root(root.path, root.policy, root.include, tuple(r for r in root.exclude if r != rule)))
 
     def _apply_rules(self, root: Root) -> int:
         """Take out of the index what the root's new rules leave out. The user chose to skip these files:

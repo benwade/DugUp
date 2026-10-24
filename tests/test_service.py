@@ -366,3 +366,27 @@ def test_an_ending_given_a_new_type_is_read_that_way_on_the_next_update(layout, 
     with LocalService(layout, Settings(extensions={**DEFAULT_EXTENSIONS, "nfo": FileKind.TEXT})) as service:
         service.run_indexing()
         assert names(service.search("zebrafish")) == ["readme.nfo"]
+
+
+def test_a_folder_is_left_out_put_back_and_its_files_are_never_touched(service, docs):
+    weird = docs / "odd [1] folder"
+    weird.mkdir()
+    (weird / "w.txt").write_text("needle in a weird folder", encoding="utf-8")
+    service.set_root(Root(str(docs)))
+    service.run_indexing()
+    assert names(service.search("needle")) == ["a.txt", "w.txt"]
+    assert service.files_under(str(weird)) == 1 and service.files_under(str(docs / "sub")) == 1
+    root, removed = service.leave_out(str(weird))
+    assert removed == 1 and names(service.search("needle")) == ["a.txt"], "out of the index at once"
+    assert (weird / "w.txt").exists(), "the file itself stays"
+    assert service.left_out() == [(str(docs), str(weird))]
+    service.run_indexing()
+    assert names(service.search("needle")) == ["a.txt"], "and the next update leaves it out"
+    assert service.leave_out(str(weird))[1] == 0, "leaving it out twice changes nothing"
+    whole = service.leave_out(str(docs))
+    assert isinstance(whole, Failure) and "whole indexed folder" in whole.detail
+    assert isinstance(service.leave_out(str(docs.parent)), Failure), "outside every indexed folder"
+    assert isinstance(service.put_back(str(weird)), Root) and service.left_out() == []
+    service.run_indexing()
+    assert names(service.search("needle")) == ["a.txt", "w.txt"], "put back: read again at the next update"
+    assert isinstance(service.put_back(str(weird)), Failure), "it was not left out"
