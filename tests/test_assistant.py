@@ -279,3 +279,21 @@ def test_with_no_index_the_connection_starts_and_every_answer_says_what_to_do(tm
     with pytest.raises(Refused) as caught:
         tools.search("rent")
     assert "Restart the Claude desktop app" in str(caught.value)
+
+
+def test_with_no_index_the_answer_says_which_program_is_running_and_why_that_folder(tmp_path, monkeypatch):
+    """Two copies of DugUp look alike from outside. The answer names this server's program, where its code
+    came from, and the rule that chose the empty folder, so a stale or wrong copy shows at a glance."""
+    import dugup
+    from dugup import mcpserver
+    from dugup.assistant import Refused
+    served = []
+    monkeypatch.setattr(mcpserver, "serve", lambda service, load, tools=None: served.append(tools))
+    out = io.StringIO()
+    assert cli.main(["mcp", "serve", "--data-dir", str(tmp_path / "data")], stdout=out, environ={}) == 0
+    with pytest.raises(Refused) as caught:
+        served[0].status()
+    said = str(caught.value)
+    assert "command line (--data-dir)" in said, "the rule that chose the folder"
+    assert sys.executable in said and os.path.dirname(os.path.abspath(dugup.__file__)) in said
+    assert "older DugUp server may still be running" in said

@@ -149,6 +149,8 @@ DugUp then explains what will leave your computer and asks you to choose **Allow
 
 If the Claude app says **DugUp couldn't start**, or Claude reports that DugUp has no index, choose **File → Connect the Claude app to this DugUp** in the main window, then restart the Claude app. This happens when the Claude app was connected to another copy of DugUp, such as one you used before installing, or one whose index has moved.
 
+If DugUp already says the Claude app starts this copy and Claude still finds no index, an older DugUp server is probably still running. The Claude app keeps using it until it is gone. Choosing **Connect the Claude app to this DugUp** again, or running `dugup mcp status`, lists any such server with its process number. Quit the Claude app from its tray icon; if the server is still listed, end it, then open the Claude app again. Claude's answer also names the program it is running and why it chose the folder it looked in, which shows at a glance when the wrong copy is answering.
+
 ### Choose what Claude can see
 
 Choose **Folders...** in the search box, **Choose folders...** in DugUp Remote, or **Folders Claude may search...** in the **File** menu. Pick **Every indexed folder**, or **Only these folders** and add the ones you want. **Leave out folders you would not attach to a conversation**, such as medical or money records. Results, passages and other copies of a file outside your chosen folders are never shown to Claude.

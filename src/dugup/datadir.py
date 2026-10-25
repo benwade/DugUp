@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import stat
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, List, Mapping, Optional, Tuple
 
@@ -128,6 +128,7 @@ class BesideChoice:
     home: ProgramHome
     move_from: Optional[Path] = None      # an index in the older per-user folder, not yet moved in or kept
     synced: object = None                 # the synced folder that kept the data from beside the program
+    why: str = field(default="", compare=False)   # in plain words, which rule chose `path` (for diagnosis)
 
 
 def choose_beside(home: ProgramHome, per_user: Path) -> BesideChoice:
@@ -135,14 +136,17 @@ def choose_beside(home: ProgramHome, per_user: Path) -> BesideChoice:
     for the user to say what to do with it: until then that older folder stays in use, so nothing looks lost."""
     kept = kept_elsewhere(home.data)
     if kept is not None and kept.is_dir():
-        return BesideChoice(kept, home)
+        return BesideChoice(kept, home, why=f"a note beside the program ({Path(home.data) / KEPT_ELSEWHERE}) sends it there")
     if not has_index(home.data):
         synced = synced_folder(home.data)
         if synced is not None:        # beside the program is uploaded by a sync app: the index stays out of it
-            return BesideChoice(per_user, home, synced=synced)
+            return BesideChoice(per_user, home, synced=synced,
+                                why=f"the folder beside the program ({home.data}) is synced to the cloud, so the "
+                                    "per-user folder is used")
     if not has_index(home.data) and has_index(per_user) and not is_within(per_user, home.data):
-        return BesideChoice(per_user, home, move_from=per_user)
-    return BesideChoice(home.data, home)
+        return BesideChoice(per_user, home, move_from=per_user,
+                            why="an index in the per-user folder is waiting to be moved beside the program")
+    return BesideChoice(home.data, home, why=f"the marker beside the program ({Path(home.folder) / MARKER_NAME})")
 
 
 def beside_program(cli_value: Optional[str] = None, environ: Optional[Mapping[str, str]] = None,
@@ -219,17 +223,34 @@ def resolve_data_dir(
 ) -> Path:
     """Pick the data folder: command line, then environment, then the marker beside the program, then the
     default."""
+    return explain_data_dir(cli_value, environ, default, never_write, allow_synced, home)[0]
+
+
+def explain_data_dir(
+    cli_value: Optional[str] = None,
+    environ: Optional[Mapping[str, str]] = None,
+    default: Optional[Callable[[], Path]] = None,
+    never_write: Iterable[os.PathLike | str] = (),
+    allow_synced: bool = False,
+    home: Optional[Callable[[], Optional[ProgramHome]]] = None,
+) -> Tuple[Path, str]:
+    """The data folder resolve_data_dir picks, and in plain words which rule picked it. When a program cannot
+    find its index, the rule is usually the answer (a leftover note, another copy of the program)."""
     environ = os.environ if environ is None else environ
-    chosen = cli_value or environ.get(ENV_DATA_DIR) or None
-    if chosen:
-        path = Path(chosen).expanduser()
+    if cli_value:
+        path, why = Path(cli_value).expanduser(), "it was given on the command line (--data-dir)"
+    elif environ.get(ENV_DATA_DIR):
+        path, why = Path(environ[ENV_DATA_DIR]).expanduser(), f"the {ENV_DATA_DIR} environment variable names it"
     else:
         default = default or default_data_dir
         beside = beside_program(None, environ, home, default)
-        path = beside.path if beside is not None else Path(default())
+        if beside is not None:
+            path, why = beside.path, beside.why or "the marker beside the program"
+        else:
+            path, why = Path(default()), "it is the per-user default (no marker was found beside the program)"
     path = Path(os.path.abspath(path))
     check_allowed(path, never_write, allow_synced)
-    return path
+    return path, why
 
 
 def ensure_data_dir(path: os.PathLike | str, never_write: Iterable[os.PathLike | str] = (), allow_synced: bool = False) -> Path:

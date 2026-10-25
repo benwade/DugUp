@@ -232,3 +232,45 @@ def test_a_folder_inside_the_program_cannot_be_added(tmp_path, monkeypatch):
     out = io.StringIO()
     code = cli.main(["roots", "add", str(program / "python"), "--data-dir", str(tmp_path / "data")], stdout=out, environ={})
     assert code != 0 and "program folder" in out.getvalue()
+
+
+# ---- saying which rule chose the folder ---------------------------------------------------------------------
+
+def test_the_explanation_names_the_rule_that_chose_the_folder(tmp_path, program):
+    home, per_user = program
+    explain = datadir.explain_data_dir
+    path, why = explain(str(tmp_path / "from-cli"), {datadir.ENV_DATA_DIR: str(tmp_path / "from-env")})
+    assert path == tmp_path / "from-cli" and "command line" in why
+    path, why = explain(None, {datadir.ENV_DATA_DIR: str(tmp_path / "from-env")})
+    assert path == tmp_path / "from-env" and datadir.ENV_DATA_DIR in why
+    path, why = explain(None, {})
+    assert path == home.data and MARKER_NAME in why
+    _index(per_user)
+    path, why = explain(None, {})
+    assert path == per_user and "waiting to be moved" in why
+
+
+def test_a_leftover_note_is_named_when_it_sends_the_program_to_an_empty_folder(program):
+    """The case that hid an index once: a note beside a source checkout pointed at a per-user folder that had
+    been emptied, so the program found no index while one sat elsewhere. The explanation names the note."""
+    home, per_user = program
+    per_user.mkdir(parents=True)
+    home.data.mkdir(parents=True)
+    (home.data / datadir.KEPT_ELSEWHERE).write_text(f"# kept\n{per_user}\n", encoding="utf-8")
+    path, why = datadir.explain_data_dir(None, {})
+    assert path == per_user and not datadir.has_index(path)
+    assert datadir.KEPT_ELSEWHERE in why and str(home.data) in why
+
+
+def test_a_synced_folder_beside_the_program_is_named_as_the_reason(program, monkeypatch):
+    home, per_user = program
+    monkeypatch.setattr(datadir, "synced_folder", lambda path: object())
+    path, why = datadir.explain_data_dir(None, {}, allow_synced=True)
+    assert path == per_user and "synced" in why
+
+
+def test_with_no_marker_the_default_is_named(tmp_path, monkeypatch):
+    monkeypatch.setattr(datadir, "find_program_home", lambda *a, **k: None)
+    path, why = datadir.explain_data_dir(None, {}, lambda: tmp_path / "per-user")
+    assert path == tmp_path / "per-user" and "per-user default" in why
+    assert datadir.resolve_data_dir(None, {}, lambda: tmp_path / "per-user") == path, "the same folder either way"

@@ -73,10 +73,16 @@ def build(tools: Tools):
     return server
 
 
-def serve(service, load_settings, tools=None) -> None:
-    """Serve until the assistant closes the connection. `tools` stands in for the usual ones (NoIndex)."""
+def serve(service, load_settings, tools=None, watch_parent: bool = True) -> None:
+    """Serve until the assistant closes the connection, or until the app that started the server is gone
+    (parentwatch.py: a server left behind once kept answering for an app whose settings had moved on). `tools`
+    stands in for the usual ones (NoIndex)."""
+    from . import parentwatch
     tools = tools if tools is not None else Tools(service, load_settings)
+    watch = parentwatch.start_for_this_process() if watch_parent else None
     try:
         build(tools).run("stdio")
     finally:
+        if watch is not None:
+            watch.stop()
         tools.close()

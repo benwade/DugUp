@@ -125,6 +125,28 @@ def connection(path: Path, entry: Dict[str, object]) -> str:
     return "this" if same(found, entry) else "other"
 
 
+def configured_entry(path: Path) -> Optional[Dict[str, object]]:
+    """The DugUp entry in the Claude app's settings ({"command": ..., "args": [...]}), or None."""
+    try:
+        servers = json.loads(Path(path).read_text(encoding="utf-8-sig")).get("mcpServers", {})
+    except (OSError, ValueError, AttributeError):
+        return None
+    found = servers.get(SERVER_NAME) if isinstance(servers, dict) else None
+    return found if isinstance(found, dict) else None
+
+
+def stale_servers(path: Path, find=None) -> list:
+    """Running DugUp servers that the Claude app's settings (at `path`) do not start: an older copy still
+    answering after the settings changed, or one left behind by an app that closed. Empty when there are none
+    or when the processes cannot be listed. `find` is a seam for tests (serverprocs.find)."""
+    from . import serverprocs
+    entry = configured_entry(path)
+    if entry is None:
+        return []
+    running = (find or serverprocs.find)()
+    return serverprocs.not_named(running or [], entry)
+
+
 def connected_command(path: Path) -> str:
     """The program the Claude app's DugUp entry starts, or "" when there is none."""
     try:

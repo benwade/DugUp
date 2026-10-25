@@ -164,11 +164,12 @@ class CloudSwitch:
     the search box (compact: one line) and in DugUp Remote. Turning it on asks first (Allow / Cancel) and offers
     to connect the Claude app; turning it off happens at once. `tell(text)` shows what happened.
 
-    `confirm(title, text, allow, cancel)`, `choose_folder(**kw)` and `claude_config` are seams for tests."""
+    `confirm(title, text, allow, cancel)`, `choose_folder(**kw)`, `claude_config` and `find_servers` (the
+    running DugUp servers, serverprocs.find) are seams for tests."""
 
     def __init__(self, parent, layout, *, tell: Callable[[str], None], confirm: Optional[Callable[..., bool]] = None,
                  choose_folder: Optional[Callable[..., str]] = None, claude_config=None, compact: bool = False,
-                 dialog_parent=None) -> None:
+                 dialog_parent=None, find_servers: Optional[Callable[[], object]] = None) -> None:
         import tkinter as tk
         import tkinter.font as tkfont
         from tkinter import ttk
@@ -178,6 +179,7 @@ class CloudSwitch:
         self.confirm = confirm or (lambda title, text, allow, cancel: ask_allow(self.dialog_parent, title, text, allow, cancel))
         self.choose_folder = choose_folder
         self.claude_config = claude_config if claude_config is not None else setup.claude_config_path()
+        self.find_servers = find_servers
         self.on = tk.BooleanVar(value=False)
         self.folders_text = tk.StringVar(value="")
         self.frame = frame = ttk.Frame(parent)
@@ -248,7 +250,14 @@ class CloudSwitch:
         """Point the Claude desktop app at this DugUp, after asking. True when it was connected."""
         state = self.connection()
         if state == "this":
-            self.tell("The Claude app already starts this DugUp. If it says DugUp could not start, restart the Claude app.")
+            # the settings are right; an older server still answering is the one thing they cannot show
+            from .serverprocs import short_advice
+            stale = setup.stale_servers(self.claude_config, self.find_servers)
+            if stale:
+                self.tell("The Claude app's settings start this DugUp. " + short_advice(stale))
+            else:
+                self.tell("The Claude app already starts this DugUp. If it says DugUp could not start, restart the "
+                          "Claude app.")
             return True
         if state == "other":
             title, text = ("The Claude app starts another DugUp",

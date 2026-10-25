@@ -87,6 +87,11 @@ def _status(args, environ, out) -> int:
                    "To point it at this one: dugup mcp connect --write", out)
     else:
         safe_write(f"The Claude desktop app does not have the DugUp entry ({path}). To add it: dugup mcp connect --write", out)
+    # the settings file says which DugUp the app should start; the running processes say which one answers
+    stale = setup.stale_servers(path)
+    if stale:
+        from ..serverprocs import advice
+        safe_write(advice(stale), out)
     return 0
 
 
@@ -136,9 +141,11 @@ def _serve(args, environ) -> int:
     if not layout.index.exists():
         # start all the same: the assistant is told why there is nothing to search, instead of its app saying
         # that DugUp "couldn't start"
-        from ..assistant import NoIndex
-        safe_write(f"There is no index yet in {layout.root}; DugUp's tools will say so.", sys.stderr)
-        serve(None, lambda: setup.load(layout), tools=NoIndex(layout))
+        from ..assistant import NoIndex, running_from
+        why = _why_this_folder(args, environ)
+        safe_write(f"There is no index yet in {layout.root} (chosen because {why}); DugUp's tools will say so. "
+                   f"{running_from()}", sys.stderr)
+        serve(None, lambda: setup.load(layout), tools=NoIndex(layout, why))
         return 0
     service = _service(args, environ, sys.stderr, create=False)
     if service is None:
@@ -151,6 +158,16 @@ def _serve(args, environ) -> int:
     with service:
         serve(service, load_settings)
     return 0
+
+
+def _why_this_folder(args, environ) -> str:
+    """Which rule chose the data folder, in plain words, for the no-index message. Never fails the server."""
+    from ..datadir import explain_data_dir, never_write_from_env
+    try:
+        never_write = list(args.never_write) + never_write_from_env(environ)
+        return explain_data_dir(args.data_dir, environ, never_write=never_write, allow_synced=args.allow_synced)[1]
+    except Exception as exc:      # the folder was already resolved once; this is only the explanation
+        return f"of a rule that could not be told ({type(exc).__name__})"
 
 
 def cmd_mcp(args, env, out, environ, ask: Callable[[str], str] = input) -> int:

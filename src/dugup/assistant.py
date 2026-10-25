@@ -26,6 +26,7 @@ import concurrent.futures
 import dataclasses
 import datetime
 import os
+import sys
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Sequence
@@ -74,22 +75,35 @@ def _when(stamp: Optional[float]) -> Optional[str]:
         return None
 
 
+def running_from() -> str:
+    """Which DugUp this process is, in plain words: the program that runs it and where its code was loaded
+    from. Two copies of DugUp (an installed one, a source checkout) look the same from outside; this tells them
+    apart."""
+    code = os.path.dirname(os.path.abspath(__file__))
+    return f"This DugUp server is {sys.executable} (process {os.getpid()}), running the code in {code}."
+
+
 class NoIndex:
     """The tools when the data folder has no index: the connection starts all the same, and every answer says
     why there is nothing to search and what to do, rather than the assistant app reporting that DugUp
-    "couldn't start"."""
+    "couldn't start". `why` says which rule chose the data folder (datadir.explain_data_dir)."""
 
-    def __init__(self, layout) -> None:
+    def __init__(self, layout, why: str = "") -> None:
         self.layout = layout
+        self.why = why
 
     def _refuse(self, *args, **kwargs):
         if self.layout.index.exists():
             raise Refused("DugUp's index is there now. Restart the Claude desktop app (quit it from its tray icon) "
                           "to search it.")
-        raise Refused(f"DugUp has no index in {self.layout.root} yet, so there is nothing to search. If the person "
-                      "has not used DugUp yet: open DugUp and add a folder (Index tab, Add folder...). If they already "
-                      "use DugUp, the Claude app is starting a different copy of it: in DugUp, choose File, Connect "
-                      "the Claude app to this DugUp, then restart the Claude app.")
+        chosen = f" That folder was chosen because {self.why}." if self.why else ""
+        raise Refused(f"DugUp has no index in {self.layout.root} yet, so there is nothing to search.{chosen} "
+                      f"{running_from()} If the person has not used DugUp yet: open DugUp and add a folder (Index "
+                      "tab, Add folder...). If they already use DugUp, the Claude app is starting a different copy of "
+                      "it: in DugUp, choose File, Connect the Claude app to this DugUp, then restart the Claude app. "
+                      "If that is already done, an older DugUp server may still be running: quit the Claude app from "
+                      "its tray icon, check that `dugup mcp status` lists no DugUp server still running, then open "
+                      "the Claude app again.")
 
     search = passages = status = _refuse
 
