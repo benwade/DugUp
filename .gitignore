@@ -15,6 +15,11 @@ _backup_*.tgz
 _Pics_with_letters/
 _scratch/
 
+# design record and early spike (moved here from D:\Claude\projects 2026-10-19); private, never published
+/design/
+/spike/
+/ocr-timing/
+
 # directory summaries written by local tooling; not part of the project
 *_brainmap.md
 /index.md
@@ -28,3 +33,4 @@ DugUp-*review*.md
 
 # the Windows installer's build output (installer/build.py, ISCC)
 /installer/build/
+*_brainmap.bak
