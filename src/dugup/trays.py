@@ -96,22 +96,20 @@ def _same(a: os.PathLike | str, b: os.PathLike | str) -> bool:
 
 def candidate_roots(parts: Sequence[str], per_user: Path,
                     home_of: Callable[[str], object]) -> List[Path]:
-    """The data folders a tray with this command line may be using, most likely first: the one it was given,
-    or the one beside its program (the marker, and any note that keeps an older folder in use), then the
-    per-user default. Each is checked by asking the tray there, so a wrong guess costs nothing."""
+    """The data folder a tray with this command line uses, by the rules the copy itself follows: the folder it
+    was given, else the one its marker beside the program chooses (with any note that keeps an older folder in
+    use), else the per-user default. One folder, not a list of guesses: a guess that happened to be this
+    tray's own folder once hid a tray started by hand. It is checked by asking the tray there."""
     given = data_dir_arg(parts)
     if given:
         return [Path(os.path.abspath(given))]
-    roots: List[Path] = []
     program = parts[0] if parts else ""
     if program:
         home = home_of(ntpath.dirname(program) if "\\" in program else os.path.dirname(program))
         if home is not None:
             from .datadir import choose_beside
-            roots.append(Path(os.path.abspath(choose_beside(home, per_user).path)))   # type: ignore[arg-type]
-    if not any(_same(r, per_user) for r in roots):
-        roots.append(Path(os.path.abspath(per_user)))
-    return roots
+            return [Path(os.path.abspath(choose_beside(home, per_user).path))]   # type: ignore[arg-type]
+    return [Path(os.path.abspath(per_user))]
 
 
 # ---- the other trays --------------------------------------------------------------------------------------------
@@ -181,7 +179,10 @@ def survey(own_root: Path, own_pid: int, rows: Sequence[Tuple[int, str]], per_us
             silent.add(key)
         else:
             unreached.append(Unreached(pid, line))
-    return list(found.values()), unreached
+    # the Python a venv's launcher starts names the base Python, whose folder holds no marker: it is unreached
+    # by its own command line, yet it is the tray that answered through its launcher's folder
+    answered = {r.tray_pid for r in found.values() if r.tray_pid}
+    return list(found.values()), [u for u in unreached if u.pid not in answered]
 
 
 def process_watch(pid: int) -> Callable[[], bool]:

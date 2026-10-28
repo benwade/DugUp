@@ -119,14 +119,15 @@ def test_only_a_command_line_that_runs_a_tray_counts():
     assert not is_tray(query), "the listing itself is never taken for a tray"
 
 
-def test_a_trays_data_folder_is_the_one_given_or_beside_its_program_then_the_per_user_one(folders):
+def test_a_trays_data_folder_is_the_one_given_else_beside_its_program_else_the_per_user_one(folders):
     own, other, per_user = folders
     parts = serverprocs.split_command_line(f'"{INSTALLED}" -m dugup tray --data-dir "{other}"')
     assert candidate_roots(parts, per_user, homes()) == [Path(os.path.abspath(other))]
     program_folder = os.path.dirname(INSTALLED) if os.name == "nt" else INSTALLED.rsplit("\\", 1)[0]
     found = homes(**{program_folder: home(program_folder, other)})
     parts = serverprocs.split_command_line(f'"{INSTALLED}" -m dugup tray')
-    assert [_key(r) for r in candidate_roots(parts, per_user, found)] == [_key(other), _key(per_user)]
+    assert [_key(r) for r in candidate_roots(parts, per_user, found)] == [_key(other)], \
+        "one folder, the one the copy itself uses: no per-user guess after it"
     assert [_key(r) for r in candidate_roots(parts, per_user, homes())] == [_key(per_user)], \
         "no marker found: the per-user default, as the copy itself would choose"
 
@@ -310,3 +311,32 @@ def test_the_trays_own_process_is_watched_from_before_the_quit_and_names_its_pro
     assert [w for w in order if w[0] == "watch"] == [("watch", 11)]
     assert order.index(("watch", 11)) < order.index(("ask", "quit"))
     assert settled.lines() == [f"Closed DugUp 0.2.8 ({INSTALLED}) and took over the tray."]
+
+
+def test_a_tray_started_by_hand_is_found_when_this_one_uses_the_per_user_folder(folders):
+    """Ben, 2026-10-28: the checkout keeps its index in the per-user folder; the installed tray, started by hand,
+    names no --data-dir. Guessing the per-user folder for it as well matched this tray's own folder, and the
+    installed tray was skipped: two trays ran. Its folder is now the one its marker chooses, and nothing else."""
+    own, other, per_user = folders
+    program_folder = str(Path(other).parent / "Programs" / "DugUp")
+    program = os.path.join(program_folder, "python", "DugUp.exe")
+    desk = Desk()
+    installed = desk.put(other, FakeTray(None, leaves_after=1))
+    settled = settle(per_user, "0.2.9.dev0", desk.summon, listing=_rows(f'"{program}" -m dugup tray'),
+                     per_user=lambda: per_user, home_of=homes(**{os.path.dirname(program): home(program_folder, other)}),
+                     own_pid=1, watch=ended)
+    assert settled.start and installed.gone
+    assert settled.lines() == [f"Closed an earlier DugUp ({program}) and took over the tray."]
+
+
+def test_the_python_a_venv_launcher_starts_is_not_reported_as_unreached(folders):
+    own, other, per_user = folders
+    desk = Desk()
+    desk.put(other, FakeTray("0.2.8"))
+    launcher = f'"{CHECKOUT_VENV}" -m dugup tray --data-dir "{other}"'.replace(f' --data-dir "{other}"', "")
+    venv_folder = os.path.dirname(CHECKOUT_VENV) if os.name == "nt" else CHECKOUT_VENV.rsplit("\\", 1)[0]
+    child = r'"C:\Users\a\miniconda3\python.exe" -m dugup tray'      # no marker near the base Python
+    others, unreached = survey(Path(own), 1, [(10, launcher), (11, child)], per_user, desk.summon,
+                               homes(**{venv_folder: home(venv_folder, other)}), pid_of=lambda root: 11)
+    assert len(others) == 1 and others[0].tray_pid == 11
+    assert unreached == [], "the child is the tray that answered through its launcher's folder"
