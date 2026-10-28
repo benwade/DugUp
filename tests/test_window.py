@@ -1083,6 +1083,8 @@ def test_pictures_by_looks_fill_the_pictures_tab_and_like_this_shows_a_picture_s
     store.save_looks(model, rows)
     monkeypatch.setattr(LocalService, "sketch_sentence", lambda self, sentence: sketch(sentence))
     app = bench.app
+    assert app.closeness.get() == w.CLOSENESS_DEFAULT, "nothing remembered yet: the default"
+    app._closeness_moved(0)                   # every candidate, as before the slider: three pictures are too few to cut
     assert str(app.like_button["state"]) == "disabled"
     app.where.set("By looks (pictures)")
     assert app.filters().where == WHERE_LOOKS
@@ -1091,6 +1093,19 @@ def test_pictures_by_looks_fill_the_pictures_tab_and_like_this_shows_a_picture_s
     assert "that look most like: red picture" in app.message.get()
     assert [r.name for r in app.grid.rows] == names and app.grid.scores, "the Pictures tab shows the same pictures with their scores"
     assert app.tabs.index(app.tabs.select()) == app.tabs.index(app.pictures_tab), "and comes to the front"
+    # Picture matches: toward fewer, the weaker matches go (the search runs again once the slider settles; the test
+    # calls that step itself rather than waiting for it), and where the slider was is remembered for next time
+    app._closeness_moved(100)
+    assert app.closeness_text.get() == "only the best"
+    app.closeness_settled()
+    bench.settle()
+    assert [r.name for r in app.rows] == ["red.png"] and "weaker matches are hidden" in app.message.get()
+    from dugup import remember
+    assert remember.read(app.service.layout.root)["picture_closeness"] == 100
+    app._closeness_moved(0)
+    app.closeness_settled()
+    bench.settle()
+    assert [r.name for r in app.rows] == names and "weaker matches are hidden" not in app.message.get()
     # a thumbnail arrives through the events and the grid redraws without complaint
     for _ in range(100):
         app.drain()
@@ -1683,3 +1698,12 @@ def test_quit_dugup_anywhere_closes_this_window_and_asks_everything_else_to_clos
     second.app.quit_all()
     assert second.app.closed and asked == ["quit"]
     assert quitsignal.asked_since(second.layout.root, second.app.quit_listener.started - 1), "the others are told"
+
+
+def test_the_picture_matches_slider_remembers_a_sane_position():
+    assert w.kept_closeness({}) == w.CLOSENESS_DEFAULT
+    assert w.kept_closeness({"picture_closeness": 70}) == 70
+    assert w.kept_closeness({"picture_closeness": 400}) == 100 and w.kept_closeness({"picture_closeness": -3}) == 0
+    assert w.kept_closeness({"picture_closeness": "loose"}) == w.CLOSENESS_DEFAULT, "a damaged memory is no memory"
+    assert w.closeness_words(0) == "all shown" and w.closeness_words(100) == "only the best"
+    assert w.closeness_words(55) == "55 of 100"

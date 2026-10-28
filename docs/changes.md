@@ -4,6 +4,10 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
+## 0.2.10 beta (in progress)
+
+**Picture search shows the real matches, not 800 pictures.** A search by pictures used to list every candidate it looked at, so unrelated pictures followed the real matches. Now it shows the pictures that stand out from the rest of that search. The **Picture matches** slider, beside the **Pictures** button, sets how strict that is, and DugUp remembers where you left it. See [Search for pictures](user-guide.md#search-for-pictures).
+
 ## 0.2.9 beta — October 2026
 
 **One DugUp in the tray, the newest.** With two copies of DugUp, such as an installed one and one run from source, both could sit in the tray and compete for the search key, and **Quit DugUp** in one never reached the other. A starting tray now finds the trays of other copies, asks their versions, and the newest stays: a newer copy closes the older one cleanly and takes over; an older copy brings up the running tray's search box instead. See [One DugUp in the tray](user-guide.md#one-dugup-in-the-tray).

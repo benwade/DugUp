@@ -408,6 +408,10 @@ class FakeStore:
                 continue
             scored.append((float(closeness(dequantize(sketch, LOOKS_DIMS, [scale]), np.asarray(question, dtype=np.float32))[0]), i))
         scored.sort(key=lambda t: (-t[0], t[1]))
+        from dugup.sketches import floor
+        line = floor([t[0] for t in scored], filters.closeness) if filters is not None else None
+        if line is not None:
+            scored = [t for t in scored if t[0] >= line] or scored[:1]
         keys = sort_keys(sort, descending, SORT_COLUMNS)
         if keys != [("rank", False)]:
             for key, down in reversed(keys):
