@@ -3,6 +3,7 @@ only, passages not whole files, models let go when idle."""
 
 import dataclasses
 import io
+import threading
 import json
 import os
 import subprocess
@@ -150,7 +151,8 @@ def test_models_are_let_go_after_the_idle_minutes(tmp_path):
 
 
 def test_the_folder_setting_is_read_generously():
-    assert folders_allowed("") is None and folders_allowed(" ; ") is None
+    assert folders_allowed("") is None and folders_allowed("   ") is None, "only an empty setting means every folder"
+    assert folders_allowed(" ; ") == [], "a setting that names no folder shows none (security review, 2026-10-28)"
     assert folders_allowed('C:\\Docs; "D:\\My Notes" ;') == [os.path.abspath("C:\\Docs"), os.path.abspath("D:\\My Notes")]
 
 
@@ -297,3 +299,99 @@ def test_with_no_index_the_answer_says_which_program_is_running_and_why_that_fol
     assert "command line (--data-dir)" in said, "the rule that chose the folder"
     assert sys.executable in said and os.path.dirname(os.path.abspath(dugup.__file__)) in said
     assert "older DugUp server may still be running" in said
+
+
+# ---- permissions that cannot be read, or that change mid-search (security review, 2026-10-28) ----------------
+
+def test_a_folder_list_that_cannot_be_read_turns_assistant_search_off(made, tmp_path):
+    """A list written as ["C:/allowed"] instead of one text fell back to the default, "" (every folder), and
+    assistant search stayed on: a permission that could not be read was opened wide. Now it is closed, and says why."""
+    from dugup import assistantsetup as setup
+    from dugup.settings import FOLDERS_UNREADABLE, from_mapping
+    settings, notes = from_mapping({"mcp_enabled": True, "mcp_folders": ["C:/allowed"]})
+    assert settings.mcp_enabled is False and FOLDERS_UNREADABLE in notes
+    settings, notes = from_mapping({"mcp_enabled": True, "mcp_folders": "C:/allowed"})
+    assert settings.mcp_enabled is True and notes == [], "a folder list written as text is read as before"
+    tools, _, _, _ = made
+    layout = tools.service.layout
+    Path(layout.config).write_text('mcp_enabled = true\nmcp_folders = ["C:/allowed"]\n', encoding="utf-8")
+    guarded = Tools(tools.service, lambda: setup.load(layout), start_idle_watch=False,
+                    explain_off=lambda: setup.problem(layout))
+    try:
+        with pytest.raises(Refused) as caught:
+            guarded.search("rent")
+        assert FOLDERS_UNREADABLE in str(caught.value), "the assistant can tell the person what to fix"
+    finally:
+        guarded.close()
+    code, said = call(["mcp", "status"], tmp_path)
+    assert "mcp_folders could not be read" in said and "Assistant search is off" in said
+
+
+def _held(tools, monkeypatch, name):
+    """Make the service's `name` wait inside, until the test lets it go: the answer is held while the test
+    changes the permission, so nothing depends on which thread is faster."""
+    inside, release = threading.Event(), threading.Event()
+    real = getattr(tools.service, name)
+
+    def held(*args, **kwargs):
+        inside.set()
+        release.wait(30)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(tools.service, name, held)
+    return inside, release
+
+
+def _in_background(call):
+    outcome = {}
+
+    def run():
+        try:
+            outcome["answer"] = call()
+        except Refused as exc:
+            outcome["refused"] = str(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread, outcome
+
+
+def test_turning_assistant_search_off_stops_a_search_already_running(made, monkeypatch):
+    tools, switch, _, _ = made
+    inside, release = _held(tools, monkeypatch, "search")
+    thread, outcome = _in_background(lambda: tools.search("rent"))
+    assert inside.wait(30), "the search reached the service"
+    switch.set(mcp_enabled=False)
+    release.set()
+    thread.join(30)
+    assert outcome == {"refused": OFF}, "nothing found under the old permission is handed back"
+
+
+def test_narrowing_the_folders_stops_a_search_already_running(made, monkeypatch):
+    tools, switch, shared, _ = made
+    inside, release = _held(tools, monkeypatch, "search")
+    thread, outcome = _in_background(lambda: tools.search("rent"))
+    assert inside.wait(30)
+    switch.set(mcp_folders=str(shared))
+    release.set()
+    thread.join(30)
+    assert "changed while this was running" in outcome.get("refused", "")
+
+
+def test_turning_off_stops_status_and_passages_already_running(made, monkeypatch):
+    tools, switch, shared, _ = made
+    inside, release = _held(tools, monkeypatch, "indexing_status")
+    thread, outcome = _in_background(tools.status)
+    assert inside.wait(30)
+    switch.set(mcp_enabled=False)
+    release.set()
+    thread.join(30)
+    assert outcome == {"refused": OFF}
+    switch.set(mcp_enabled=True)
+    inside, release = _held(tools, monkeypatch, "more_evidence")
+    thread, outcome = _in_background(lambda: tools.passages(str(shared / "rent.txt"), "rent"))
+    assert inside.wait(30)
+    switch.set(mcp_enabled=False)
+    release.set()
+    thread.join(30)
+    assert outcome == {"refused": OFF}

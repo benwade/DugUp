@@ -40,6 +40,12 @@ def load(layout) -> "settings_module.Settings":
     return settings_module.load(layout.config)[0]
 
 
+def problem(layout) -> str:
+    """Why assistant search is off although it was turned on, when that is so: an unreadable folder list."""
+    notes = settings_module.load(layout.config)[1]
+    return settings_module.FOLDERS_UNREADABLE if settings_module.FOLDERS_UNREADABLE in notes else ""
+
+
 def change(layout, enabled: Optional[bool] = None, folders: Optional[Sequence[str]] = None) -> "settings_module.Settings | Failure":
     """Save the switch and/or the folder list in config.toml. Takes effect at once, even for a connected assistant."""
     changes: Dict[str, str] = {}

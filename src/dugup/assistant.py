@@ -51,10 +51,12 @@ class Refused(Exception):
 
 
 def folders_allowed(text: str) -> Optional[List[str]]:
-    """The `mcp_folders` setting as a list, or None for every indexed folder."""
-    found = [part.strip().strip('"') for part in (text or "").split(";")]
-    found = [os.path.abspath(part) for part in found if part]
-    return found or None
+    """The `mcp_folders` setting as a list, or None for every indexed folder. Only an empty setting means every
+    folder: one that holds something but names no folder (" ; ", say) is read as no folder at all."""
+    if not (text or "").strip():
+        return None
+    found = [part.strip().strip('"') for part in text.split(";")]
+    return [os.path.abspath(part) for part in found if part]
 
 
 def _day(text: Optional[str], name: str) -> Optional[float]:
@@ -116,9 +118,10 @@ class Tools:
     config.toml on each call, so a change takes effect at once); `clock` is for tests."""
 
     def __init__(self, service, load_settings: Callable[[], object], clock: Callable[[], float] = time.monotonic,
-                 start_idle_watch: bool = True) -> None:
+                 start_idle_watch: bool = True, explain_off: Optional[Callable[[], str]] = None) -> None:
         self.service = service
         self.load_settings = load_settings
+        self.explain_off = explain_off or (lambda: "")
         self.clock = clock
         self._worker = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="dugup-assistant")
         self._last_model_use: Optional[float] = None
@@ -132,8 +135,16 @@ class Tools:
     def _settings(self):
         settings = self.load_settings()
         if not getattr(settings, "mcp_enabled", False):
-            raise Refused(OFF)
+            why = self.explain_off()
+            raise Refused(f"{OFF} ({why})" if why else OFF)
         return settings
+
+    def _still_allowed(self, allowed: Optional[List[str]]) -> None:
+        """Asked again once the work is done, before anything is handed back: switched off, or the folders changed,
+        while a search waited (a model loading, say), and nothing found under the old permission goes out."""
+        now = self._allowed(self._settings())
+        if now != allowed:
+            raise Refused("the folders assistants may see were changed while this was running; ask again")
 
     def _allowed(self, settings) -> Optional[List[str]]:
         return folders_allowed(getattr(settings, "mcp_folders", ""))
@@ -205,6 +216,7 @@ class Tools:
         answer = self._run(work)
         if isinstance(answer, Failure):
             raise Refused(answer.detail)
+        self._still_allowed(allowed)
         found, total, coverage = answer
         result: Dict[str, object] = {"query": query, "how": how, "results": found, "total_matches": total,
                                      "shown": len(found)}
@@ -220,8 +232,9 @@ class Tools:
     def passages(self, path: str, words: str, limit: int = 5) -> Dict[str, object]:
         """More places in one file where the words are found, a passage each (never the whole file)."""
         settings = self._settings()
+        allowed = self._allowed(settings)
         path = os.path.abspath((path or "").strip().strip('"'))
-        if not self._visible(path, self._allowed(settings)):
+        if not self._visible(path, allowed):
             raise Refused("that file is not in a folder the person has allowed assistants to search")
         words = (words or "").strip()
         if not words:
@@ -240,6 +253,7 @@ class Tools:
             return found
 
         found = self._run(work)
+        self._still_allowed(allowed)
         if found is None:
             raise Refused("that file is not in the index")
         return {"path": path, "words": words, "passages": found}
@@ -269,7 +283,9 @@ class Tools:
                                       "ready": self.service.looks_ready() is True},
             }
 
-        return self._run(work)
+        answer = self._run(work)
+        self._still_allowed(allowed)
+        return answer
 
     # ---- one result, as the assistant sees it ---------------------------------------------------------------
 

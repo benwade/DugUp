@@ -6,6 +6,10 @@ Release notes and performance improvements for DugUp.
 
 ## 0.2.10 beta (in progress)
 
+**Cloud search permissions are stricter.** A folder list in `config.toml` that can't be read now turns cloud search off, with a note saying why, instead of opening every folder. Turning cloud search off, or narrowing its folders, now also stops a search that was already running from returning its results.
+
+**Files are only read under limits.** If DugUp can't place its file reader under the limits that end it and everything it starts, it stops instead of reading without them. The README now explains what reading files automatically means for security, and how to reduce the risk.
+
 **Picture search shows the real matches, not 800 pictures.** A search by pictures used to list every candidate it looked at, so unrelated pictures followed the real matches. Now it shows the pictures that stand out from the rest of that search. The **Picture matches** slider, beside the **Pictures** button, sets how strict that is, and DugUp remembers where you left it. See [Search for pictures](user-guide.md#search-for-pictures).
 
 ## 0.2.9 beta — October 2026
