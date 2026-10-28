@@ -190,6 +190,9 @@ class Tray:
     def _summoned(self, command: str) -> str:
         if command == "ping":
             return "pong"
+        if command == "version":        # the newest version keeps the tray (trays.py)
+            from . import __version__
+            return __version__
         if command == "status":
             return "updating" if self.watcher.running else "idle"
         if command == "state":          # a sentence for a person (the remote); "status" stays a word for programs

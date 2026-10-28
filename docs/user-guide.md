@@ -118,6 +118,14 @@ The box looks for file names first, starting with the folder last selected in th
 
 Change the shortcut using the `hotkey` setting, for example to `Ctrl+Alt+D`. DugUp reports if another program already uses the chosen shortcut. On Linux, use your desktop's keyboard settings to bind a shortcut to `dugup popup`.
 
+### One DugUp in the tray
+
+Only one DugUp runs in the tray at a time, and it is always the newest version you have. This matters when you have more than one copy, for example an installed DugUp and a newer one you run from source:
+
+- **Starting a newer copy** closes the older tray the usual way (an update under way stops cleanly and keeps what is done) and takes over the search key. The search box says which copy it replaced.
+- **Starting an older copy, or the same version again,** brings up the running tray's search box instead of starting a second tray.
+- **If a tray can't be reached,** DugUp names it and gives the command to end it, rather than ending anything itself.
+
 ### Control the tray with DugUp Remote
 
 Open **DugUp Remote** from the Windows Start menu to start the tray, open either search window, update the index, or quit DugUp. Closing the remote leaves the tray running. The remote also holds the [cloud search](#let-claude-search-for-you) switch and folder list.

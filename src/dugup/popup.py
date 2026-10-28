@@ -37,6 +37,7 @@ class Popup:
         self.rows: List[SearchRow] = []
         self.pending: Optional[str] = None
         self.last_query = ""
+        self.notice = ""        # a message for the person (another tray was closed, say): shown until they search
         self.opener: Optional[threading.Thread] = None
         top = self.top = tk.Toplevel(root)
         top.withdraw()
@@ -156,8 +157,9 @@ class Popup:
         self.last_query = words
         self.rows = []
         if not words:
-            self._fill([], "")
+            self._fill([], self.notice)       # an empty search (the search key's own release, say) keeps the notice
             return
+        self.notice = ""
         found: List[SearchRow] = []
         seen = set()
         folder = self.folder_first() or ""
@@ -192,6 +194,11 @@ class Popup:
             self.list.selection_set("0")
             self.list.focus("0")
         self.note.set(note or "Enter opens the chosen file; Esc closes this box.")
+
+    def tell(self, text: str) -> None:
+        """Say something in the note line that stays until the person searches."""
+        self.notice = text
+        self.note.set(text or "Enter opens the chosen file; Esc closes this box.")
 
     def _move(self, step: int) -> None:
         if not self.rows:
