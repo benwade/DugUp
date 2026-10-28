@@ -88,6 +88,20 @@ MODE_WHERE = {"meaning": "By meaning", "both": "Words and meaning", "looks": "By
 KIND_LABELS = (("PDF", FileKind.PDF.value), ("Office", FileKind.OFFICE.value), ("Text", FileKind.TEXT.value),
                ("Pictures", FileKind.IMAGE.value))
 ALL_FOLDERS = "All indexed folders"
+CLOSENESS_DEFAULT = 50     # the Picture matches slider, 0 (every candidate) to 100 (only the best); remembered
+CLOSENESS_SETTLE_MS = 400  # a search by pictures runs again this long after the slider stops moving
+
+
+def kept_closeness(memory) -> int:
+    """The slider position remembered from last time, or the default when there is none (or it is damaged)."""
+    try:
+        return min(100, max(0, int(memory.get("picture_closeness", CLOSENESS_DEFAULT))))
+    except (TypeError, ValueError):
+        return CLOSENESS_DEFAULT
+
+
+def closeness_words(value: int) -> str:
+    return "all shown" if value <= 0 else "only the best" if value >= 100 else f"{value} of 100"
 
 
 def build_filters(folder: str = "", where: str = WHERE_ANYWHERE, kinds: Sequence[str] = (), after: str = "",
@@ -347,6 +361,17 @@ class App:
             button = ttk.Radiobutton(modes, text=label, value=value, variable=self.mode, command=self._mode_chosen)
             button.pack(side="left", padx=(0, 12))
             self.mode_buttons[value] = button
+        # how many pictures a search by pictures shows: the line is drawn within each search (sketches.floor)
+        ttk.Label(modes, text="Picture matches:  more").pack(side="left", padx=(12, 2))
+        self.closeness = tk.IntVar(value=kept_closeness(remember.read(self.service.layout.root)))
+        self.closeness_scale = ttk.Scale(modes, from_=0, to=100, orient="horizontal", length=150,
+                                         command=self._closeness_moved)
+        self.closeness_scale.set(self.closeness.get())
+        self.closeness_scale.pack(side="left")
+        ttk.Label(modes, text="fewer").pack(side="left", padx=(2, 6))
+        self.closeness_text = tk.StringVar(value=closeness_words(self.closeness.get()))
+        ttk.Entry(modes, textvariable=self.closeness_text, state="readonly", width=13).pack(side="left")
+        self._closeness_pending = None
 
         ttk.Label(form, text="Look in:").grid(row=2, column=0, sticky="w")
         self.folder_box = ttk.Combobox(form, textvariable=self.folder, state="readonly", width=24)
@@ -800,6 +825,30 @@ class App:
         else:
             self._fetch(0)                # a new turn: a sketch or search still in flight for an older one is dropped
 
+    def picture_closeness(self) -> float:
+        return self.closeness.get() / 100.0
+
+    def _closeness_moved(self, value) -> None:
+        """The slider moved: remember where, and run a search by pictures again once it settles."""
+        try:
+            chosen = min(100, max(0, int(round(float(value)))))
+        except (TypeError, ValueError):
+            return
+        if chosen == self.closeness.get():
+            return
+        self.closeness.set(chosen)
+        self.closeness_text.set(closeness_words(chosen))
+        remember.write(self.service.layout.root, picture_closeness=chosen)
+        if self._closeness_pending is not None:
+            self.root.after_cancel(self._closeness_pending)
+        self._closeness_pending = self.root.after(CLOSENESS_SETTLE_MS, self.closeness_settled)
+
+    def closeness_settled(self) -> None:
+        """Show the pictures again with the new line, if the results are from a search by pictures."""
+        self._closeness_pending = None
+        if self.last is not None and self.last[1] is not None and self.last[1].where == WHERE_LOOKS:
+            self._fetch(0)
+
     def like_selected(self) -> None:
         """Pictures that look like the selected one: the results become its likes, closest first."""
         row = self.selected()
@@ -1070,6 +1119,8 @@ class App:
         if offset == 0:
             self.search_number += 1
         words, filters, question = self.last    # type: ignore[misc]
+        if filters is not None and filters.where == WHERE_LOOKS:          # likes of a picture are by looks too
+            filters = dataclasses.replace(filters, closeness=self.picture_closeness())
         like_id = self.like_of.file_id if self.like_of is not None else None
         order = self.order.as_request()
         by_meaning = filters is not None and filters.where in (WHERE_MEANING, WHERE_BOTH)
@@ -1122,6 +1173,8 @@ class App:
         elif by_looks:
             if could > done:
                 coverage = f"  (sketches cover {done:,} of {could:,} picture(s) so far)"
+            if self.closeness.get() > 0:
+                coverage += "  (weaker matches are hidden: move Picture matches toward more to see them)"
         self._offer_pictures(pictures > 0 and self.total == 0)
         if self.total == 0 and pictures > 0:
             self.say(f"No file has the words: {words}. To find pictures that show it, choose Search pictures instead "

@@ -1522,6 +1522,9 @@ class SqliteStore:
         vectors = sketches.dequantize(b"".join(full[i][1] for i in order), len(asked), [full[i][0] for i in order])
         scores = sketches.closeness(vectors, asked)
         scored = sorted(zip((float(x) for x in scores), order), key=lambda t: (-t[0], t[1]))
+        line = sketches.floor(scores, filters.closeness) if filters is not None else None
+        if line is not None:                     # the weaker matches go before any other order is applied
+            scored = [t for t in scored if t[0] >= line] or scored[:1]
         rows_by_id: Dict[int, sqlite3.Row] = {}
         for at in range(0, len(order), 400):
             chunk = order[at:at + 400]

@@ -179,8 +179,12 @@ class SearchFilters:
                                             # folders that cannot be reached right now (`away` says which)
     away: Tuple[str, ...] = ()              # folders not reachable now; the Service fills this in when
                                             # present_only is set, so the store can leave their files out
+    closeness: float = 0.0                  # pictures by looks: 0 shows every candidate; toward 1, only pictures
+                                            # that stand out above the usual one in this search (sketches.floor)
 
     def __post_init__(self) -> None:
+        if not 0.0 <= self.closeness <= 1.0:
+            raise ValueError("closeness must be from 0 to 1")
         if self.where not in WHERE_CHOICES:
             raise ValueError(f"where must be one of {', '.join(WHERE_CHOICES)}")
         known = {k.value for k in FileKind}

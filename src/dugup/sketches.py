@@ -10,7 +10,7 @@ keeps the model's name beside them, and sketches from different models are never
 
 from __future__ import annotations
 
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 FINGERPRINT = 96            # numbers in the thin fingerprint (the first ones; the larger model's can be cut short)
 CANDIDATES = 800            # how many the fingerprint scan hands on to be re-scored in full
@@ -107,6 +107,23 @@ def scan(fingerprints, question, keep: int = CANDIDATES):
         return np.zeros(0, dtype=np.int64)
     top = np.argpartition(-scores, keep - 1)[:keep] if keep < scores.shape[0] else np.arange(scores.shape[0])
     return top[np.argsort(-scores[top])]
+
+
+def floor(scores, strictness: float) -> Optional[float]:
+    """The lowest score a picture may have and still be shown, for a strictness from 0 to 1; None shows all.
+
+    Scores from the picture model mean different things in different searches: a description of a zebra
+    scores its zebras near 0.30 and everything else near 0.23, while a picture compared with pictures scores
+    near 0.8. So the line is drawn within each search: from the usual score among the candidates (the median,
+    which is what an unrelated picture gets) to the best one. 0 is the usual score itself, 1 is the best."""
+    import numpy as np
+    if strictness <= 0 or len(scores) == 0:
+        return None
+    values = np.asarray(scores, dtype=np.float64)
+    usual, best = float(np.median(values)), float(values.max())
+    if best <= usual:
+        return None                                  # nothing stands out: drawing a line would only guess
+    return usual + min(strictness, 1.0) * (best - usual)
 
 
 def closeness(full, question):

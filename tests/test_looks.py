@@ -280,6 +280,13 @@ def test_searching_by_looks_finds_the_closest_pictures_with_filters_and_leaves_t
     assert [r.name for r in store.search_looks(question, model, limit=2, offset=1).rows] == ["a.png", "b.png"]
     assert [r.name for r in store.search_looks(question, model, filters=SearchFilters(modified_after=15.0)).rows] == ["b.png", "c.png"]
     assert [r.name for r in store.search_looks(question, model, sort="modified", descending=True).rows] == ["c.png", "b.png", "a.png", "d.png"]
+    # closeness: the pictures that stand out above the usual one in this search; the weaker ones are not shown
+    closer = lambda c, **kw: store.search_looks(question, model, filters=SearchFilters(closeness=c), **kw)
+    assert [r.name for r in closer(0.0).rows] == ["d.png", "a.png", "b.png", "c.png"], "0 shows every candidate"
+    assert [r.name for r in closer(0.5).rows] == ["d.png", "a.png"] and closer(0.5).total == 2
+    assert [r.name for r in closer(1.0).rows] == ["d.png"], "1 keeps only the best"
+    assert [r.name for r in closer(0.5, sort="modified", descending=True).rows] == ["a.png", "d.png"], \
+        "the weaker matches go first, then the order asked for"
     assert store.search_looks(question, "other:model").total == 0
     like = store.look_of(rows[0][0])
     assert like is not None and float(like @ question) > 0.85 and abs(float(np.linalg.norm(like)) - 1.0) < 0.02

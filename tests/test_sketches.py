@@ -274,3 +274,18 @@ def test_a_meaning_search_can_be_ordered_like_a_word_search_the_score_still_choo
         assert both == ["b.txt", "c.txt", "a.txt"]
         with pytest.raises(ValueError):
             store.search_meaning(question, "larger:768", sort="colour")
+
+
+def test_the_line_for_pictures_is_drawn_within_each_search():
+    """Michael's zebra search (2026-10-26): seven zebras near 0.30, everything else 0.27 and below. The line sits
+    between the usual score (the median) and the best, so the same setting works whatever the scale."""
+    from dugup.sketches import floor
+    zebras = [0.30, 0.30, 0.30, 0.30, 0.30, 0.30, 0.29]
+    others = [0.27, 0.27, 0.25, 0.24] + [0.22] * 40 + [0.20] * 40
+    line = floor(zebras + others, 0.75)
+    assert 0.27 < line < 0.29, "the zebras stay, the rest go"
+    scaled = floor([0.5 + s * 1.5 for s in zebras + others], 0.75)          # the same search on another scale
+    assert scaled == pytest.approx(0.5 + line * 1.5)
+    assert floor(zebras + others, 0) is None and floor([], 0.5) is None
+    assert floor([0.3, 0.3, 0.3], 0.5) is None, "nothing stands out: no line is drawn"
+    assert floor(zebras + others, 1.0) == pytest.approx(0.30)
