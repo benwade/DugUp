@@ -8,6 +8,8 @@ Release notes and performance improvements for DugUp.
 
 **The Picture matches slider sits beside the pictures.** It moved from the search form to the left edge of the **Pictures** tab, upright and larger: up for fewer pictures, down for more.
 
+**The installer reminds you to restart the Claude app.** Installing closes the Claude desktop app's DugUp connection, and the app doesn't restart it by itself, so it reported that DugUp had stopped. The installer's last page now says to restart the Claude app if it was connected.
+
 ## 0.2.10 beta — October 2026
 
 **Cloud search permissions are stricter.** A folder list in `config.toml` that can't be read now turns cloud search off, with a note saying why, instead of opening every folder. Turning cloud search off, or narrowing its folders, now also stops a search that was already running from returning its results.

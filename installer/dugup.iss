@@ -33,7 +33,11 @@ SetupLogging=yes
 
 [Messages]
 WelcomeLabel2=This installs DugUp {#AppVersion}: find your files by what is in them.%n%nEverything goes into one folder for your user account, with no administrator rights needed. Nothing you have leaves this computer unless you turn on cloud search for Claude (it is off until you do).%n%nPlease note: DugUp's index is not yet encrypted (encryption is planned, not implemented). It holds the text of the files you index, so keep it on an encrypted drive (BitLocker or Device encryption). The README explains more.%n%nDugUp is provided "as is", without warranty of any kind, express or implied, including any warranty that it is fit for a particular purpose, that it works as described, or that it is free of errors. You use it at your own risk, and the author is not liable for any damage or loss arising from its use, including lost or changed files. The license on the next page, which you must accept to install DugUp, sets out these terms in full: please read its "No Liability" section.
+; Installing closes every program using DugUp's files, the Claude app's DugUp connection too (CloseApplications), and the app
+; does not start that connection again: it reports that DugUp stopped. Say so where the person looks last.
 
+FinishedLabel=Setup has finished installing [name] on your computer. The application may be launched by selecting the installed shortcuts.%n%nIf the Claude desktop app was connected to DugUp, restart it: quit it from its icon by the clock, then open it again. Installing closed its DugUp connection, and the app does not start it again by itself.
+FinishedLabelNoIcons=Setup has finished installing [name] on your computer.%n%nIf the Claude desktop app was connected to DugUp, restart it: quit it from its icon by the clock, then open it again. Installing closed its DugUp connection, and the app does not start it again by itself.
 [Tasks]
 Name: "desktopicon"; Description: "Put DugUp on the desktop"; Flags: unchecked
 Name: "trayatlogin"; Description: "Start DugUp in the tray when I log in (one key then searches from anywhere)"; Flags: unchecked
