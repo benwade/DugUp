@@ -6,7 +6,7 @@ Find files by what you remember about them: words in a document, text on a scann
 
 Your files stay on your computer, where all indexing and search processing happens. No account, telemetry or crash reporting — and no cloud service needed to search your files.
 
-**Beta 0.2.8 · Windows 11 · Linux supported, with less desktop testing**
+**Beta 0.2.9 · Windows 11 · Linux supported, with less desktop testing**
 
 ## What you can do
 

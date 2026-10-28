@@ -4,7 +4,7 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
-## 0.2.9 beta (in progress)
+## 0.2.9 beta — October 2026
 
 **One DugUp in the tray, the newest.** With two copies of DugUp, such as an installed one and one run from source, both could sit in the tray and compete for the search key, and **Quit DugUp** in one never reached the other. A starting tray now finds the trays of other copies, asks their versions, and the newest stays: a newer copy closes the older one cleanly and takes over; an older copy brings up the running tray's search box instead. See [One DugUp in the tray](user-guide.md#one-dugup-in-the-tray).
 
