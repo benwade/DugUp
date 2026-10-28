@@ -119,7 +119,7 @@ def cmd_tray(args, env, out, environ) -> int:
     for line in tray.status_lines():
         safe_write(line, out)
     if notice:                                   # a tray started from a shortcut has no console: the search box says it
-        tray.popup.note.set(" ".join(notice))
+        tray.popup.tell(" ".join(notice))
     try:
         root.mainloop()
     except KeyboardInterrupt:

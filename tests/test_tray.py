@@ -179,6 +179,15 @@ def test_the_tray_takes_commands_and_the_popup_finds_files_by_name_then_by_words
         assert summons.summon(stage.layout.root, "ping") == "pong", "another process can reach it"
         from dugup import __version__
         assert summons.summon(stage.layout.root, "version") == __version__, "a starting tray compares versions"
+        # a notice (another tray closed) survives the empty search the search key's own release makes, until a search
+        tray.popup.tell("Closed DugUp 0.2.8 (x) and took over the tray.")
+        tray.popup.search_now()
+        assert tray.popup.note.get().startswith("Closed DugUp 0.2.8")
+        tray.popup.query.set("needle")
+        tray.popup.search_now()
+        tray.popup.query.set("")
+        tray.popup.search_now()
+        assert tray.popup.note.get() == "Enter opens the chosen file; Esc closes this box.", "gone once searched"
         # the key fires on another thread; the tray takes it on its own thread and shows the popup
         hotkeys[0][1]()
         tray._poll()
