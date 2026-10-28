@@ -235,8 +235,24 @@ _SIMPLE = {f.name: f.type for f in fields(Settings) if f.name != "extensions"}
 _TYPES = {"int": int, "float": (int, float), "str": str, "bool": bool}
 
 
+FOLDERS_UNREADABLE = ("mcp_folders could not be read, so assistant search is off until it is fixed: write the folders "
+                      "as one text, separated by ;, or choose them again with: dugup mcp folders")
+
+
 def from_mapping(data: Mapping[str, object]) -> Tuple[Settings, List[str]]:
-    """Settings from a parsed config file, plus a note for every key that was not understood."""
+    """Settings from a parsed config file, plus a note for every key that was not understood.
+
+    Every unreadable value falls back to its default, except where the default would widen what an assistant
+    may see: an empty `mcp_folders` means every indexed folder, so a folder list that cannot be read (a list
+    written as ["C:/a"], say) turns assistant search off instead. A permission that cannot be read is closed."""
+    settings, notes = _from_mapping(data)
+    if "mcp_folders" in data and settings.mcp_folders != data["mcp_folders"] and settings.mcp_enabled:
+        settings = replace(settings, mcp_enabled=False)
+        notes.append(FOLDERS_UNREADABLE)
+    return settings, notes
+
+
+def _from_mapping(data: Mapping[str, object]) -> Tuple[Settings, List[str]]:
     notes: List[str] = []
     changes: Dict[str, object] = {}
     for key, value in data.items():

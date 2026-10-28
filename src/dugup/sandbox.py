@@ -31,6 +31,8 @@ from .protocols import Limits, StopSignal
 from .shapes import Failure, FailureReason
 
 READY_SECONDS = 60.0   # how long a new worker may take to say it is ready (a cold disk, an antivirus scan)
+UNCONTAINED = ("files were not read: the reading program could not be placed under the limits that end it and "
+               "everything it starts (a Windows Job Object), and DugUp does not read files without them")
 _END = object()
 
 
@@ -94,6 +96,11 @@ class SubprocessSandbox:
                                   env=self._environment(), memory_mb=memory_mb if launcher.IS_WINDOWS else None)
         if isinstance(program, Failure):
             return program
+        if not program.contained:
+            # files are read here, and a file can be made to attack the program that reads it: never without the
+            # limits that end the worker and everything it starts (Windows Job Object; its own session elsewhere)
+            program.close()
+            return Failure(FailureReason.OTHER, UNCONTAINED)
         self.started += 1
         worker = _Worker(program, {})
         threading.Thread(target=_read_lines, args=(program.process.stdout, worker.lines), daemon=True).start()

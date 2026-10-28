@@ -57,6 +57,8 @@ Indexing and searching read your files. Renaming, trashing and duplicate cleanup
 
 **Cloud search access is off unless you turn it on.** When it is on, Claude can search your index, read-only, in the folders you choose. What Claude is shown, file names, paths and the passages that matched, leaves your computer, as a file you attach to a conversation would. Turn it off at any time from the same switch; it takes effect immediately.
 
+**Reading a file is opening it.** To index a file, DugUp reads it with ordinary PDF, picture and Office readers, as a viewer would, and it does this automatically for every file in the folders you choose. A file deliberately made to attack one of those readers could act with your permissions, as it could if you opened it yourself. DugUp reads files in separate programs with time and memory limits, and won't read without those limits, but they are not a security boundary against such a file. To reduce the risk, keep DugUp up to date (updates bring patched readers) and [leave folders of untrusted downloads out](docs/user-guide.md#leave-a-folder-out) of the index, or index their names only.
+
 Search, OCR and image processing run locally. Optional models are downloaded during setup or when needed. If you deliberately enable a remote server for the experimental plain-words reader, it receives your query and indexed folder paths, but not your files. [Network and storage details](docs/technical.md#network-and-privacy).
 
 ## Status and help

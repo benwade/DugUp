@@ -76,6 +76,9 @@ def _status(args, environ, out) -> int:
     layout = _layout(args, environ, create=False)
     current = setup.load(layout)
     safe_write(f"Assistant search is {'ON' if current.mcp_enabled else 'off'}.", out)
+    trouble = setup.problem(layout)
+    if trouble:
+        safe_write(f"Note: {trouble}.", out)
     if current.mcp_enabled:
         _say_folders(current, out)
     path = claude_config_path(environ)
@@ -156,7 +159,7 @@ def _serve(args, environ) -> int:
         return setup.load(layout)
 
     with service:
-        serve(service, load_settings)
+        serve(service, load_settings, explain_off=lambda: setup.problem(layout))
     return 0
 
 

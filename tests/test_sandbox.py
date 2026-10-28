@@ -265,3 +265,27 @@ def test_workers_do_not_outlive_a_program_that_is_killed(marker):
                 os.kill(pid, 9)
             except OSError:
                 pass
+
+
+def test_files_are_never_read_by_a_worker_that_could_not_be_contained(monkeypatch):
+    """Security review, 2026-10-28: when the Windows Job Object could not be made or assigned, the worker ran on
+    without it. A file can be made to attack the program that reads it, so the worker is ended and nothing read."""
+    from dugup import sandbox as sandbox_module
+    real = launcher.launch
+    started = []
+
+    def uncontained(*args, **kwargs):
+        program = real(*args, **kwargs)
+        program.contained = False
+        started.append(program)
+        return program
+
+    monkeypatch.setattr(launcher, "launch", uncontained)
+    box = SubprocessSandbox()
+    try:
+        result = box.run("sandbox_jobs:echo", {"i": 1}, LONG)
+    finally:
+        box.close()
+    assert isinstance(result, Failure) and result.detail == sandbox_module.UNCONTAINED
+    assert started and box.started == 0
+    wait_gone([started[0].pid], "the uncontained worker to be ended")
