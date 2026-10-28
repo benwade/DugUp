@@ -78,7 +78,7 @@ Choose **Pictures** under **Search by** and describe a scene, such as “a dog o
 
 The **Pictures** tab shows matching images as thumbnails. Click one to select it or double-click to open it.
 
-**Picture matches** sets how many pictures you see. Toward **fewer**, only the pictures that stand out from the rest of the search are shown; toward **more**, weaker matches appear too, and at the far left every candidate is listed. The search updates when you let go, and DugUp remembers the setting. If something you expected is missing, move it toward more.
+**Picture matches**, the upright slider at the left of the **Pictures** tab, sets how many pictures you see. Slide it up toward **fewer** and only the pictures that stand out from the rest of the search are shown; slide it down toward **more** and weaker matches appear too, until at the bottom every candidate is listed. The search updates when you let go, and DugUp remembers the setting. If something you expected is missing, move it toward more.
 
 Describe what a picture shows. Counting ("more than two dogs"), "not" and comparisons work poorly with this kind of search.
 

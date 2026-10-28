@@ -4,6 +4,10 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
+## 0.2.11 beta (in progress)
+
+**The Picture matches slider sits beside the pictures.** It moved from the search form to the left edge of the **Pictures** tab, upright and larger: up for fewer pictures, down for more.
+
 ## 0.2.10 beta — October 2026
 
 **Cloud search permissions are stricter.** A folder list in `config.toml` that can't be read now turns cloud search off, with a note saying why, instead of opening every folder. Turning cloud search off, or narrowing its folders, now also stops a search that was already running from returning its results.
