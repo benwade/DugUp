@@ -10,6 +10,7 @@ looks at the running processes themselves. Read-only: it never ends a process, i
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import subprocess
 import sys
@@ -20,9 +21,15 @@ LIST_SECONDS = 20.0          # listing processes takes about a second; give up l
 
 # Windows: one PowerShell call. Single quotes only (doubled inside), so no double quote has to survive the trip
 # through the command line; UTF-8 out, since paths may hold any letter.
-WINDOWS_QUERY = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-                 "Get-CimInstance Win32_Process -Filter 'CommandLine like ''%mcp%serve%''' | "
-                 "Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress")
+def windows_query(like: str) -> str:
+    """The PowerShell listing of the processes whose command line is `like` (a WQL pattern, % for any text)."""
+    return ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+            "Get-CimInstance Win32_Process -Filter 'CommandLine like ''" + like + "''' | "
+            "Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress")
+
+
+SERVER_LIKE = "%mcp%serve%"
+WINDOWS_QUERY = windows_query(SERVER_LIKE)
 
 
 @dataclass(frozen=True)
@@ -61,11 +68,11 @@ def split_command_line(text: str) -> List[str]:
 
 def is_server(parts: Sequence[str]) -> bool:
     """True for `... dugup mcp serve ...` (as `-m dugup` or a `dugup` program), and nothing else."""
-    lowered = [p.lower() for p in parts]
+    lowered = [p.lower() for p in parts]     # ntpath: a Windows command line splits on \ and / alike, on any system
     for i in range(len(lowered) - 1):
         if lowered[i] == "mcp" and lowered[i + 1] == "serve":
             before = lowered[:i]
-            return any(p == "dugup" or os.path.basename(p) in ("dugup", "dugup.exe") for p in before)
+            return any(p == "dugup" or ntpath.basename(p) in ("dugup", "dugup.exe") for p in before)
     return False
 
 
@@ -76,14 +83,14 @@ def _server(pid: int, command_line: str) -> Optional[Server]:
     return Server(int(pid), parts[0], tuple(parts[1:]), command_line)
 
 
-def find(run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run,
-         platform: Optional[str] = None) -> Optional[List[Server]]:
-    """The DugUp servers running now, or None when the processes could not be listed (then nothing is known,
-    which is not the same as none running)."""
+def command_lines(like: str, run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run,
+                  platform: Optional[str] = None) -> Optional[List[Tuple[int, str]]]:
+    """(process id, command line) of the processes running now (on Windows only those whose command line is
+    `like`), or None when the processes could not be listed: then nothing is known, which is not none."""
     platform = platform or sys.platform
     try:
         if platform.startswith("win"):
-            done = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_QUERY],
+            done = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", windows_query(like)],
                        capture_output=True, encoding="utf-8", errors="replace", timeout=LIST_SECONDS,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         else:
@@ -93,11 +100,11 @@ def find(run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run,
         return None
     if done.returncode != 0:
         return None
-    return parse_windows(done.stdout) if platform.startswith("win") else parse_ps(done.stdout)
+    return windows_rows(done.stdout) if platform.startswith("win") else ps_rows(done.stdout)
 
 
-def parse_windows(text: str) -> Optional[List[Server]]:
-    """PowerShell's answer: nothing (no match), one object, or a list of them."""
+def windows_rows(text: str) -> Optional[List[Tuple[int, str]]]:
+    """PowerShell's answer: nothing (no match), one object, or a list of them. None when it cannot be read."""
     text = (text or "").strip()
     if not text:
         return []
@@ -105,32 +112,49 @@ def parse_windows(text: str) -> Optional[List[Server]]:
         found = json.loads(text)
     except ValueError:
         return None
-    rows = found if isinstance(found, list) else [found]
-    servers = []
-    for row in rows:
+    rows: List[Tuple[int, str]] = []
+    for row in found if isinstance(found, list) else [found]:
         if not isinstance(row, dict):
             continue
         try:
-            server = _server(int(row.get("ProcessId")), str(row.get("CommandLine") or ""))
+            rows.append((int(row.get("ProcessId")), str(row.get("CommandLine") or "")))
         except (TypeError, ValueError):
             continue
-        if server is not None:
-            servers.append(server)
-    return servers
+    return rows
+
+
+def ps_rows(text: str) -> List[Tuple[int, str]]:
+    """`ps -axo pid=,args=`: a number, then the command line (unquoted, so a path with spaces splits apart)."""
+    rows: List[Tuple[int, str]] = []
+    for line in (text or "").splitlines():
+        pid, _, command_line = line.strip().partition(" ")
+        if pid.isdigit():
+            rows.append((int(pid), command_line.strip()))
+    return rows
+
+
+def _servers(rows: Optional[Sequence[Tuple[int, str]]]) -> Optional[List[Server]]:
+    if rows is None:
+        return None
+    return [s for s in (_server(pid, line) for pid, line in rows) if s is not None]
+
+
+def find(run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run,
+         platform: Optional[str] = None) -> Optional[List[Server]]:
+    """The DugUp servers running now, or None when the processes could not be listed (then nothing is known,
+    which is not the same as none running)."""
+    return _servers(command_lines(SERVER_LIKE, run, platform))
+
+
+def parse_windows(text: str) -> Optional[List[Server]]:
+    """PowerShell's answer, read as servers."""
+    return _servers(windows_rows(text))
 
 
 def parse_ps(text: str) -> List[Server]:
-    """`ps -axo pid=,args=`: a number, then the command line (unquoted, so a path with spaces splits apart;
-    it is still found, and still told apart from the settings, which is all that is needed here)."""
-    servers = []
-    for line in (text or "").splitlines():
-        pid, _, command_line = line.strip().partition(" ")
-        if not pid.isdigit():
-            continue
-        server = _server(int(pid), command_line.strip())
-        if server is not None:
-            servers.append(server)
-    return servers
+    """`ps`'s answer, read as servers. A path with spaces splits apart; it is still found, and still told apart
+    from the settings, which is all that is needed here."""
+    return _servers(ps_rows(text)) or []
 
 
 def _same_path(a: str, b: str) -> bool:

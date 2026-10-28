@@ -80,10 +80,13 @@ def cmd_tray(args, env, out, environ) -> int:
         answer = summons.summon(layout.root, "quit")
         safe_write("The tray was told to quit." if answer else "No tray is running.", out)
         return 0
-    if summons.summon(layout.root, "ping") == "pong":
-        summons.summon(layout.root, "popup")
-        safe_write("DugUp is already in the tray; its search box was brought up.", out)
-        return 0
+    from .. import __version__, trays
+    settled = trays.settle(layout.root, __version__, summons.summon)   # the newest version keeps the tray
+    notice = settled.lines()
+    for line in notice:
+        safe_write(line, out)
+    if not settled.start:
+        return 0 if settled.brought_up is not None else 1
     try:
         import tkinter
     except ImportError:
@@ -115,6 +118,8 @@ def cmd_tray(args, env, out, environ) -> int:
                             say=lambda text: safe_write(text, out))
     for line in tray.status_lines():
         safe_write(line, out)
+    if notice:                                   # a tray started from a shortcut has no console: the search box says it
+        tray.popup.note.set(" ".join(notice))
     try:
         root.mainloop()
     except KeyboardInterrupt:

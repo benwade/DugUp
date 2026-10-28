@@ -12,6 +12,7 @@ the process table elsewhere), and the tests drive `Watch.check` directly.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import sys
 import threading
@@ -66,7 +67,7 @@ def watched_pid(me: int, parent_of: Callable[[int], Optional[int]], name_of: Cal
     if not parent:
         return None
     in_venv = os.path.normcase(os.path.abspath(executable)) != os.path.normcase(os.path.abspath(base_executable))
-    if in_venv and name_of(parent).lower() == os.path.basename(executable).lower():
+    if in_venv and name_of(parent).lower() == ntpath.basename(executable).lower():   # \ or /
         return parent_of(parent) or None
     return parent
 

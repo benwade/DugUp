@@ -4,6 +4,12 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
+## 0.2.9 beta (in progress)
+
+**One DugUp in the tray, the newest.** With two copies of DugUp, such as an installed one and one run from source, both could sit in the tray and compete for the search key, and **Quit DugUp** in one never reached the other. A starting tray now finds the trays of other copies, asks their versions, and the newest stays: a newer copy closes the older one cleanly and takes over; an older copy brings up the running tray's search box instead. See [One DugUp in the tray](user-guide.md#one-dugup-in-the-tray).
+
+**When Claude finds no index, DugUp says why.** The answer names the program that replied, where its code was loaded from, and the rule that chose its data folder. `dugup mcp status` and **Connect** list any DugUp server still running that the Claude app's settings don't name, with the command to end it, and a server now ends by itself when the app that started it is gone.
+
 ## 0.2.8 beta — October 2026
 
 **The search box reads properly on Windows.** The **Open the main window** button showed no text on Windows, and the line explaining it was cut off on the right. The button now draws its own label, and the explanation, the hint and the cloud search warning each wrap to the box's width. The box also grows to fit them, even if it was made smaller before.

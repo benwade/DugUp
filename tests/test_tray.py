@@ -177,6 +177,8 @@ def test_the_tray_takes_commands_and_the_popup_finds_files_by_name_then_by_words
         assert hotkeys and hotkeys[0][0] == "Win+Shift+F"
         assert "Win+Shift+F brings up" in " ".join(tray.status_lines())
         assert summons.summon(stage.layout.root, "ping") == "pong", "another process can reach it"
+        from dugup import __version__
+        assert summons.summon(stage.layout.root, "version") == __version__, "a starting tray compares versions"
         # the key fires on another thread; the tray takes it on its own thread and shows the popup
         hotkeys[0][1]()
         tray._poll()
