@@ -211,7 +211,7 @@ def test_stats_are_counts_only():
     tree = Tree({"R": [Entry("d", "dir"), Entry("a.txt"), Entry("l", "symlink")], p("d"): [Entry("b.txt")]})
     source = scanner(tree)
     source.scan("R", NO_RULES)
-    assert source.last_stats == {"folders": 2, "files": 2, "links_skipped": 1, "skipped": 0, "vanished": 0, "id_lookups": 0}
+    assert source.last_stats == {"folders": 2, "files": 2, "links_skipped": 1, "skipped": 0, "vanished": 0, "id_lookups": 0, "tool_skipped": 0}
 
 
 def test_stop_is_looked_at_between_entries():
