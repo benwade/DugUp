@@ -1719,8 +1719,8 @@ def test_folder_choices_are_saved_and_loaded_from_the_file_menu_with_problems_sa
     bench.ready()
     app = bench.app
     target = tmp_path / "DugUp folder choices.txt"
-    labels = [app.menu_bar.nametowidget(app.menu_bar.entrycget(0, "menu")).entrycget(i, "label")
-              for i in range(0, 4)]
+    file_menu = app.menu_bar.nametowidget(app.menu_bar.entrycget(0, "menu"))
+    labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) == "command"]
     assert "Save folder choices..." in labels and "Load folder choices..." in labels
     app.about_choices()
     assert bench.told[-1][0] == "About saving folder choices" and "new computer" in bench.told[-1][1]
