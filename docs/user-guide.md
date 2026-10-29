@@ -33,6 +33,15 @@ To keep a folder out of the index, choose **Leave a folder out...** on the **Ind
 
 The **Index** tab lists each folder left out. To take one back, choose it under **Index → Put a folder back**, then **Update the index** to read it again.
 
+
+### Save your folder choices
+
+Your folder choices (which folders are indexed, what is read in each, and what is left out) live inside the index. Save them to a file, and you can set everything up again after rebuilding the index or on a new computer.
+
+- **File → Save folder choices...** writes a text file. Keep it somewhere safe; a cloud drive is fine, since it holds folder names and choices, not the text of your files.
+- **File → Load folder choices...** shows what will change and asks first. Folders that aren't on this computer are listed and left out. Folders indexed now but not in the file stay as they are.
+- **Edit the file in any text editor.** The notes at its top explain each line. Write paths in single quotes, such as `'C:\Users\you\Documents'`. If something is wrong, nothing changes, and DugUp lists every problem with what to fix.
+
 ## Search for a file
 
 Type words in the search box and press **Enter**. Double-click a result to open it. The buttons below the list let you edit the selected file, show it in its folder, or copy its path.
@@ -258,6 +267,13 @@ dugup roots level "D:\Some Folder\Books" names
 dugup roots level "D:\Photos" words+alike
 dugup roots exclude "D:\Some Folder" /Trash Temp
 ```
+
+```powershell
+dugup roots save "D:\Backup\DugUp folder choices.txt"
+dugup roots load "D:\Backup\DugUp folder choices.txt"
+```
+
+`save` writes every folder's choices to a text file you can edit; it never writes over a file unless you add `--replace`. `load` shows what would change; add `--yes` to make the changes.
 
 Indexing choices are `words`, `ocr`, `meaning` and `alike`; combine them with `+`. Use `names` for file names only, or `inherit` to follow the parent folder. Add `--undo` to an exclusion command to remove those exclusion patterns.
 

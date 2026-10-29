@@ -62,6 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
                          help="a folder or file name (skipped wherever it appears), a path below the folder, or a pattern such as *.tmp")
     exclude.add_argument("--undo", action="store_true", help="stop skipping these patterns instead")
     roots_sub.add_parser("list", parents=[common], help="show the folders and when each was last scanned")
+    save = roots_sub.add_parser("save", parents=[common],
+                                help="save every folder's choices to a text file you can read, edit and load again")
+    save.add_argument("file")
+    save.add_argument("--replace", action="store_true", help="write over a file that is there already")
+    load = roots_sub.add_parser("load", parents=[common],
+                                help="set folders up as a saved choices file says (shows what changes; --yes applies)")
+    load.add_argument("file")
+    load.add_argument("--yes", action="store_true", help="apply the changes shown")
     remove = roots_sub.add_parser("remove", parents=[common], help="stop indexing a folder and remove its files from the index")
     remove.add_argument("path")
     remove.add_argument("--keep-index", action="store_true", help="forget the folder but keep what was indexed")
