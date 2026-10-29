@@ -20,7 +20,7 @@ import os
 from dataclasses import replace
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .filesource import compute_changes, differs, excluded, matches_rules
+from .filesource import compute_changes, differs, excluded, included_by_name, matches_rules
 from .protocols import ChangeSet, FileEntry, Listing, ScanRules, Skipped, StopSignal
 from .shapes import Failure, FailureReason
 
@@ -32,6 +32,13 @@ OFFLINE_BITS = FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATT
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 LONG_PATH_THRESHOLD = 240   # Windows: from this length on, paths get the \\?\ prefix for the system calls
+
+
+def is_tool_folder(name: str, path: str) -> bool:
+    """A folder of tool data or downloaded requirements (suggest.tool_folder): by its name, or by an environment
+    marker inside it. Two quick looks at most, and only for a folder whose name says nothing."""
+    from .suggest import tool_folder
+    return tool_folder(name, lambda child: os.path.exists(long_path(os.path.join(path, child)))) is not None
 
 
 def long_path(path: str) -> str:
@@ -107,7 +114,7 @@ class DirectoryScan:
         return replace(entry, file_id=file_id) if file_id else entry
 
     def _walk(self, root: str, rules: ScanRules, stop, ids_for_all: bool) -> "Listing | Failure":
-        stats = {"folders": 0, "files": 0, "links_skipped": 0, "skipped": 0, "vanished": 0, "id_lookups": 0}
+        stats = {"folders": 0, "files": 0, "links_skipped": 0, "skipped": 0, "vanished": 0, "id_lookups": 0, "tool_skipped": 0}
         self.last_stats = stats
         entries: List[FileEntry] = []
         skipped: List[Skipped] = []
@@ -149,8 +156,12 @@ class DirectoryScan:
                 stats["links_skipped"] += 1
                 return
             if entry.is_dir(follow_symlinks=False):
-                if not excluded(rel, rules):
-                    stack.append((path, rel))
+                if excluded(rel, rules):
+                    return
+                if rules.skip_tool and not included_by_name(rel, rules) and is_tool_folder(name, path):
+                    stats["tool_skipped"] += 1
+                    return
+                stack.append((path, rel))
                 return
             if not entry.is_file(follow_symlinks=False) or not matches_rules(rel, rules):
                 return

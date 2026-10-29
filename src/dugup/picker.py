@@ -340,7 +340,7 @@ class Plan:
 def plan_from_guess(tree: Tree, settings=None) -> Plan:
     """The plan a new folder starts with: a guess for each folder directly below it."""
     books = [b.strip() for b in (settings.book_folders if settings else "").split(";") if b.strip()]
-    plan = Plan(tree)
+    plan = Plan(tree, skip_tool=bool(getattr(settings, "skip_tool_data", True)) if settings is not None else True)
     for child in tree.top.sorted_children():
         made = guess(child, books, settings.book_folder_level if settings else LEVEL_NAMES,
                      settings.picture_heavy_fraction if settings else 0.8, settings.picture_heavy_min if settings else 20)

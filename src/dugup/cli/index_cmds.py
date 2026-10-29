@@ -26,6 +26,9 @@ def print_report(report: IndexReport, out: TextIO, retention_days: float) -> Non
             continue
         safe_write(f"  new {root.added:,}, changed {root.changed:,}, moved {root.moved:,}, gone {root.missing:,}, "
                    f"back {root.restored:,}, removed after {retention_days:g} days missing {root.purged:,}", out)
+        if root.left_out:
+            safe_write(f"  {root.left_out:,} file(s) in tool data or downloaded requirements left the index "
+                       "(skip_tool_data)", out)
         for code in root.warnings:
             safe_write(f"  WARNING: {WARNING_TEXT.get(code, code)} ({root.held_back:,} file(s) held back). "
                        "If the files are really gone, they will be marked missing once the folder looks normal again.", out)

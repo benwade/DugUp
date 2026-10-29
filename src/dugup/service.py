@@ -465,7 +465,13 @@ class LocalService:
 
     def apply_plan(self, plan) -> "Root | Failure":
         """Take the picker's choices: add the folder or change it. What is now left out leaves the index at
-        once; what is now only listed by name loses its text at once; the rest is read by the next run."""
+        once; what is now only listed by name loses its text at once; the rest is read by the next run.
+        The picker's "Leave out tool data and downloaded requirements" is the skip_tool_data setting itself, so
+        what is chosen there holds for every later scan (and Settings shows the same choice)."""
+        if bool(plan.skip_tool) != bool(self.settings.skip_tool_data):
+            saved = self.apply_settings({"skip_tool_data": bool(plan.skip_tool)})
+            if isinstance(saved, Failure):
+                return saved
         return self.set_root(plan.to_root(), keep_levels=False)
 
     def set_root(self, root: Root, keep_levels: bool = True) -> "Root | Failure":

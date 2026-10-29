@@ -178,6 +178,12 @@ def _entries() -> Tuple[Entry, ...]:
     E = Entry
     return (
         # -- folders
+        E("skip_tool_data", "folders", "Leave out tool data and downloaded requirements",
+          "Every update leaves out package folders (node_modules, site-packages), Python and conda environments, "
+          "version-control data (.git) and tool caches, including ones created later, whatever they are called. "
+          "Folders a folder's own skip list names stay out either way.",
+          why="Nothing a person wrote lives there, and a single environment can hold tens of thousands of files.",
+          choices=YES_NO),
         E("book_folder_level", "folders", "Book libraries",
           "What a folder that looks like a book library starts at in the picker.",
           why="Books are large and often not what you want to search by content. Others want every page searchable.",
@@ -436,7 +442,7 @@ ENTRIES: Dict[str, Entry] = {entry.name: entry for entry in _entries()}
 # ("Show all settings"), and a search always reaches every setting.
 SHORT_LIST: Tuple[str, ...] = ("close_to_tray", "watch_every_minutes", "watch_on_battery", "hotkey", "ocr_after_index", "meaning_after_index",
                                "looks_after_index", "meaning_model", "meaning_warm_up", "max_index_mb",
-                               "missing_retention_days")
+                               "missing_retention_days", "skip_tool_data")
 NOT_HERE = frozenset({"extensions"})      # a table, not one value: edited in config.toml (defaults: DEFAULT_EXTENSIONS in kinds.py)
 _KINDS = {f.name: str(f.type) for f in fields(Settings) if f.name not in NOT_HERE}
 _DEFAULTS = Settings()
