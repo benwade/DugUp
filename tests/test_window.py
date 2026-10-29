@@ -1432,12 +1432,14 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     assert [bar.entrycget(i, "label") for i in range(bar.index("end") + 1)] == ["File", "Index", "Pictures", "Help"]
     file_menu = bench.root.nametowidget(bar.entrycget(0, "menu"))
     labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) == "command"]
-    assert labels == ["Add folder...", "Choose what to index...", "Settings...", "Disk space...",
+    assert labels == ["Add folder...", "Choose what to index...", "Save folder choices...", "Load folder choices...",
+                      "Settings...", "Disk space...",
                       "Free the graphics card and memory...", "Folders Claude may search...", "Connect the Claude app to this DugUp...", "Close the window",
                       "Quit DugUp (the tray too)"]
     help_menu = bench.root.nametowidget(bar.entrycget(3, "menu"))
-    assert help_menu.entrycget(0, "label") == "Report a problem..." and help_menu.entrycget(1, "label") == "About DugUp"
-    help_menu.invoke(1)
+    assert [help_menu.entrycget(i, "label") for i in range(3)] == ["Report a problem...", "About saving folder choices",
+                                                                   "About DugUp"]
+    help_menu.invoke(2)
     assert bench.told and bench.told[-1][0] == "About DugUp" and __import__("dugup").__version__ in bench.told[-1][1]
     assert "PolyForm Noncommercial" in bench.told[-1][1] and "Ben Wade" in bench.told[-1][1], "the license is in the About box"
     assert "without warranty" in bench.told[-1][1] and "your own risk" in bench.told[-1][1], "and that it comes as is"
