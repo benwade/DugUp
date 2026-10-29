@@ -110,11 +110,69 @@ def print_suggestions(found: List[Suggestion], path: str, is_root: bool, out: Te
                "skips that one folder.", out)
 
 
+SAVED_NOTE = ("Keep it somewhere safe; a cloud drive is fine: it holds folder names and choices, not the text of "
+              "your files. Edit it in any text editor; the notes at its top say how. Load it with: dugup roots load FILE")
+
+
+def _save_choices(service, args, out) -> int:
+    roots = service.list_roots()
+    if not roots:
+        safe_write("No folders yet, so there are no choices to save. Add one with: dugup roots add FOLDER", out)
+        return 1
+    path = os.path.abspath(os.path.expanduser(args.file))
+    if os.path.exists(path) and not args.replace:
+        safe_write(f"Not saved: {path} is there already. Give another name, or add --replace to write over it.", out)
+        return 1
+    try:
+        with open(path, "w", encoding="utf-8", newline="\r\n" if os.name == "nt" else "\n") as handle:
+            handle.write(service.save_choices())
+    except OSError as exc:
+        safe_write(f"Not saved: {path} ({exc.strerror or exc})", out)
+        return 1
+    safe_write(f"Saved the choices of {len(roots)} folder(s) to {path}.", out)
+    safe_write(SAVED_NOTE, out)
+    return 0
+
+
+def _load_choices(service, args, out) -> int:
+    from ..choices import decode
+    path = os.path.abspath(os.path.expanduser(args.file))
+    try:
+        with open(path, "rb") as handle:
+            text = decode(handle.read())
+    except OSError as exc:
+        safe_write(f"Could not read {path} ({exc.strerror or exc}).", out)
+        return 1
+    plan = service.preview_choices(text)
+    if plan.problems:
+        safe_write(f"Nothing was changed. Fix these in {path}, then load it again:", out)
+        for problem in plan.problems:
+            safe_write(f"  - {problem}", out)
+        return 1
+    for line in plan.lines():
+        safe_write(line, out)
+    if plan.nothing_to_do:
+        safe_write("Nothing to change: the folders in the file are set up as it says.", out)
+        return 0
+    if not args.yes:
+        safe_write(f"Nothing was changed yet. To make these changes: dugup roots load {quote(path)} --yes", out)
+        return 0
+    done = service.apply_choices(plan)
+    if isinstance(done, Failure):
+        return _fail(done, out)
+    safe_write(f"Set up {len(done)} folder(s) as the file says. Next: dugup index", out)
+    return 0
+
+
 def cmd_roots(args, env, out, environ) -> int:
-    service = _service(args, environ, out, create=args.roots_command in ("add", "suggest", "survey", "copies"))
+    service = _service(args, environ, out, create=args.roots_command in ("add", "suggest", "survey", "copies", "load"))
     if service is None:
         return 1
     with service:
+        if args.roots_command == "save":
+            return _save_choices(service, args, out)
+        if args.roots_command == "load":
+            return _load_choices(service, args, out)
         if args.roots_command == "add":
             exclude = list(args.exclude) + (list(SUGGESTED_EXCLUDES) if args.suggested_excludes else [])
             result = service.set_root(Root(args.path, args.policy, tuple(args.include), tuple(dict.fromkeys(exclude))))

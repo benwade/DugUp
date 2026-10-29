@@ -1432,12 +1432,14 @@ def test_the_menu_bar_carries_the_buttons_and_about(bench):
     assert [bar.entrycget(i, "label") for i in range(bar.index("end") + 1)] == ["File", "Index", "Pictures", "Help"]
     file_menu = bench.root.nametowidget(bar.entrycget(0, "menu"))
     labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) == "command"]
-    assert labels == ["Add folder...", "Choose what to index...", "Settings...", "Disk space...",
+    assert labels == ["Add folder...", "Choose what to index...", "Save folder choices...", "Load folder choices...",
+                      "Settings...", "Disk space...",
                       "Free the graphics card and memory...", "Folders Claude may search...", "Connect the Claude app to this DugUp...", "Close the window",
                       "Quit DugUp (the tray too)"]
     help_menu = bench.root.nametowidget(bar.entrycget(3, "menu"))
-    assert help_menu.entrycget(0, "label") == "Report a problem..." and help_menu.entrycget(1, "label") == "About DugUp"
-    help_menu.invoke(1)
+    assert [help_menu.entrycget(i, "label") for i in range(3)] == ["Report a problem...", "About saving folder choices",
+                                                                   "About DugUp"]
+    help_menu.invoke(2)
     assert bench.told and bench.told[-1][0] == "About DugUp" and __import__("dugup").__version__ in bench.told[-1][1]
     assert "PolyForm Noncommercial" in bench.told[-1][1] and "Ben Wade" in bench.told[-1][1], "the license is in the About box"
     assert "without warranty" in bench.told[-1][1] and "your own risk" in bench.told[-1][1], "and that it comes as is"
@@ -1710,3 +1712,36 @@ def test_the_picture_matches_slider_remembers_a_sane_position():
     assert w.kept_closeness({"picture_closeness": "loose"}) == w.CLOSENESS_DEFAULT, "a damaged memory is no memory"
     assert w.closeness_words(0) == "all shown" and w.closeness_words(100) == "only the best"
     assert w.closeness_words(55) == "55 of 100"
+
+
+def test_folder_choices_are_saved_and_loaded_from_the_file_menu_with_problems_said_first(bench, tmp_path):
+    """File > Save / Load folder choices, Help > About saving folder choices (Ben, 2026-10-28)."""
+    bench.ready()
+    app = bench.app
+    target = tmp_path / "DugUp folder choices.txt"
+    file_menu = app.menu_bar.nametowidget(app.menu_bar.entrycget(0, "menu"))
+    labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1) if file_menu.type(i) == "command"]
+    assert "Save folder choices..." in labels and "Load folder choices..." in labels
+    app.about_choices()
+    assert bench.told[-1][0] == "About saving folder choices" and "new computer" in bench.told[-1][1]
+    app.choose_choices_file = lambda saving: str(target)
+    app.save_choices()
+    assert target.exists() and "Folder choices saved" in app.message.get()
+    # a broken file: every problem is told, nothing is asked, nothing changes
+    before = [r.path for r in app.service.list_roots()]
+    target.write_text("[[folder]]\npath = 'nowhere'\nreed = 'words'\n", encoding="utf-8")
+    asked = len(bench.asked)
+    app.load_choices()
+    title, text = bench.told[-1]
+    assert title == "Nothing was changed" and "whole path" in text and 'did you mean "read"' in text
+    assert len(bench.asked) == asked and [r.path for r in app.service.list_roots()] == before
+    # a good file asks first; saying no changes nothing, yes sets the folder up
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    target.write_text(f"[[folder]]\npath = '{extra}'\nread = 'names'\n", encoding="utf-8")
+    bench.answer = False
+    app.load_choices()
+    assert f"Add {extra}" in bench.asked[-1] and str(extra) not in [r.path for r in app.service.list_roots()]
+    bench.answer = True
+    app.load_choices()
+    assert str(extra) in [r.path for r in app.service.list_roots()] and "Set up 1 folder(s)" in app.message.get()

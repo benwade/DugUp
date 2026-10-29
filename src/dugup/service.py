@@ -468,6 +468,53 @@ class LocalService:
         once; what is now only listed by name loses its text at once; the rest is read by the next run."""
         return self.set_root(plan.to_root(), keep_levels=False)
 
+    def _root_problem(self, path: str, others) -> str:
+        """Why a new folder cannot be indexed beside `others` (the program's own folders, an overlap), or ""."""
+        if is_within(path, self.layout.root):
+            return "that folder is inside the program's own data folder"
+        for own in self._never_indexed()[1:]:
+            if is_within(path, own):
+                return "that folder is inside DugUp's own program folder"
+        for other in others:
+            if _under(path, other.path, self._fold) or _under(other.path, path, self._fold):
+                return (f"that folder overlaps a folder that is already indexed ({other.path}); "
+                        "one file must belong to one root")
+        return ""
+
+    # -- folder choices kept in a file a person can read and edit (choices.py)
+
+    def save_choices(self) -> str:
+        """Every folder's choices as the text of a folder-choices file."""
+        from . import choices
+        return choices.dump(list(self.store.list_roots()), str(self.layout.root))
+
+    def preview_choices(self, text: str):
+        """What loading a folder-choices file would change, and every problem in it; nothing is changed."""
+        from . import choices
+        entries, problems = choices.parse(text, os.path.abspath, self._fold)
+        current = list(self.store.list_roots())
+        plan = choices.preview(entries, current, os.path.isdir, self._fold)
+        for root in plan.new:                       # each new folder must also fit beside those indexed now
+            trouble = self._root_problem(os.path.abspath(root.path), current)
+            if trouble:
+                problems.append(f"{root.path}: {trouble}.")
+        plan.problems = problems
+        return plan
+
+    def apply_choices(self, plan) -> "List[str] | Failure":
+        """Set up the folders a previewed file asks for. Refused while the file has problems: nothing is ever
+        half-applied from a file with a mistake in it. Returns the folders set up or changed."""
+        if plan.problems:
+            return Failure(FailureReason.UNSUPPORTED, "the file has problems to fix first; nothing was changed")
+        done: List[str] = []
+        for root in list(plan.new) + [then for _, then, _ in plan.changed]:
+            result = self.set_root(root, keep_levels=False)
+            if isinstance(result, Failure):     # the folder changed since the preview (gone, say): stop and say so
+                return Failure(result.reason, f"{root.path}: {result.detail}. Set up before it: "
+                                              f"{', '.join(done) if done else 'nothing'}; the rest was not changed.")
+            done.append(result.path)
+        return done
+
     def set_root(self, root: Root, keep_levels: bool = True) -> "Root | Failure":
         if root.policy not in POLICIES:
             return Failure(FailureReason.UNSUPPORTED, f"unknown policy {root.policy!r}; choose one of {', '.join(POLICIES)}")
@@ -477,16 +524,9 @@ class LocalService:
         if old is None:
             if not os.path.isdir(path):
                 return Failure(FailureReason.UNREACHABLE, f"not a folder that can be reached right now: {path}")
-            if is_within(path, self.layout.root):
-                return Failure(FailureReason.UNSUPPORTED, "that folder is inside the program's own data folder")
-            for own in self._never_indexed()[1:]:
-                if is_within(path, own):
-                    return Failure(FailureReason.UNSUPPORTED, "that folder is inside DugUp's own program folder")
-            for other in known.values():
-                if _under(path, other.path, self._fold) or _under(other.path, path, self._fold):
-                    return Failure(FailureReason.UNSUPPORTED,
-                                   f"that folder overlaps a folder that is already indexed ({other.path}); "
-                                   "one file must belong to one root")
+            trouble = self._root_problem(path, known.values())
+            if trouble:
+                return Failure(FailureReason.UNSUPPORTED, trouble)
         else:
             path = old.path   # keep the spelling the files were stored under
         # a change of rules or policy alone keeps the levels; the picker states them all, so there they are replaced
