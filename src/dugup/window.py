@@ -361,17 +361,6 @@ class App:
             button = ttk.Radiobutton(modes, text=label, value=value, variable=self.mode, command=self._mode_chosen)
             button.pack(side="left", padx=(0, 12))
             self.mode_buttons[value] = button
-        # how many pictures a search by pictures shows: the line is drawn within each search (sketches.floor)
-        ttk.Label(modes, text="Picture matches:  more").pack(side="left", padx=(12, 2))
-        self.closeness = tk.IntVar(value=kept_closeness(remember.read(self.service.layout.root)))
-        self.closeness_scale = ttk.Scale(modes, from_=0, to=100, orient="horizontal", length=150,
-                                         command=self._closeness_moved)
-        self.closeness_scale.set(self.closeness.get())
-        self.closeness_scale.pack(side="left")
-        ttk.Label(modes, text="fewer").pack(side="left", padx=(2, 6))
-        self.closeness_text = tk.StringVar(value=closeness_words(self.closeness.get()))
-        ttk.Entry(modes, textvariable=self.closeness_text, state="readonly", width=13).pack(side="left")
-        self._closeness_pending = None
 
         ttk.Label(form, text="Look in:").grid(row=2, column=0, sticky="w")
         self.folder_box = ttk.Combobox(form, textvariable=self.folder, state="readonly", width=24)
@@ -475,10 +464,10 @@ class App:
         from .picturegrid import PictureGrid, Thumbnails
         self.thumbnails = Thumbnails(self.events)
         pictures = ttk.Frame(right)
-        pictures.columnconfigure(0, weight=1)
+        pictures.columnconfigure(1, weight=1)
         pictures.rowconfigure(1, weight=1)
         twins = ttk.Frame(pictures, padding=(4, 4))
-        twins.grid(row=0, column=0, sticky="ew")
+        twins.grid(row=0, column=0, columnspan=2, sticky="ew")
         self.alike_button = ttk.Button(twins, text="Find near-duplicates", command=self.find_alike)
         self.alike_button.pack(side="left")
         ttk.Label(twins, text="at").pack(side="left", padx=(8, 2))
@@ -491,8 +480,24 @@ class App:
         self.trash_extras_button.pack(side="left", padx=2)
         self.alike_text = tk.StringVar()
         ttk.Label(twins, textvariable=self.alike_text).pack(side="left", padx=8)
+        # Picture matches: how many pictures a search by pictures shows, beside the pictures themselves. Upright,
+        # fewer at the top: raising it raises the bar. The line is drawn within each search (sketches.floor).
+        matches = ttk.Frame(pictures, padding=(6, 4, 4, 6))
+        matches.grid(row=1, column=0, sticky="ns")
+        ttk.Label(matches, text="Picture\nmatches", justify="center", font=("TkDefaultFont", 10, "bold")).pack()
+        ttk.Label(matches, text="fewer").pack(pady=(6, 0))
+        self.closeness = tk.IntVar(value=kept_closeness(remember.read(self.service.layout.root)))
+        self.closeness_scale = tk.Scale(matches, from_=100, to=0, orient="vertical", resolution=1, showvalue=False,
+                                        width=26, sliderlength=44, length=240, takefocus=True,
+                                        command=self._closeness_moved)
+        self.closeness_scale.set(self.closeness.get())
+        self.closeness_scale.pack(fill="y", expand=True, pady=2)
+        ttk.Label(matches, text="more").pack()
+        self.closeness_text = tk.StringVar(value=closeness_words(self.closeness.get()))
+        ttk.Entry(matches, textvariable=self.closeness_text, state="readonly", width=12, justify="center").pack(pady=(6, 0))
+        self._closeness_pending = None
         self.grid = PictureGrid(pictures, self.thumbnails, self._grid_selected, self._grid_opened)
-        self.grid.grid(row=1, column=0, sticky="nsew")
+        self.grid.grid(row=1, column=1, sticky="nsew")
         right.add(pictures, text="Pictures")
         self.pictures_tab = pictures
         self.alike_report = None

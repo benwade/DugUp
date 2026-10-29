@@ -1084,6 +1084,9 @@ def test_pictures_by_looks_fill_the_pictures_tab_and_like_this_shows_a_picture_s
     monkeypatch.setattr(LocalService, "sketch_sentence", lambda self, sentence: sketch(sentence))
     app = bench.app
     assert app.closeness.get() == w.CLOSENESS_DEFAULT, "nothing remembered yet: the default"
+    assert str(app.closeness_scale.cget("orient")) == "vertical" and app.closeness_scale.master.master is app.pictures_tab, \
+        "the slider stands upright at the edge of the Pictures tab, beside the pictures it sets"
+    assert float(app.closeness_scale.cget("from")) == 100.0, "fewer at the top"
     app._closeness_moved(0)                   # every candidate, as before the slider: three pictures are too few to cut
     assert str(app.like_button["state"]) == "disabled"
     app.where.set("By looks (pictures)")
