@@ -8,6 +8,8 @@ Release notes and performance improvements for DugUp.
 
 **The Picture matches slider sits beside the pictures.** It moved from the search form to the left edge of the **Pictures** tab, upright and larger: up for fewer pictures, down for more.
 
+**Tool data stays out, now and later.** Package folders, Python and conda environments, version-control data and tool caches were left out by a list made when a folder was set up, so an environment created later under a new name was indexed. Every update now leaves them out, recognizing an environment by what it holds. **Leave out tool data and downloaded requirements** is now one setting, in Settings and in **Choose what to index**: untick it to index them. See [Choose what to index](user-guide.md#choose-what-to-index).
+
 **The installer reminds you to restart the Claude app.** Installing closes the Claude desktop app's DugUp connection, and the app doesn't restart it by itself, so it reported that DugUp had stopped. The installer's last page now says to restart the Claude app if it was connected.
 
 ## 0.2.10 beta — October 2026
