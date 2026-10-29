@@ -48,7 +48,7 @@ def test_saving_and_loading_gives_back_the_same_choices():
 
 
 def test_read_is_written_in_words_and_read_in_many_spellings():
-    assert read_words(LEVEL_MEANING) == "everything" and read_words(LEVEL_NAMES) == "names"
+    assert read_words(LEVEL_MEANING) == "everything" and read_words(LEVEL_NAMES) == "file names only"
     assert read_words("words+ocr+alike") == "words + scans + pictures alike"
     for typed, level in (("Everything", LEVEL_MEANING), ("ALL", LEVEL_MEANING), ("names only", LEVEL_NAMES),
                          ("file names", LEVEL_NAMES), ("words, scans", LEVEL_OCR), ("Words and OCR", LEVEL_OCR),
@@ -59,11 +59,11 @@ def test_read_is_written_in_words_and_read_in_many_spellings():
 
 
 def test_what_a_person_plainly_means_is_taken_as_meant():
-    entries, found = win("[folder]\npath = 'C:\\Docs\\'\nskip = '.git'\n\n[folder.inside]\n'C:\\Docs\\Pics' = 'pictures'\n"
+    entries, found = win("[folder]\npath = 'C:\\Docs\\'\nexclude = '.git'\n\n[folder.inside]\n'C:\\Docs\\Pics' = 'pictures'\n"
                          "'\\Letters\\2019\\' = 'names only'\n")
     assert found == []
     root = entries[0].root
-    assert root.path == "C:\\Docs" and root.exclude == (".git",), "[folder] for one folder; skip as one word"
+    assert root.path == "C:\\Docs" and root.exclude == (".git",), "[folder] for one folder; exclude as one word"
     assert dict(root.levels) == {"Pics": "alike", "Letters/2019": LEVEL_NAMES}, "inside: whole paths and backslashes"
 
 
@@ -93,12 +93,12 @@ def test_a_missing_quote_is_explained():
 
 
 def test_every_mistake_in_a_folder_is_named_at_once_with_what_was_meant():
-    found = problems("[[folder]]\npath = 'C:\\Docs'\nreed = 'words'\nskp = '.git'\nread = 'evrything'\nskip = 5\n"
+    found = problems("[[folder]]\npath = 'C:\\Docs'\nreed = 'words'\nexclud = '.git'\nread = 'evrything'\nexclude = 5\n"
                      "[folder.inside]\n'Old' = 'some'\n'D:\\Else' = 'words'\n")
     joined = "\n".join(found)
     assert len(found) == 6, found
-    assert 'did you mean "read"' in joined and 'did you mean "skip"' in joined
-    assert 'read = "evrything" is not a choice' in joined and "skip should be a list" in joined
+    assert 'did you mean "read"' in joined and 'did you mean "exclude"' in joined
+    assert 'read = "evrything" is not a choice' in joined and "exclude should be a list" in joined
     assert '"Old" = "some"' in joined and '"D:\\Else" under inside is not a folder within C:\\Docs' in joined
     assert all(f.startswith("Folder 1 (C:\\Docs)") for f in found), "each says which folder"
 
@@ -120,14 +120,14 @@ def test_a_file_with_no_folder_or_something_else_is_explained():
 # ---- loading: shown first, applied whole or not at all ----------------------------------------------------------
 
 def test_the_preview_says_what_is_new_changed_the_same_away_and_left_alone():
-    entries, _ = win("[[folder]]\npath='C:\\A'\n[[folder]]\npath='C:\\B'\nread='words'\nskip=['/Old']\n"
+    entries, _ = win("[[folder]]\npath='C:\\A'\n[[folder]]\npath='C:\\B'\nread='words'\nexclude=['/Old']\n"
                      "[[folder]]\npath='C:\\C'\n[[folder]]\npath='E:\\Gone'\n")
     current = [Root("C:\\B", exclude=("/Tmp",)), Root("C:\\C"), Root("C:\\Kept")]
     plan = preview(entries, current, exists=lambda p: not p.startswith("E:"), fold=ntpath.normcase)
     lines = plan.lines()
     assert [r.path for r in plan.new] == ["C:\\A"] and [r.path for r in plan.same] == ["C:\\C"]
     assert plan.not_here == ["E:\\Gone"] and plan.untouched == ["C:\\Kept"]
-    assert "Change C:\\B: read everything -> words; also skip /Old; no longer skip /Tmp" in lines
+    assert "Change C:\\B: read everything -> words; also exclude /Old; no longer exclude /Tmp" in lines
 
 
 @pytest.fixture
@@ -190,9 +190,18 @@ def test_the_commands_save_without_overwriting_and_load_only_with_yes(made):
     assert code == 1 and "is there already" in said and "--replace" in said
     target.write_text(target.read_text(encoding="utf-8") + f"\n[[folder]]\npath = '{more}'\nread = 'names'\n", encoding="utf-8")
     code, said = run("roots", "load", str(target))
-    assert code == 0 and f"Add {more} (read: names)" in said and "Nothing was changed yet" in said
+    assert code == 0 and f"Add {more} (read: file names only)" in said and "Nothing was changed yet" in said
     code, said = run("roots", "load", str(target), "--yes")
     assert code == 0 and "Set up 1 folder(s)" in said
     target.write_text("[[folder]]\npath = 'nowhere'\n", encoding="utf-8")
     code, said = run("roots", "load", str(target), "--yes")
     assert code == 1 and "Nothing was changed. Fix these" in said and "whole path" in said
+
+
+def test_a_file_saved_with_skip_still_loads_and_the_words_are_plain():
+    """Ben, 2026-10-28: "exclude" and "file names only" say what they mean; files written before still load."""
+    entries, found = win("[[folder]]\npath='C:\\Docs'\nskip=['/Old']\nexclude=['.git']\n\n[folder.inside]\n'Apps'='names'\n")
+    assert found == [] and set(entries[0].root.exclude) == {"/Old", ".git"} and dict(entries[0].root.levels) == {"Apps": LEVEL_NAMES}
+    text = dump([entries[0].root], "x", WHEN)
+    assert "exclude = [" in text and "skip =" not in text and "'Apps' = 'file names only'" in text
+    assert "#   exclude what to leave out" in text

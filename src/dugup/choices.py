@@ -27,7 +27,8 @@ from .shapes import (LEVEL_MEANING, LEVEL_NAMES, OPTION_ALIKE, OPTION_MEANING, O
                      POLICY_NAMES_ONLY, POLICY_OPEN, Root, level_of, options_of)
 
 FILE_NAME = "DugUp folder choices.txt"
-FOLDER_KEYS = ("path", "read", "skip", "only", "inside")
+FOLDER_KEYS = ("path", "read", "exclude", "only", "inside")
+OLD_KEYS = {"skip": "exclude"}      # the first files said "skip" (Ben, 2026-10-28: "exclude" says it plainly)
 
 # What "read" is written with, and every other way a person may well write it (case and spaces do not matter).
 WORD_OF = {OPTION_WORDS: "words", OPTION_OCR: "scans", OPTION_MEANING: "meaning", OPTION_ALIKE: "pictures alike"}
@@ -43,7 +44,8 @@ READ_WORDS: Dict[str, str] = {
     "pictures alike": OPTION_ALIKE, "alike": OPTION_ALIKE, "pictures": OPTION_ALIKE, "looks": OPTION_ALIKE,
     "pictures by looks": OPTION_ALIKE,
 }
-READ_HELP = 'names, words, words + scans, everything; add "+ meaning" or "+ pictures alike" as needed'
+READ_HELP = ('file names only, words, words + scans, everything; add "+ meaning" or "+ pictures alike" '
+             "as needed")
 
 HEADER = """\
 # DugUp folder choices: which folders are indexed, what is read in each, and what is left out.
@@ -56,7 +58,7 @@ HEADER = """\
 # Edit it in any text editor. Lines starting with # are notes. Each folder starts with [[folder]].
 #   path    the folder, in single quotes: 'C:\\Users\\you\\Documents' (single quotes keep the backslashes as typed)
 #   read    what is read: {read_help}
-#   skip    what to leave out: "/Codex" is that folder only, ".git" is any folder with that name
+#   exclude what to leave out: "/Codex" is that folder only, ".git" is any folder with that name
 #   only    (rarely used) read only files that match these, such as "*.pdf"
 #   inside  a folder below with a "read" of its own; everything else follows the folder above it
 #
@@ -68,10 +70,11 @@ HEADER = """\
 # ---- writing ----------------------------------------------------------------------------------------------------
 
 def read_words(level: str) -> str:
-    """A level as it is written in the file: "names", "everything", or its parts joined by " + "."""
+    """A level as it is written in the file: "file names only", "everything", or its parts joined by " + ".
+    Ben, 2026-10-28: "names" alone left a reader guessing; "file names only" says it."""
     chosen = options_of(level)
     if not chosen:
-        return "names"
+        return "file names only"
     if chosen == set(OPTIONS):
         return "everything"
     return " + ".join(WORD_OF[o] for o in OPTIONS if o in chosen)
@@ -99,7 +102,7 @@ def dump(roots: Sequence[Root], source: str, now: Optional[datetime.datetime] = 
         lines.append(f"path = {_quote(root.path)}")
         lines.append(f"read = {_quote(read_words(base))}")
         if root.exclude:
-            lines.append(f"skip = {_list(root.exclude)}")
+            lines.append(f"exclude = {_list(root.exclude)}")
         if root.include:
             lines.append(f"only = {_list(root.include)}")
         inside = [(folder, level) for folder, level in root.levels if folder]
@@ -219,7 +222,7 @@ def parse(text: str, platform_paths: Callable[[str], str] = os.path.abspath,
         for b in entries:
             if a is not b and _under(fold(b.root.path), fold(a.root.path)):
                 problems.append(f"{b.shown} lies inside {a.shown}. A folder below another belongs under its "
-                                "[folder.inside] or skip, not in a [[folder]] of its own.")
+                                "[folder.inside] or exclude, not in a [[folder]] of its own.")
     return entries, problems
 
 
@@ -229,7 +232,7 @@ def _under(path: str, root: str) -> bool:
 
 
 def _strings(value: object, what: str, shown: str, problems: List[str]) -> Tuple[str, ...]:
-    if isinstance(value, str):           # skip = ".git" for skip = [".git"]: plainly meant
+    if isinstance(value, str):           # exclude = ".git" for exclude = [".git"]: plainly meant
         value = [value]
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         problems.append(f'{shown}: {what} should be a list in brackets, such as {what} = [".git", "/Old"].')
@@ -245,7 +248,7 @@ def _folder(number: int, item: object, problems: List[str], platform_paths) -> O
     raw = item.get("path")
     shown = f"{label} ({raw})" if isinstance(raw, str) and raw.strip() else label
     for key in item:
-        if key not in FOLDER_KEYS:
+        if key not in FOLDER_KEYS and key not in OLD_KEYS:
             problems.append(f'{shown}: "{key}" is not a choice{_suggest(key, FOLDER_KEYS)}. '
                             f"A folder can have: {', '.join(FOLDER_KEYS)}.")
     if not isinstance(raw, str) or not raw.strip():
@@ -261,7 +264,9 @@ def _folder(number: int, item: object, problems: List[str], platform_paths) -> O
     if base is None:
         problems.append(f'{shown}: read = "{read}" is not a choice. Use {READ_HELP}.')
         base = LEVEL_MEANING
-    skip = _strings(item.get("skip", []), "skip", shown, problems)
+    excluded = _strings(item.get("exclude", []), "exclude", shown, problems)
+    if "skip" in item:                   # a file saved before "exclude": read as it was meant
+        excluded += _strings(item.get("skip", []), "skip", shown, problems)
     only = _strings(item.get("only", []), "only", shown, problems)
     levels: List[Tuple[str, str]] = []
     if base not in (LEVEL_MEANING, LEVEL_NAMES):
@@ -282,7 +287,7 @@ def _folder(number: int, item: object, problems: List[str], platform_paths) -> O
             continue
         levels.append((rel, level))
     policy = POLICY_NAMES_ONLY if base == LEVEL_NAMES else POLICY_OPEN
-    return Entry(Root(path, policy, only, skip, levels=tuple(levels)), shown)
+    return Entry(Root(path, policy, only, excluded, levels=tuple(levels)), shown)
 
 
 def _relative(folder: str, root: str) -> Optional[str]:
@@ -345,9 +350,9 @@ def differences(now: Root, then: Root) -> List[str]:
     added = [r for r in then.exclude if r.casefold() not in {x.casefold() for x in now.exclude}]
     dropped = [r for r in now.exclude if r.casefold() not in {x.casefold() for x in then.exclude}]
     if added:
-        what.append("also skip " + ", ".join(added))
+        what.append("also exclude " + ", ".join(added))
     if dropped:
-        what.append("no longer skip " + ", ".join(dropped))
+        what.append("no longer exclude " + ", ".join(dropped))
     if tuple(now.include) != tuple(then.include):
         what.append("only: " + (", ".join(then.include) or "every file"))
     inside_now = {f: l for f, l in now.levels if f}
