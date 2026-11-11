@@ -27,6 +27,8 @@ A folder normally follows the choices of its parent. You can give a subfolder di
 
 Use **Choose what to index...** to revisit a folder's choices. Names-only indexing removes the stored text for that folder; excluding a folder leaves it out entirely. Neither choice deletes your original files.
 
+**Tool data and downloaded requirements stay out automatically.** Package folders (`node_modules`, `site-packages`), Python and conda environments, version-control data (`.git`) and tool caches hold nothing you wrote, and a single environment can hold tens of thousands of files. DugUp leaves them out of every update, including ones created later under any name: an environment is recognized by what it holds, not only by its name. To index them anyway, untick **Leave out tool data and downloaded requirements** in Settings or in **Choose what to index**; it is one setting for every folder.
+
 ### Leave a folder out
 
 To keep a folder out of the index, choose **Leave a folder out...** on the **Index** tab and pick the folder. Or, when a search turns up files from a folder you never want to see, right-click one and choose **Leave this folder out of the index...**. DugUp says how many files will leave the index and asks once. The folder and everything inside it are skipped from then on; your files themselves are not touched.

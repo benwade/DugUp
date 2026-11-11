@@ -56,6 +56,8 @@ class ScanRules:
 
     include: Tuple[str, ...] = ()
     exclude: Tuple[str, ...] = ()
+    skip_tool: bool = False   # also leave out every folder of tool data or downloaded requirements (suggest.tool_folder),
+                              # found by its name or by what it holds, unless an include pattern names it
 
 
 # Warning codes a ChangeSet may carry. The thresholds behind them are guesses (see filesource.py).

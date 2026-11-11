@@ -89,6 +89,8 @@ class Settings:
     # -- indexing
     batch_files: int = 200             # files fetched per step of the work queue
     missing_retention_days: float = 30.0   # guide 5d item 10
+    skip_tool_data: bool = True            # every scan leaves out downloaded requirements and tool data (package folders,
+                                           # Python and conda environments, version control, caches), new ones too
     # -- file kinds: extension (no dot, lower case) -> kind name
     extensions: Mapping[str, FileKind] = field(default_factory=lambda: dict(DEFAULT_EXTENSIONS))
 

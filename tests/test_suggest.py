@@ -170,6 +170,7 @@ def test_adding_a_folder_points_at_the_suggestions(sh):
 
 
 def test_applying_the_safe_list_takes_those_files_out_at_once_without_a_false_alarm(sh):
+    assert sh.run("config", "set", "skip_tool_data", "no")[0] == 0     # tool data indexed first, so there is some to take out
     sh.run("roots", "add", str(sh.docs))
     assert sh.run("index")[0] == 0
     assert "pkg" in sh.run("search", "gamma")[1] and "No files found" not in sh.run("search", "delta")[1]
@@ -216,6 +217,7 @@ def test_a_suggestion_for_one_top_folder_does_not_skip_its_namesakes(sh):
 def test_narrowing_with_include_also_takes_files_out(tmp_path):
     sh = Shell(tmp_path)
     data = DataLayout(sh.data)
+    sh.run("config", "set", "skip_tool_data", "no")     # the count below includes a package folder's files
     sh.run("roots", "add", str(sh.docs))
     sh.run("index")
     with LocalService(data) as service:
