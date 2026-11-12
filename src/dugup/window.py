@@ -88,6 +88,23 @@ MODE_WHERE = {"meaning": "By meaning", "both": "Words and meaning", "looks": "By
 KIND_LABELS = (("PDF", FileKind.PDF.value), ("Office", FileKind.OFFICE.value), ("Text", FileKind.TEXT.value),
                ("Pictures", FileKind.IMAGE.value))
 ALL_FOLDERS = "All indexed folders"
+ABOUT_CHOICES = (
+    "Your folder choices (which folders are indexed, what is read in each, and what is left out) live inside the "
+    "index. If the index is deleted or rebuilt, or you move to a new computer, they would have to be made again.\n\n"
+    "File > Save folder choices... writes them to a text file. Keep it somewhere safe; a cloud drive is fine, since "
+    "it holds folder names and choices, not the text of your files.\n\n"
+    "File > Load folder choices... sets the folders up again from that file. It shows what will change and asks "
+    "first. Folders that are not on this computer are listed and left out; folders indexed now but not in the file "
+    "are left as they are.\n\n"
+    "You can edit the file in any text editor: the notes at its top say how. If something in it is wrong, nothing "
+    "is changed, and DugUp says what to fix and where.")
+
+
+def choices_file_name() -> str:
+    from .choices import FILE_NAME
+    return FILE_NAME
+
+
 CLOSENESS_DEFAULT = 50     # the Picture matches slider, 0 (every candidate) to 100 (only the best); remembered
 CLOSENESS_SETTLE_MS = 400  # a search by pictures runs again this long after the slider stops moving
 
@@ -268,6 +285,14 @@ class App:
         self.tell = tell or (lambda title, text: messagebox.showinfo(title, text, parent=root))
         self.choose_folder = choose_folder or (lambda: filedialog.askdirectory(
             parent=root, mustexist=True, title="Choose a folder for DugUp to index", initialdir=os.path.expanduser("~")))
+        # a folder-choices file: where to save one (saving=True) or which to load; "" when the person cancels
+        self.choose_choices_file = lambda saving: (
+            filedialog.asksaveasfilename(parent=root, title="Save folder choices", defaultextension=".txt",
+                                         initialfile=choices_file_name(), initialdir=os.path.expanduser("~"),
+                                         filetypes=[("Text", "*.txt"), ("All files", "*.*")])
+            if saving else
+            filedialog.askopenfilename(parent=root, title="Load folder choices", initialdir=os.path.expanduser("~"),
+                                       filetypes=[("Text", "*.txt"), ("All files", "*.*")]))
         self.bar_mode = "part"        # "part": shows how far; "moving": slides while no total is known
         self.setting_up = False       # the first-run setup is going on: this window is kept out of the way
         self.place_queue: List[str] = []     # folders chosen in the setup wizard, each still to be looked through
@@ -564,6 +589,9 @@ class App:
         file.add_command(label="Add folder...", command=self.add_folder)
         file.add_command(label="Choose what to index...", command=self.choose_what)
         file.add_separator()
+        file.add_command(label="Save folder choices...", command=self.save_choices)
+        file.add_command(label="Load folder choices...", command=self.load_choices)
+        file.add_separator()
         file.add_command(label="Settings...", command=self.open_setup)
         file.add_command(label="Disk space...", command=self.show_disk_space)
         file.add_command(label="Free the graphics card and memory...", command=self.free_models)
@@ -598,6 +626,7 @@ class App:
         bar.add_cascade(label="Pictures", menu=pictures)
         help_menu = tk.Menu(bar, tearoff=False)
         help_menu.add_command(label="Report a problem...", command=self.report_problem)
+        help_menu.add_command(label="About saving folder choices", command=self.about_choices)
         help_menu.add_command(label="About DugUp", command=self._about)
         bar.add_cascade(label="Help", menu=help_menu)
         self.root.config(menu=bar)
@@ -638,6 +667,64 @@ class App:
         from . import report
         report.launch(self.service.layout, self.launch_report)
         self.say("Report a problem is opening in a window of its own.")
+
+    # -- folder choices kept in a file (choices.py)
+
+    def about_choices(self) -> None:
+        self.tell("About saving folder choices", ABOUT_CHOICES)
+
+    def save_choices(self) -> None:
+        if not self.service.list_roots():
+            self.say("There is no folder yet, so there are no choices to save.")
+            return
+        path = self.choose_choices_file(True)
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8", newline="\r\n" if os.name == "nt" else "\n") as handle:
+                handle.write(self.service.save_choices())
+        except OSError as exc:
+            self.tell("Folder choices not saved", f"{path} could not be written ({exc.strerror or exc}).")
+            return
+        self.say(f"Folder choices saved to {path}. Keep it somewhere safe; Help > About saving folder choices says why.")
+
+    def load_choices(self) -> None:
+        """Read a choices file, say every problem in it or what it would change, and change it only when asked."""
+        if self.busy():
+            self.say("Something is already running. Stop it first, or wait.")
+            return
+        path = self.choose_choices_file(False)
+        if not path:
+            return
+        from .choices import decode
+        try:
+            with open(path, "rb") as handle:
+                text = decode(handle.read())
+        except OSError as exc:
+            self.tell("Folder choices not loaded", f"{path} could not be read ({exc.strerror or exc}).")
+            return
+        plan = self.service.preview_choices(text)
+        if plan.problems:
+            shown = plan.problems[:12] + ([f"... and {len(plan.problems) - 12} more"] if len(plan.problems) > 12 else [])
+            self.tell("Nothing was changed", f"Fix these in {path}, then load it again:\n\n" +
+                      "\n\n".join(f"- {p}" for p in shown))
+            return
+        lines = plan.lines()
+        if plan.nothing_to_do:
+            self.tell("Folder choices", "\n".join(lines + ["", "Nothing to change: the folders in the file are set up as it says."]))
+            return
+        if self.ask("Load folder choices?", "\n".join(lines[:25] + ([f"... and {len(lines) - 25} more"] if len(lines) > 25 else []) +
+                                                     ["", "Make these changes? What a folder now skips leaves the index; "
+                                                      "the rest is read at the next update."])) is not True:
+            self.say("Folder choices not loaded; nothing was changed.")
+            return
+        done = self.service.apply_choices(plan)
+        if isinstance(done, Failure):
+            self.tell("Folder choices only partly loaded", done.detail)
+        else:
+            self.say(f"Set up {len(done)} folder(s) as the file says. Update the index to read them.")
+        self.refresh_folders()
+        self.refresh_status()
 
     def _about(self) -> None:
         from .about import about_text
