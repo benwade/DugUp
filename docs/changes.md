@@ -4,7 +4,7 @@ Release notes and performance improvements for DugUp.
 
 [Back to the README](../README.md) · [User guide](user-guide.md) · [Technical information](technical.md)
 
-## 0.2.11 beta (in progress)
+## 0.2.11 beta — November 2026
 
 **The Picture matches slider sits beside the pictures.** It moved from the search form to the left edge of the **Pictures** tab, upright and larger: up for fewer pictures, down for more.
 
