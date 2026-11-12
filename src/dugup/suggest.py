@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from .kinds import classify, extension
 from .shapes import FileKind
@@ -50,6 +50,21 @@ BUILD_NAMES = {"build", "dist", "out", "target", "bin", "obj", "_build", "covera
 PROJECT_MARKERS = {"package.json", "pyproject.toml", "setup.py", "cargo.toml", "pom.xml", "build.gradle",
                    "build.gradle.kts", "makefile", "cmakelists.txt", "go.mod", "gemfile", "composer.json"}
 PROJECT_MARKER_SUFFIXES = (".sln", ".csproj", ".vcxproj", ".xcodeproj")
+
+def tool_folder(name: str, holds: Callable[[str], bool]) -> Optional[str]:
+    """Why a folder is tool data or downloaded requirements, or None: by its name, or by a file or folder inside
+    it that marks an environment (`holds(child_name)` says whether it has one). Used by every scan when the
+    skip_tool_data setting is on, so environments made later are left out too, whatever they are called."""
+    lowered = name.casefold()
+    if lowered in DEPENDENCY_NAMES:
+        return f"downloaded requirements: {DEPENDENCY_NAMES[lowered]}"
+    if lowered in TOOL_NAMES:
+        return TOOL_NAMES[lowered]
+    for marker, what in list(ENVIRONMENT_MARKERS.items()) + list(ENVIRONMENT_CHILD_FOLDERS.items()):
+        if holds(marker):
+            return f"downloaded requirements: {what}"
+    return None
+
 
 UNREADABLE_MIN_FILES = 200      # a folder this size or larger ...
 UNREADABLE_FRACTION = 0.98      # ... where at least this share cannot be read, is offered for skipping

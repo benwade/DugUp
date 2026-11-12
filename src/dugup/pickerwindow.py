@@ -103,8 +103,8 @@ class PickerDialog:
         self.skip_tool = tk.BooleanVar(value=plan.skip_tool)
         self.tool_box = ttk.Checkbutton(
             win, variable=self.skip_tool, command=self._tool_changed,
-            text=f"Leave out tool data and downloaded requirements ({plan.tree.tool_files:,} file(s): package folders, "
-                 "version-control data, caches)")
+            text=f"Leave out tool data and downloaded requirements ({plan.tree.tool_files:,} file(s) here: package folders, "
+                 "environments, version-control data, caches; for every folder, now and later, as in Settings)")
         self.tool_box.grid(row=5, column=0, sticky="w", padx=6, pady=2)
         if not plan.tree.tool_files:
             self.tool_box.state(["disabled"])

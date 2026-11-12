@@ -44,6 +44,12 @@ def excluded(relative_path: str, rules: ScanRules) -> bool:
     return bool(relative) and any(_hit(p, relative) for p in rules.exclude)
 
 
+def included_by_name(relative_path: str, rules: ScanRules) -> bool:
+    """True when an include pattern names this file or folder: what a person asked for is never left out as tool data."""
+    relative = _norm(relative_path)
+    return bool(relative) and any(_hit(p, relative) for p in rules.include)
+
+
 def matches_rules(relative_path: str, rules: ScanRules) -> bool:
     """True when a file at `relative_path` (below the root) is wanted under `rules`."""
     relative = _norm(relative_path)

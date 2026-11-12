@@ -24,7 +24,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .filesource import excluded
+from .filesource import excluded, included_by_name
 from .kinds import classify, extension, is_lock_file
 from .protocols import (OCR_FAILED, OCR_WAITING, Extraction, Extractor, FileEntry, FileSource, ScanRules, Skipped,
                         StopSignal, Store)
@@ -139,6 +139,7 @@ class RootReport:
     purged: int = 0                  # missing for longer than the retention time
     held_back: int = 0               # disappearances not recorded because of a warning
     retyped: int = 0                 # unchanged files read again because their type changed ([extensions])
+    left_out: int = 0                # taken out of the index: they lie in tool data now left out (skip_tool_data)
     warnings: Tuple[str, ...] = ()
     skipped: Tuple[Skipped, ...] = ()   # folders the scan could not read
 
@@ -321,7 +322,25 @@ class Indexer:
                 if folder.startswith(base + sep):
                     extra.append(folder[len(base) + 1:].replace("\\", "/"))
                     break
-        return ScanRules(tuple(root.include), tuple(root.exclude) + tuple(extra))
+        return ScanRules(tuple(root.include), tuple(root.exclude) + tuple(extra),
+                         skip_tool=bool(getattr(self.settings, "skip_tool_data", False)))
+
+    def _in_tool_folder(self, root: Root, path: str, rules: ScanRules) -> bool:
+        """Whether an indexed file lies in tool data that the scan now leaves out (skip_tool_data): such a file is
+        not missing, the person chose not to have it, so it leaves the index instead of being flagged as gone."""
+        if not rules.skip_tool:
+            return False
+        from .dirscan import is_tool_folder
+        base = root.path.rstrip("/\\")
+        parts = path[len(base) + 1:].replace("\\", "/").split("/")[:-1]
+        folder = base
+        for at, part in enumerate(parts):
+            folder = os.path.join(folder, part)
+            if included_by_name("/".join(parts[:at + 1]), rules):
+                return False
+            if is_tool_folder(part, folder):
+                return True
+        return False
 
     def _fresh(self, root: Root, entry: FileEntry) -> Tuple[FileState, str]:
         if not wants(level_for(root, entry.path, self.case_insensitive), OPTION_WORDS):   # nothing here asks for the text
@@ -348,7 +367,8 @@ class Indexer:
             kind = classify(record.path, self.settings.extensions)
             if kind is not record.kind:
                 kinds_now[record.path] = kind
-        changes = self.source.changes(root.path, previous, self.rules_for(root), stop)
+        rules = self.rules_for(root)
+        changes = self.source.changes(root.path, previous, rules, stop)
         now = self.clock()
         if isinstance(changes, Failure):
             if changes.reason is FailureReason.STOPPED:
@@ -400,6 +420,10 @@ class Indexer:
                 report.held_back += 1
                 return
             existing = self.store.get_file(path)
+            if existing is not None and self._in_tool_folder(root, path, rules):
+                self.store.remove_files([existing.row_id])
+                report.left_out += 1
+                return
             if existing is not None and existing.missing_since is None:
                 self.store.set_missing(existing.row_id, now)
                 report.missing += 1
